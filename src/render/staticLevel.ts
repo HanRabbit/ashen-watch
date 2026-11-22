@@ -137,7 +137,7 @@ export function buildStaticLevel(m: Materials): StaticLevel {
     const g = tiledBox(x1 - x0, y1 - y0, z1 - z0, tile);
     const uv = g.attributes.uv as THREE.BufferAttribute;
     for (let i = 0; i < uv.count; i++) uv.setXY(i, uv.getX(i) + ou, uv.getY(i) + ov);
-    b.geo(mat, g, (x0 + x1) / 2, (y0 + y1) / 2, -(z0 + z1) / 2);
+    b.geo(mat, g, (x0 + x1) / 2, (y0 + y1) / 2, (z0 + z1) / 2); // Batch.geo 内部已对 z 取负，此处传模拟坐标
   };
 
   // 墙体：按区域选材质族（5.1）。勒脚/压顶用 wallTrim，幕墙 wallRubble，礼拜堂/门房外墙 wallAshlar，地窖 wallRough。
@@ -261,7 +261,7 @@ export function buildStaticLevel(m: Materials): StaticLevel {
   b.box(v.floorDirt, -10, 27.8, 10, 28.5, -0.3, 0.006, 2);
   // 门房室内石板（concept/02）+ 中央地毯
   b.box(v.floorInterior, -3.5, -8.5, 3.5, 0, -0.3, 0.005, 2);
-  b.box(m.cloth, -1.3, -6.2, 1.3, -2.6, 0.006, 0.02, 1.4);
+  b.box(v.clothLinen, -1.3, -6.2, 1.3, -2.6, 0.006, 0.02, 1.4);
   b.box(v.floorFlag, 13, 7.5, 25, 25.5, -0.3, R, 3.6);
   b.box(v.floorFlag, 10, 25.5, 25, 29, -0.3, R, 3.6);
   // 矮台阶（三级，每级 0.15 m）：外廊尖拱前、礼拜堂侧门前（wallTrim）
@@ -396,13 +396,13 @@ export function buildStaticLevel(m: Materials): StaticLevel {
   const ivyPalette = [0x7a2a1c, 0x5e1a1a, 0x6b2418, 0x4a1616, 0xa8642a, 0x3a3a20].map((h) => new THREE.Color(h));
   interface Patch { bx: number; bz: number; nx: number; nz: number; tx: number; tz: number; u0: number; u1: number; top: number; dens: number }
   const patches: Patch[] = [
-    { bx: 0, bz: 28.44, nx: 0, nz: -1, tx: 1, tz: 0, u0: -8.5, u1: -1.5, top: 3.9, dens: 0.92 }, // 北墙主簇（壁灯旁）
-    { bx: 0, bz: 28.44, nx: 0, nz: -1, tx: 1, tz: 0, u0: 2, u1: 6.5, top: 2.6, dens: 0.8 },     // 北墙次簇
-    { bx: -9.94, bz: 0, nx: 1, nz: 0, tx: 0, tz: 1, u0: 4, u1: 10, top: 3.5, dens: 0.85 },      // 西墙
-    { bx: -9.94, bz: 0, nx: 1, nz: 0, tx: 0, tz: 1, u0: 18, u1: 24, top: 3.0, dens: 0.8 },      // 西墙北段
-    { bx: 0, bz: 0.56, nx: 0, nz: 1, tx: 1, tz: 0, u0: -8, u1: -4, top: 2.8, dens: 0.8 },       // 南墙门洞边
-    { bx: 9.94, bz: 0, nx: -1, nz: 0, tx: 0, tz: 1, u0: 18, u1: 24, top: 3.2, dens: 0.78 },     // 东墙背阴
-    { bx: 12.94, bz: 0, nx: -1, nz: 0, tx: 0, tz: 1, u0: 9, u1: 13, top: 4.0, dens: 0.6 },      // 礼拜堂西墙脚
+    { bx: 0, bz: 28.44, nx: 0, nz: -1, tx: 1, tz: 0, u0: -9.5, u1: -0.5, top: 4.3, dens: 0.98 }, // 北墙主簇（壁灯旁，成片攀爬）
+    { bx: 0, bz: 28.44, nx: 0, nz: -1, tx: 1, tz: 0, u0: 1.5, u1: 8, top: 3.2, dens: 0.9 },     // 北墙次簇
+    { bx: -9.94, bz: 0, nx: 1, nz: 0, tx: 0, tz: 1, u0: 4, u1: 10, top: 3.8, dens: 0.9 },      // 西墙
+    { bx: -9.94, bz: 0, nx: 1, nz: 0, tx: 0, tz: 1, u0: 18, u1: 24, top: 3.4, dens: 0.85 },      // 西墙北段
+    { bx: 0, bz: 0.56, nx: 0, nz: 1, tx: 1, tz: 0, u0: -8, u1: -4, top: 3.0, dens: 0.85 },       // 南墙门洞边
+    { bx: 9.94, bz: 0, nx: -1, nz: 0, tx: 0, tz: 1, u0: 18, u1: 24, top: 3.5, dens: 0.82 },     // 东墙背阴
+    { bx: 12.94, bz: 0, nx: -1, nz: 0, tx: 0, tz: 1, u0: 9, u1: 13, top: 4.2, dens: 0.65 },      // 礼拜堂西墙脚
   ];
   const ivyPos: THREE.Vector3[] = [];
   const ivyQuat: THREE.Quaternion[] = [];
@@ -422,32 +422,32 @@ export function buildStaticLevel(m: Materials): StaticLevel {
   };
   for (const pa of patches) {
     const yaw = Math.atan2(pa.nx, pa.nz);
-    const roots = Math.max(2, Math.round((pa.u1 - pa.u0) / 1.7));
+    const roots = Math.max(3, Math.round((pa.u1 - pa.u0) / 1.0)); // 更多主茎，成片攀爬
     for (let s = 0; s < roots; s++) {
       const uRoot = pa.u0 + ((s + 0.5) * (pa.u1 - pa.u0)) / roots + (ivyR() - 0.5) * 0.5;
       const phase = ivyR() * 6.28, amp = 0.18 + ivyR() * 0.3;
-      const top = pa.top * (0.7 + ivyR() * 0.3);
+      const top = pa.top * (0.82 + ivyR() * 0.22);
       // 主茎从墙脚攀爬
-      for (let y = 0.06; y < top; y += 0.12) {
+      for (let y = 0.06; y < top; y += 0.11) {
         const t = y / top;
         const u = uRoot + Math.sin(y * 1.3 + phase) * amp * (0.4 + t) + (ivyR() - 0.5) * 0.08;
         const px = pa.bx + pa.tx * u, pz = pa.bz + pa.tz * u;
-        decal.geo(bark, new THREE.BoxGeometry(0.02, 0.16, 0.02), px + pa.nx * 0.025, y, pz + pa.nz * 0.025, yaw, (ivyR() - 0.5) * 0.25, (ivyR() - 0.5) * 0.25);
-        // 上密下疏 + 顶端破碎：中部最密，基部与顶梢稀疏
-        const densEff = pa.dens * (0.45 + 0.55 * Math.sin(Math.min(1, t * 1.15) * Math.PI)) * (t > 0.85 ? 0.4 : 1);
-        if (ivyR() > densEff) continue; // 裸茎节点（ gaps）
-        const n = 3 + Math.floor(ivyR() * 5);
-        const rad = 0.16 + ivyR() * 0.2;
+        decal.geo(bark, new THREE.BoxGeometry(0.02, 0.15, 0.02), px + pa.nx * 0.025, y, pz + pa.nz * 0.025, yaw, (ivyR() - 0.5) * 0.25, (ivyR() - 0.5) * 0.25);
+        // 上密下疏 + 顶端破碎：密度随高度上升，顶梢 ragged
+        const densEff = pa.dens * (0.55 + 0.45 * t) * (t > 0.9 ? 0.55 : 1);
+        if (ivyR() > densEff) continue; // 裸茎节点（gaps）
+        const n = 5 + Math.floor(ivyR() * 6);
+        const rad = 0.18 + ivyR() * 0.22;
         for (let l = 0; l < n; l++) {
           const du = (ivyR() - 0.5) * rad * 2, dv = (ivyR() - 0.5) * rad * 1.6;
-          pushLeaf(px + pa.tx * du, y + dv, pz + pa.tz * du, yaw, pa.nx, pa.nz, 0.2 + ivyR() * 0.13);
+          pushLeaf(px + pa.tx * du, y + dv, pz + pa.tz * du, yaw, pa.nx, pa.nz, 0.22 + ivyR() * 0.14);
         }
         // 偶有分枝向外探出再缀叶
-        if (ivyR() < 0.18) {
+        if (ivyR() < 0.28) {
           const bu = u + (ivyR() - 0.5) * 0.6, by = y + 0.1 + ivyR() * 0.2;
           const bpx = pa.bx + pa.tx * bu, bpz = pa.bz + pa.tz * bu;
           decal.geo(bark, new THREE.BoxGeometry(0.015, 0.3, 0.015), bpx + pa.nx * 0.1, by, bpz + pa.nz * 0.1, yaw, 0.6, 0);
-          for (let l = 0; l < 4; l++) pushLeaf(bpx + pa.tx * (ivyR() - 0.5) * 0.3, by + (ivyR() - 0.5) * 0.25, bpz + pa.tz * (ivyR() - 0.5) * 0.3, yaw, pa.nx, pa.nz, 0.2 + ivyR() * 0.12);
+          for (let l = 0; l < 6; l++) pushLeaf(bpx + pa.tx * (ivyR() - 0.5) * 0.34, by + (ivyR() - 0.5) * 0.3, bpz + pa.tz * (ivyR() - 0.5) * 0.34, yaw, pa.nx, pa.nz, 0.22 + ivyR() * 0.13);
         }
       }
     }

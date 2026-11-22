@@ -637,9 +637,14 @@ float awHeight(vec2 uv) {
 }
 vec2 awPom(vec2 uv, vec3 vTs) {
   if (uAwSteps < 1.0) return uv;
+  // 掠射钳制（圣经 7）：视线与面夹角极小时衰减步长与偏移，退化为普通法线贴图，杜绝整面发黑/撕裂
+  float graze = smoothstep(0.10, 0.35, abs(vTs.z));
+  if (graze < 0.02) return uv;
   int steps = int(uAwSteps);
   float layerH = 1.0 / float(steps);
-  vec2 delta = (vTs.xy / max(0.35, vTs.z)) * uAwHeightScale / float(steps);
+  vec2 delta = (vTs.xy / max(0.35, vTs.z)) * uAwHeightScale * graze / float(steps);
+  float maxOff = uAwHeightScale * 2.0;
+  delta = clamp(delta, vec2(-maxOff), vec2(maxOff));
   vec2 cur = uv; float curH = 1.0;
   float h = awHeight(cur);
   for (int i = 0; i < 24; i++) {

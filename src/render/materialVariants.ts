@@ -35,6 +35,10 @@ export interface Variants {
   roofShingle: THREE.MeshStandardMaterial;
   /** 山崖、地窖开凿岩壁 */
   rock: THREE.MeshStandardMaterial;
+  /** 麻布、搭布、床品、地毯（布/旗行：roughness 0.92–1.0 + sheen、织纹、底部潮湿） */
+  clothLinen: THREE.MeshStandardMaterial;
+  /** 旗、挂毯（布/旗行：褪色酒红 + 徽记、破边、sheen） */
+  clothBanner: THREE.MeshStandardMaterial;
 }
 
 const cache = new WeakMap<Materials, Variants>();
@@ -102,6 +106,8 @@ export function variants(m: Materials): Variants {
     wallRubble, wallAshlar, wallTrim, wallRough, wallPlaster,
     floorFlag, floorFlagWorn, floorCobble, floorDirt, floorInterior,
     woodBeam, woodPlank, woodFloorOld, roofShingle, rock,
+    // 织物族：复用 Materials 里的共享实例（props 不再各自 clone，保合批），参数已符合圣经布/旗行
+    clothLinen: m.cloth, clothBanner: m.banner,
   };
   cache.set(m, v);
   trackPending(Promise.all(pending).then(() => undefined));
