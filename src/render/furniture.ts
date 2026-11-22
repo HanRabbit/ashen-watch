@@ -6,7 +6,7 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { PROPS, RAISED_Y, WELL } from '../sim/level';
 import { Batch } from './geom';
 import { Materials, scaleUV, tiledBox, trackPending } from './materials';
-import { applyWear, loadProp, mergeByMaterial } from './propAssets';
+import { applyWear, loadProp, mergeByMaterial, sackGeometry, sackTie } from './propAssets';
 import { Variants, variants } from './materialVariants';
 
 const R = RAISED_Y;
@@ -143,7 +143,10 @@ export function buildFurniture(m: Materials): THREE.Group {
   const v = variants(m);
   applyWear(v.woodPlank, { kind: 'wood', seed: 31 });
   applyWear(v.woodBeam, { kind: 'wood', seed: 33 });
-  applyWear(v.clothLinen, { kind: 'cloth', center: [-4.52, -27.57], rimY: 1.17 });
+  applyWear(v.clothLinen, {
+    kind: 'cloth', center: [-4.52, -27.57], rimY: 1.17,
+    sacks: [[-2.5, -2.0, 0.32], [-2.0, -1.6, 0.28], [-9.3, 8.6, 0.3], [-9.0, 9.3, 0.26], [-2.05, -2.2, 0.18]],
+  });
   // 共享金属/织物实例（非 5.1 族类）：铜烛座与旗巾，便于按材质合批
   const bronze = new THREE.MeshStandardMaterial({ color: 0xa89060, roughness: 0.45, metalness: 1 });
   const wineCloth = new THREE.MeshPhysicalMaterial({ color: 0x5b1f24, roughness: 0.95, sheen: 0.5, sheenRoughness: 0.8, sheenColor: new THREE.Color(0x6a4a44) });
@@ -352,8 +355,11 @@ export function buildFurniture(m: Materials): THREE.Group {
   group.add(ghBanner);
 
   // 点缀：麻袋、跪凳
-  b.geo(m.cloth, new THREE.SphereGeometry(0.3, 8, 6), -2.4, 0.25, -0.9);
-  b.geo(m.cloth, new THREE.SphereGeometry(0.26, 8, 6), -1.9, 0.22, -0.7);
+  // 麻袋：扎口颈 + 塌口 + 布褶 + 摊平底，大小/倾斜/塌陷各异
+  b.geo(v.clothLinen, sackGeometry(3, 0.3, 0.44, 0.35), -2.5, 0, -2.0, 0, 0.5, 0.1);
+  b.geo(v.clothLinen, sackTie(0.3, 0.44), -2.5, 0, -2.0, 0, 0.5, 0.1);
+  b.geo(v.clothLinen, sackGeometry(11, 0.26, 0.36, 0.4), -2.0, 0, -1.6, 0.05, 0.7, 0);
+  b.geo(v.clothLinen, sackTie(0.26, 0.36), -2.0, 0, -1.6, 0.05, 0.7, 0);
   b.box(v.woodBeam, 18.2, 10.7, 19.8, 11.0, R, R + 0.14, 1);
 
   // —— 木桶（鼓腹+铁箍 GLB）：ref 机位前景一组 ——
@@ -409,8 +415,10 @@ export function buildFurniture(m: Materials): THREE.Group {
   // 东货箱搭布与额外麻袋
   const drapeE = drapedCloth(9.3, -10.2, 0.62, 0.7, 0.6, 0.26, 0.26);
   b.geo(v.clothLinen, drapeE, 0, 0, 0);
-  b.geo(m.cloth, new THREE.SphereGeometry(0.28, 9, 7), -9.3, 0.24, 8.6);
-  b.geo(m.cloth, new THREE.SphereGeometry(0.24, 9, 7), -9.0, 0.2, 9.3);
+  b.geo(v.clothLinen, sackGeometry(15, 0.28, 0.4, 0.3), -9.3, 0, 8.6, 0, 2.4, -0.08);
+  b.geo(v.clothLinen, sackTie(0.28, 0.4), -9.3, 0, 8.6, 0, 2.4, -0.08);
+  b.geo(v.clothLinen, sackGeometry(21, 0.24, 0.32, 0.6), -9.0, 0, 9.3, 0.16, 0.8, 0);
+  b.geo(v.clothLinen, sackTie(0.24, 0.32), -9.0, 0, 9.3, 0.16, 0.8, 0);
   // 井旁空桶与篮筐（叙事物：打水的家伙什）
   const bucket = loadProp({
     name: 'bucket', size: 0.5, rotY: 0.7,
