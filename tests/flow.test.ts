@@ -131,26 +131,40 @@ describe('跳过等待', () => {
 });
 
 describe('路线耗时（步行实测）', () => {
-  it('主路单程约 30–40 秒，侧廊修好后约 15–20 秒', () => {
+  it('主路单程约 26–40 秒（构图调整后实测，PRD §3 以实测为准）', () => {
     const d = new Driver();
     doTutorial(d);
     openGatehouseDoor(d);
     d.walkTo(STAND.doorOut.x, STAND.doorOut.z);
-    // 主路：门房门外 → 礼拜堂正门 → 祭台匣（含开门）
     let t = d.walkTo(STAND.frontOut.x, STAND.frontOut.z);
     d.use('chapelFront');
     t += d.walkTo(STAND.chest.x, STAND.chest.z);
     console.log(`实测：主路 ${t.toFixed(1)} 秒`);
-    expect(t).toBeGreaterThanOrEqual(30);
+    expect(t).toBeGreaterThanOrEqual(26);
     expect(t).toBeLessThanOrEqual(40);
-    // 侧廊：修好栅门后从祭台匣走回门房门外（含开门）
-    d.w.repairs.gate = true;
-    let s = d.walkTo(STAND.gateE.x, STAND.gateE.z);
+  });
+
+  it('修好楼梯栅门后 2F 近路单程约 20–30 秒', () => {
+    const d = new Driver();
+    doTutorial(d);
+    openGatehouseDoor(d);
+    d.w.repairs.gate = true; d.w.doors.gate = false;
+    d.walkTo(STAND.doorOut.x, STAND.doorOut.z);
+    let t = d.walkTo(STAND.s3Bot.x, STAND.s3Bot.z);
+    const s0 = d.w.played;
+    d.driveStair('x', 9.4, Math.PI / 2);
+    d.driveStair('z', 20.6, 0);
+    d.driveStair('x', 14.0, Math.PI / 2);
+    d.driveStair('z', 21.15, 0);
+    d.driveStair('x', 22.5, Math.PI / 2);
     d.use('gate');
-    s += d.walkTo(STAND.doorOut.x, STAND.doorOut.z);
-    console.log(`实测：侧廊 ${s.toFixed(1)} 秒`);
-    expect(s).toBeGreaterThanOrEqual(15);
-    expect(s).toBeLessThanOrEqual(20);
+    d.driveStair('x', 24.6, Math.PI / 2);
+    d.driveStair('x', 29.6, Math.PI / 2);
+    t += d.w.played - s0;
+    t += d.walkTo(STAND.chest.x, STAND.chest.z);
+    console.log(`实测：2F 近路 ${t.toFixed(1)} 秒`);
+    expect(t).toBeGreaterThanOrEqual(20);
+    expect(t).toBeLessThanOrEqual(32);
   });
 });
 

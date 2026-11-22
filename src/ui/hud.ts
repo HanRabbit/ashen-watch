@@ -1,6 +1,8 @@
 // HUD（UI-01、UI-02）：生命、冷量、油量、时段、交互提示、物品栏、字幕与提示。
 // 状态区别不只依赖颜色：低量时同时给出文字与斜纹。
 import { HEARTH, LANTERN, PHASE, PLAYER } from '../config';
+import { STAIRS } from '../sim/level'; // map:
+import { node } from '../sim/nav'; // map:
 import { Target } from '../sim/sim';
 import { World } from '../sim/state';
 import { keyName, Settings } from '../settings';
@@ -92,7 +94,16 @@ export class Hud {
     else if (w.phase === 'dusk') phase += ` · 距入夜 ${fmtTime(PHASE.duskLength - w.clock)}`;
     else if (w.phase === 'night') phase += ` · 距晨曦 ${fmtTime(PHASE.nightLength - w.clock)}`;
     const icon = PHASE_ICON[w.phase] ?? 'day';
-    this.set('phase', this.phase, `<svg class="ph-ic ${icon}" aria-hidden="true"><use href="#i-phase-${icon}"/></svg>${phase}`);
+    // map: 楼层提示（UI-04）+ 楼梯去向
+    let floorTxt = ` · ${w.player.floor}`;
+    for (const st of STAIRS) for (const nid of [st.a, st.b]) {
+      const n = node(nid);
+      if (n.floor === w.player.floor && Math.hypot(n.x - w.player.x, n.z - w.player.z) < 2.2 && Math.abs(n.y - w.player.y) < 1.2) {
+        const on = node(nid === st.a ? st.b : st.a);
+        floorTxt += `（楼梯→${on.floor}）`;
+      }
+    }
+    this.set('phase', this.phase, `<svg class="ph-ic ${icon}" aria-hidden="true"><use href="#i-phase-${icon}"/></svg>${phase}${floorTxt}`);
     this.set('goal', this.goal, goalText(w));
 
     // 状态条

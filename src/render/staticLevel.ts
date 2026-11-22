@@ -142,6 +142,7 @@ export function buildStaticLevel(m: Materials): StaticLevel {
 
   // 墙体：按区域选材质族（5.1）。勒脚/压顶用 wallTrim，幕墙 wallRubble，礼拜堂/门房外墙 wallAshlar，地窖 wallRough。
   for (const w of WALLS) {
+    if (w.y0 !== undefined) continue; // map: 带 y0 的三层几何由 floors.ts 绘制
     const isChapel = w.h >= 7;
     const isGH = w.tag === 'gh';
     const isCellar = w.tag === 'cellar';

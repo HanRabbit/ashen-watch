@@ -196,7 +196,7 @@ export function buildFurniture(m: Materials): THREE.Group {
 
   // 不随状态变化的陈设（碰撞盒见 level.ts 的 PROPS）
   for (const p of PROPS) {
-    const y0 = p.x0 >= 13 || p.z0 >= 25.5 ? R : 0;
+    const y0 = p.y0 ?? (p.x0 >= 13 || p.z0 >= 25.5 ? R : 0); // map:
     switch (p.tag) {
       case 'hearth': {
         // 石砌开放壁炉（concept/02）：烟囱胸墙从墙里长出 + 敞开炉膛 + 石炉台 + 炉罩烟熏

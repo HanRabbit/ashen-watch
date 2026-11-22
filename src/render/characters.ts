@@ -125,9 +125,9 @@ class ProceduralPlayer {
 
   triggerHurt(): void { this.hurt = 1; }
 
-  update(w: World, at: { x: number; z: number }, yaw: number, dt: number, time: number): void {
+  update(w: World, at: { x: number; z: number; y?: number }, yaw: number, dt: number, time: number): void {
     const p = w.player;
-    this.group.position.set(at.x, groundY(at.x, at.z), -at.z);
+    this.group.position.set(at.x, (at.y ?? groundY(at.x, at.z)) /* map: 楼层高度 */, -at.z);
     this.group.rotation.y = yawToRot(yaw);
     const speed = p.moving ? (p.sprinting ? 1.7 : 1) : 0;
     this.phase += dt * speed * 7.2;
@@ -269,7 +269,7 @@ class ProceduralGhosts {
     for (const mat of mats) mat.opacity = (this.base.get(mat) ?? 1) * k;
   }
 
-  update(w: World, at: { x: number; z: number }[], dt: number, time: number): void {
+  update(w: World, at: { x: number; z: number; y?: number }[], dt: number, time: number): void {
     this.grey.root.visible = this.wraith.root.visible = false;
     w.ghosts.forEach((g, i) => {
       if (g.kind === 'grey') this.updateGrey(g, at[i] ?? g, dt, time);
@@ -277,14 +277,14 @@ class ProceduralGhosts {
     });
   }
 
-  private place(root: THREE.Group, g: GhostState, at: { x: number; z: number }): number {
+  private place(root: THREE.Group, g: GhostState, at: { x: number; z: number; y?: number }): number {
     root.visible = g.mode !== 'gone';
-    root.position.set(at.x, groundY(at.x, at.z), -at.z);
+    root.position.set(at.x, (at.y ?? groundY(at.x, at.z)) /* map: 楼层高度 */, -at.z);
     root.rotation.y = yawToRot(g.yaw);
     return g.mode === 'dissolve' ? Math.max(0, 1 - g.t / GHOST.dissolveSecs) : 1;
   }
 
-  private updateGrey(g: GhostState, at: { x: number; z: number }, dt: number, time: number): void {
+  private updateGrey(g: GhostState, at: { x: number; z: number; y?: number }, dt: number, time: number): void {
     const m = this.grey;
     const alpha = this.place(m.root, g, at);
     this.fade(m.mats, alpha);
@@ -317,7 +317,7 @@ class ProceduralGhosts {
     });
   }
 
-  private updateWraith(g: GhostState, at: { x: number; z: number }, dt: number, time: number): void {
+  private updateWraith(g: GhostState, at: { x: number; z: number; y?: number }, dt: number, time: number): void {
     const m = this.wraith;
     const alpha = this.place(m.root, g, at);
     this.fade(m.mats, alpha);
@@ -461,14 +461,14 @@ export class PlayerModel {
     this.procedural.triggerHurt();
   }
 
-  update(w: World, at: { x: number; z: number }, yaw: number, dt: number, time: number): void {
+  update(w: World, at: { x: number; z: number; y?: number }, yaw: number, dt: number, time: number): void {
     if (!this.asset || !this.actions) {
       this.procedural.update(w, at, yaw, dt, time);
       return;
     }
     const a = this.asset;
     const p = w.player;
-    this.group.position.set(at.x, groundY(at.x, at.z), -at.z);
+    this.group.position.set(at.x, (at.y ?? groundY(at.x, at.z)) /* map: 楼层高度 */, -at.z);
     // 转身惯性：偏航平滑
     const target = yawToRot(yaw);
     if (this.rotS === null) this.rotS = target;
@@ -641,7 +641,7 @@ export class GhostModels {
     }
   }
 
-  update(w: World, at: { x: number; z: number }[], dt: number, time: number): void {
+  update(w: World, at: { x: number; z: number; y?: number }[], dt: number, time: number): void {
     this.greyTrail.update(dt);
     this.wraithTrail.update(dt);
     if (!this.reaper || !this.creature) {
@@ -656,14 +656,14 @@ export class GhostModels {
     });
   }
 
-  private place(root: THREE.Group, g: GhostState, at: { x: number; z: number }): number {
+  private place(root: THREE.Group, g: GhostState, at: { x: number; z: number; y?: number }): number {
     root.visible = g.mode !== 'gone';
-    root.position.set(at.x, groundY(at.x, at.z), -at.z);
+    root.position.set(at.x, (at.y ?? groundY(at.x, at.z)) /* map: 楼层高度 */, -at.z);
     root.rotation.y = yawToRot(g.yaw);
     return g.mode === 'dissolve' ? Math.max(0, 1 - g.t / GHOST.dissolveSecs) : 1;
   }
 
-  private updateGrey(g: GhostState, at: { x: number; z: number }, dt: number, time: number): void {
+  private updateGrey(g: GhostState, at: { x: number; z: number; y?: number }, dt: number, time: number): void {
     const a = this.reaper!;
     const u = a.cloth;
     const alpha = this.place(a.root, g, at);
@@ -708,13 +708,13 @@ export class GhostModels {
       while (this.trailAcc.grey > 1) {
         this.trailAcc.grey -= 1;
         const sy = Math.sin(g.yaw), cy = Math.cos(g.yaw);
-        this.tmpV.set(at.x - sy * 0.35, groundY(at.x, at.z) + 0.25 + Math.random() * 0.5, -(at.z - cy * 0.35));
+        this.tmpV.set(at.x - sy * 0.35, (at.y ?? groundY(at.x, at.z)) /* map: 楼层高度 */ + 0.25 + Math.random() * 0.5, -(at.z - cy * 0.35));
         this.greyTrail.emit({ pos: this.tmpV, vel: new THREE.Vector3(0, 0.18, 0), spread: 0.4, life: 1.1, size: 0.24, grow: 1.6, color: new THREE.Color(0x8b939c), drag: 1.2 });
       }
     }
   }
 
-  private updateWraith(g: GhostState, at: { x: number; z: number }, dt: number, time: number): void {
+  private updateWraith(g: GhostState, at: { x: number; z: number; y?: number }, dt: number, time: number): void {
     const a = this.creature!;
     const u = a.skin;
     const alpha = this.place(a.root, g, at);
@@ -785,7 +785,7 @@ export class GhostModels {
       while (this.trailAcc.wraith > 1) {
         this.trailAcc.wraith -= 1;
         const sy = Math.sin(g.yaw), cy = Math.cos(g.yaw);
-        this.tmpV.set(at.x - sy * 0.5, groundY(at.x, at.z) + 0.2 + Math.random() * 0.4, -(at.z - cy * 0.5));
+        this.tmpV.set(at.x - sy * 0.5, (at.y ?? groundY(at.x, at.z)) /* map: 楼层高度 */ + 0.2 + Math.random() * 0.4, -(at.z - cy * 0.5));
         this.wraithTrail.emit({ pos: this.tmpV, vel: new THREE.Vector3(0, 0.15, 0), spread: 0.5, life: 0.9, size: 0.26, grow: 1.8, color: new THREE.Color(0x1c2128), drag: 1.4 });
       }
     }

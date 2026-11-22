@@ -3,7 +3,7 @@
 // fixedCam 供验收截图机位使用，逻辑与原来一致。
 import * as THREE from 'three';
 import { cameraClearT } from '../sim/collision';
-import { groundY, regionAt } from '../sim/level';
+import { ceilingY, groundY } from '../sim/level'; // map:
 import { World } from '../sim/state';
 import { lerp } from './geom';
 
@@ -60,7 +60,7 @@ export class CameraRig {
   }
 
   /** 返回镜头距离（view 用它决定玩家模型可见性，避免贴脸穿模）。 */
-  update(w: World, p: { x: number; z: number }, yaw: number, pitch: number, dt: number): number {
+  update(w: World, p: { x: number; z: number; y?: number }, yaw: number, pitch: number, dt: number): number { // map:
     if (this.fixedCam) {
       const f = this.fixedCam;
       this.camera.position.set(f.pos[0], f.pos[1], -f.pos[2]);
@@ -84,7 +84,7 @@ export class CameraRig {
 
     const dist = CAM.dist + this.sprintBlend * 0.5;
     const sy = Math.sin(cyaw), cy = Math.cos(cyaw), cp = Math.cos(cpitch), sp = Math.sin(cpitch);
-    const py = groundY(p.x, p.z) + CAM.pivotY;
+    const py = (p.y ?? groundY(p.x, p.z)) + CAM.pivotY; // map:
     const reach = CAM.shoulder + 0.3;
     const side = this.sweep(p.x, p.z, py, cyaw + Math.PI / 2, reach, py, w.doors);
     const shHard = Math.max(0, Math.min(CAM.shoulder, side[0] * reach - 0.3));
@@ -94,10 +94,9 @@ export class CameraRig {
     const ax = p.x + cy * sh, az = p.z - sy * sh;
     const back = this.sweep(ax, az, py, cyaw + Math.PI, cp * dist, py + sp * dist, w.doors);
     let hard = Math.max(CAM.minDist, back[0] * dist - 0.25);
-    const region = regionAt(p.x, p.z);
-    const top = region === 'gatehouse' ? 3.25 : region === 'chapel' ? 6.5 : region === 'porch' ? 3.3 : 60;
+    const top = ceilingY(p.x, p.z, w.player.floor); // map:
     if (sp > 0.01) hard = Math.min(hard, Math.max(CAM.minDist, (top - py) / sp));
-    if (sp < -0.01) hard = Math.min(hard, Math.max(CAM.minDist, (py - 0.25 - groundY(p.x, p.z)) / -sp));
+    if (sp < -0.01) hard = Math.min(hard, Math.max(CAM.minDist, (py - 0.25 - (p.y ?? groundY(p.x, p.z))) / -sp)); // map:
     const want = Math.min(hard, Math.max(CAM.minDist, back[1] * dist - 0.25));
     this.camDist = Math.min(hard, want < this.camDist ? want : lerp(this.camDist, want, Math.min(1, dt * 5)));
     const d = this.camDist;

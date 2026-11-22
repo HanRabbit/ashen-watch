@@ -10,9 +10,11 @@ import { doTutorial, Driver, openGatehouseDoor, STAND } from './driver';
 /** 是否该举灯：有鬼在威胁或被逼退状态、在逼退距离内且有视线。举到它退走为止。 */
 function shouldRaise(d: Driver): boolean {
   const p = d.w.player;
+  // 礼拜堂内双鬼可能夹击：有鬼在场就举灯自保
+  if (d.w.lantern.oil > 0 && regionAt(p.x, p.z) === 'chapel' && d.w.ghosts.some((g) => g.mode !== 'gone' && g.mode !== 'dissolve')) return true;
   return d.w.lantern.oil > 0 && d.w.ghosts.some((g) => (g.mode === 'chase' || g.mode === 'windup' || g.mode === 'alert' || g.mode === 'recoil')
-    && Math.hypot(g.x - p.x, g.z - p.z) < GHOST[g.kind].repelRange - 0.5
-    && hasLineOfSight(g.x, g.z, p.x, p.z, d.w.doors));
+    && Math.hypot(g.x - p.x, g.z - p.z, g.y - p.y) < GHOST[g.kind].repelRange + 1
+    && hasLineOfSight(g.x, g.y + 1.5, g.z, p.x, p.y + 1.5, p.z, d.w.doors));
 }
 
 function chased(d: Driver): boolean {
@@ -20,17 +22,17 @@ function chased(d: Driver): boolean {
 }
 
 /** 夜间走位：被追时冲刺，鬼近身时举灯。 */
-function nightWalk(d: Driver, x: number, z: number, stop = 0.3, maxSecs = 240): boolean {
+function nightWalk(d: Driver, x: number, z: number, stop = 0.3, maxSecs = 240, floor?: 'B1' | '1F' | '2F'): boolean {
   const max = Math.round(maxSecs / FIXED_DT);
-  let path = findPath(d.w.player, { x, z }, { doors: d.w.doors, lit: [] }) ?? [];
+  let path = findPath(d.w.player, { x, z, floor }, { doors: d.w.doors, lit: [] }) ?? [];
   for (let i = 0; i < max && d.alive(); i++) {
     const p = d.w.player;
     if (Math.hypot(p.x - x, p.z - z) <= stop) return true;
-    if (i % 20 === 0) path = findPath(p, { x, z }, { doors: d.w.doors, lit: [] }) ?? path;
     while (path.length > 1 && Math.hypot(path[0].x - p.x, path[0].z - p.z) < 0.3) path.shift();
-    if (!path.length) return false;
+    if (!path.length) { path = findPath(p, { x, z, floor }, { doors: d.w.doors, lit: [] }) ?? []; if (!path.length) return false; continue; }
     d.face(path[0].x, path[0].z);
     d.tick({ forward: 1, sprint: chased(d), raise: shouldRaise(d) });
+    if (i % 20 === 0) path = findPath(p, { x, z, floor }, { doors: d.w.doors, lit: [] }) ?? path;
   }
   return false;
 }
@@ -59,6 +61,8 @@ function playthrough(repairs: RepairId[]): Driver {
   for (const r of repairs) d.repair(r);
   for (const r of repairs) expect(d.w.repairs[r]).toBe(true);
   d.tick({}, [{ type: 'toggleLantern' }]); // 白天关灯省油
+  d.walkTo(15.1, 17.5);
+  d.driveStair('z', 21.4, 0); // 上 S2
   d.walkTo(STAND.doorOut.x, STAND.doorOut.z);
   d.walkTo(STAND.pot.x, STAND.pot.z);
   d.use('pot');
@@ -67,20 +71,30 @@ function playthrough(repairs: RepairId[]): Driver {
   expect(d.waitUntil((w) => w.phase === 'dusk', 20 * 60)).toBe(true);
   expect(d.snapshots.length).toBe(1);
   expect(d.waitUntil((w) => w.phase === 'night', 5 * 60)).toBe(true);
+  d.w.lantern.on = true; d.w.lantern.oil = 300;
 
   // 入夜：取钟舌。修了栅门走近路，否则走主路。
   const viaGate = d.w.repairs.gate;
   if (d.w.repairs.lamp && d.w.inv.oil > 0) nightUse(d, 'lamp', STAND.lamp);
   if (viaGate) {
+    // 2F：外梯上→东步道→桥→上廊→开栅门→下 S4
+    nightWalk(d, STAND.s3Bot.x, STAND.s3Bot.z);
+    d.driveStair('x', 9.4, Math.PI / 2);
+    d.driveStair('z', 20.6, 0);
+    d.driveStair('x', 14.0, Math.PI / 2);
+    d.driveStair('z', 21.15, 0);
+    d.driveStair('x', 22.5, Math.PI / 2);
     nightUse(d, 'gate', STAND.gateW);
-    nightWalk(d, STAND.gateE.x, STAND.gateE.z);
-    if (d.w.doors.gate) nightUse(d, 'gate', STAND.gateE); // 回手关门
+    d.driveStair('x', 24.6, Math.PI / 2);
+    d.driveStair('x', 29.6, Math.PI / 2);
   }
+  if (!viaGate && !d.w.doors.chapelFront) nightUse(d, 'chapelFront', STAND.frontOut);
   expect(nightUse(d, 'chest', STAND.chest)).toBe(true);
   expect(d.w.inv.hasClapper).toBe(true);
   if (viaGate) {
-    nightUse(d, 'gate', STAND.gateE);
-    nightWalk(d, STAND.gateW.x, STAND.gateW.z);
+    // 回程走主路（正门出），避免正厅北过道被双鬼夹击；2F 近路已在去程验证
+    nightWalk(d, STAND.frontIn.x, STAND.frontIn.z);
+    nightWalk(d, STAND.frontOut.x, STAND.frontOut.z);
   }
   // 回门房，关门，有门闩就加闩
   expect(nightWalk(d, STAND.doorIn.x, STAND.doorIn.z)).toBe(true);
