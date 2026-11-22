@@ -72,6 +72,8 @@ varying vec3 vWearPos; varying vec3 vWearNrm;
 const WEAR_FRAG = /* glsl */`
 uniform float uWearKind, uWearSeed, uWearRimY, uWearSootY;
 uniform vec2 uWearCenter;
+uniform vec2 uWearSackC[5];
+uniform float uWearSackR[5];
 varying vec3 vWearPos; varying vec3 vWearNrm;
 float wearHash(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
 float wearNoise(vec2 p){
@@ -130,15 +132,28 @@ const WEAR_BODY = /* glsl */`
     roughnessFactor = mix(roughnessFactor, 0.88, rust);
     metalnessFactor = mix(metalnessFactor, 0.25, rust);
   } else {
-    // 布：搭布垂坠下摆潮湿发黑（只在指定箱顶周边，避免影响地毯等共用件）
+    // 布：粗麻织纹（共用）+ 搭布下摆/麻袋底潮湿发黑 + 麻袋局部磨白（局部遮罩）
+    float wv = wearNoise(vec2(wp.x * 140.0 + wp.y * 60.0, wp.z * 140.0 + wp.y * 30.0));
+    roughnessFactor = mix(roughnessFactor, 0.97, wv * 0.5);
+    float slub = smoothstep(0.75, 0.9, wearNoise(wp.xz * 35.0 + wp.y * 20.0 + sd));
+    diffuseColor.rgb *= 1.0 - slub * 0.08;
     float dc2 = distance(wp.xz, uWearCenter);
     float damp = smoothstep(uWearRimY - 0.12, uWearRimY - 0.5, wp.y) * smoothstep(1.1, 0.6, dc2);
+    float nearSack = 0.0;
+    for (int i = 0; i < 5; i++) {
+      float ds = distance(wp.xz, uWearSackC[i]);
+      nearSack = max(nearSack, smoothstep(uWearSackR[i] + 0.12, uWearSackR[i] - 0.05, ds));
+    }
+    damp = max(damp, smoothstep(0.16, 0.03, wp.y) * nearSack);
     diffuseColor.rgb *= mix(1.0, 0.5, damp);
     roughnessFactor = mix(roughnessFactor, 0.98, damp);
+    float worn = smoothstep(0.68, 0.85, wearFbm(wp.xz * 6.0 + wp.y * 3.0 + sd)) * smoothstep(0.12, 0.3, wp.y) * nearSack;
+    diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * vec3(1.22, 1.2, 1.14), worn * 0.7);
+    roughnessFactor = mix(roughnessFactor, 0.85, worn);
   }
 }
 `;
-export interface WearOpts { kind: 'wood' | 'iron' | 'stone' | 'soot' | 'cloth'; seed?: number; center?: [number, number]; rimY?: number; sootY?: number; }
+export interface WearOpts { kind: 'wood' | 'iron' | 'stone' | 'soot' | 'cloth'; seed?: number; center?: [number, number]; rimY?: number; sootY?: number; sacks?: [number, number, number][]; }
 const wearKindId = { wood: 0, iron: 1, stone: 2, soot: 3, cloth: 4 };
 /** 给材质叠加上圣经 5.2 的痕迹层（共享材质只注入一次）。 */
 export function applyWear(mat: THREE.MeshStandardMaterial, o: WearOpts): void {
@@ -150,6 +165,8 @@ export function applyWear(mat: THREE.MeshStandardMaterial, o: WearOpts): void {
     uWearRimY: { value: o.rimY ?? 0.85 },
     uWearSootY: { value: o.sootY ?? 1.0 },
     uWearCenter: { value: new THREE.Vector2(o.center?.[0] ?? 0, o.center?.[1] ?? 0) },
+    uWearSackC: { value: Array.from({ length: 5 }, (_, i) => new THREE.Vector2(o.sacks?.[i]?.[0] ?? 999, o.sacks?.[i]?.[1] ?? 999)) },
+    uWearSackR: { value: Array.from({ length: 5 }, (_, i) => o.sacks?.[i]?.[2] ?? 0.001) },
   };
   const prev = mat.onBeforeCompile;
   mat.onBeforeCompile = (shader, renderer) => {
@@ -162,6 +179,65 @@ export function applyWear(mat: THREE.MeshStandardMaterial, o: WearOpts): void {
   };
   mat.customProgramCacheKey = () => 'aw-wear-' + wearKindId[o.kind];
   mat.needsUpdate = true;
+}
+
+
+/** 麻袋形体：底部摊平贴地、袋身鼓腹、扎口颈 + 塌落袋口、布褶垂坠（非球面）。 */
+export function sackGeometry(seed: number, r: number, h: number, slump: number): THREE.BufferGeometry {
+  const NA = 14, NR = 16;
+  const pos: number[] = [], uv: number[] = [], idx: number[] = [];
+  const rnd = (k: number): number => { const x = Math.sin(seed * 57.3 + k * 13.7) * 43758.5453; return x - Math.floor(x); };
+  const flopDir = rnd(1) * Math.PI * 2;
+  for (let ir = 0; ir <= NR; ir++) {
+    const t = ir / NR;
+    // 半径剖面：摊平底 → 鼓腹 → 收肩 → 扎口颈 → 塌口
+    let rp: number, y: number;
+    if (t < 0.1) { rp = 0.86 + t * 1.2; y = t * h * 0.35; }
+    else if (t < 0.55) { const u = (t - 0.1) / 0.45; rp = 0.98 + 0.16 * Math.sin(u * Math.PI); y = h * (0.035 + u * 0.5); }
+    else if (t < 0.8) { const u = (t - 0.55) / 0.25; rp = 0.98 - 0.66 * u * u; y = h * (0.535 + u * 0.28); }
+    else if (t < 0.87) { rp = 0.3; y = h * (0.815 + (t - 0.8) * 0.6); }
+    else { const u = (t - 0.87) / 0.13; rp = 0.34 + 0.2 * Math.sin(u * Math.PI); y = h * (0.857 + u * 0.12 - slump * 0.03 * u * u); }
+    for (let ia = 0; ia <= NA; ia++) {
+      const a = (ia / NA) * Math.PI * 2;
+      // 布褶：竖向垂坠褶 + 细碎皱，扎口处收紧
+      const fold = (Math.sin(a * 5 + seed) * 0.08 + Math.sin(a * 9 + t * 6 + seed * 2) * 0.045) * (t < 0.8 ? 1 : 0.5);
+      const sag = 1 - slump * 0.12 * Math.max(0, Math.sin(a + flopDir)) * (t > 0.3 && t < 0.8 ? 1 : 0);
+      let rr = r * rp * (1 + fold) * sag;
+      let xx = Math.cos(a) * rr, zz = Math.sin(a) * rr;
+      let yy = y * (1 - slump * 0.1 * Math.max(0, Math.sin(a + flopDir + 1.7)) * (t > 0.4 ? 1 : 0));
+      // 塌口向一侧倒伏
+      if (t > 0.87) {
+        const u = (t - 0.87) / 0.13;
+        xx += Math.cos(flopDir) * u * u * r * 0.3 * slump;
+        zz += Math.sin(flopDir) * u * u * r * 0.3 * slump;
+        yy -= u * u * r * 0.15 * slump;
+      }
+      // 底部摊平贴地
+      if (t < 0.1) { yy = Math.max(0, yy); rr = r * rp * (1 + fold * 0.4); xx = Math.cos(a) * rr; zz = Math.sin(a) * rr; }
+      pos.push(xx, yy, zz);
+      uv.push(ia / NA * 2, t * 2);
+    }
+  }
+  for (let ir = 0; ir < NR; ir++) for (let ia = 0; ia < NA; ia++) {
+    const a = ir * (NA + 1) + ia, b = a + 1, c = a + NA + 1, d = c + 1;
+    idx.push(a, c, b, b, c, d);
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+  geo.setIndex(idx);
+  geo.computeVertexNormals();
+  return geo;
+}
+
+/** 扎口绳环 + 结（与袋身同族材质，合批不分裂）。 */
+export function sackTie(r: number, h: number): THREE.BufferGeometry {
+  const tie = new THREE.TorusGeometry(r * 0.31, r * 0.05, 5, 12);
+  tie.rotateX(Math.PI / 2);
+  tie.translate(0, h * 0.84, 0);
+  const knot = new THREE.SphereGeometry(r * 0.09, 6, 5);
+  knot.translate(r * 0.32, h * 0.84, 0);
+  return mergeGeometries([tie.toNonIndexed(), knot.toNonIndexed()], false)!;
 }
 
 /** 按材质实例合批 root 下的所有网格（烘焙变换），减少 draw calls。保留 root 自身变换。 */

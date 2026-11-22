@@ -7,7 +7,7 @@ import { BELL_POS, BRAZIER_POS, DOORS, LAMP_POS, RAISED_Y } from '../sim/level';
 import { World } from '../sim/state';
 import { archLeaf, boxMesh, cyl, halfArchLeaf, lerp, mesh, put } from './geom';
 import { glowTexture, grimeTexture, Materials, smokeTexture } from './materials';
-import { findNode, loadProp, mergeByMaterial } from './propAssets';
+import { findNode, loadProp, mergeByMaterial, sackGeometry, sackTie } from './propAssets';
 import { variants } from './materialVariants';
 import type { Quality } from './view';
 
@@ -674,7 +674,9 @@ export class Props {
     // 锅体由 furniture.ts 的 cauldron GLB 承担，这里只留锅下暖光
     this.potGlow = glowSprite(tex, 0xff7a28, 0.7); put(this.potGlow, -2.72, 0.45, -4.4);
     this.food = put(new THREE.Group(), -2.05, 0, -2.2);
-    const sack = mesh(new THREE.SphereGeometry(0.17, 8, 6), m.cloth); sack.position.y = 0.15; sack.scale.y = 1.1;
+    const sack = mesh(sackGeometry(5, 0.16, 0.3, 0.45), variants(m).clothLinen);
+    const tie = mesh(sackTie(0.16, 0.3), variants(m).clothLinen);
+    sack.add(tie);
     const root = cyl(m.paper, 0.03, 0.05, 0.16, 6); root.position.set(0.05, 0.33, 0); root.rotation.z = 0.4;
     this.food.add(sack, root);
     g.add(this.potGlow, this.food);
