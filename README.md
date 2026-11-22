@@ -32,7 +32,7 @@ npm run preview    # 用静态服务器预览 dist/，http://localhost:4173/
 | 任务与资源 | Tab | 中键打开工具栏后点「任务」 |
 | 暂停 | Esc | 中键打开工具栏 |
 
-操作方式、键位、灵敏度、亮度和音量在标题或暂停界面的「设置」里修改，与进度分开保存。
+操作方式、键位、灵敏度、亮度、音量与画质（高／低）在标题或暂停界面的「设置」里修改，与进度分开保存。高画质含泛光、调色、软阴影与扬尘；集成显卡可切低画质保帧率。
 
 一局约 10–15 分钟：白天 6 分钟、黄昏 1.5 分钟、夜晚 6 分钟。白天忙完可回门房床铺「休息到黄昏」，黄昏准备好了可在壁炉旁「等到入夜」。两只鬼都怕光：按住举灯时它们不敢扑，祭台旁和侧廊中段的火盆投 1 份油可亮 3 分钟。这些数值与 PRD 不一致，差异见 [docs/STEP2.md](docs/STEP2.md)。
 
@@ -62,7 +62,7 @@ node tools/feel.mjs chrome         # 手感测量：行走是否匀速、原地�
 
 浏览器脚本通过 `playwright-core` 驱动本机已安装的 Chrome 或 Edge（第一个参数写 `chrome` 或 `msedge`），不会下载浏览器。加 `--headless` 可无窗口运行。默认访问 `http://localhost:4173/`，可用环境变量 `AW_URL` 改地址。
 
-验收结果见 [docs/VERIFICATION.md](docs/VERIFICATION.md)，仍在使用占位资源的项目见 [docs/PLACEHOLDERS.md](docs/PLACEHOLDERS.md)。
+验收结果见 [docs/VERIFICATION.md](docs/VERIFICATION.md)，仍在使用占位资源的项目见 [docs/PLACEHOLDERS.md](docs/PLACEHOLDERS.md)，美术强化_pass 见 [docs/ART-PASS.md](docs/ART-PASS.md)。
 
 ## 目录
 
@@ -76,6 +76,8 @@ node tools/feel.mjs chrome         # 手感测量：行走是否匀速、原地�
 | `tests/` | 模拟层测试与机器人玩家驱动 |
 | `tools/` | 浏览器冒烟、验收与截图脚本 |
 | `concept/`、`ART-ASSETS.md`、`CONCEPT-PROMPTS.md` | 概念图与美术资料 |
+| `public/textures/` | Poly Haven CC0 贴图（石、木、地、瓦、碎石），授权见 `CREDITS.md` |
+| `docs/ART-PASS.md`、`docs/art-pass/` | 2026-11-22 美术强化的说明与前后对照截图 |
 
 ## 存档
 

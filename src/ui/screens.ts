@@ -125,6 +125,7 @@ export class Screens {
       case 'lantern': h.toggleLantern(); h.resume(); break;
       case 'eat': h.eat(); h.resume(); break;
       case 'mode': s.mode = arg === 'mouse' ? 'mouse' : 'kbm'; h.settingsChanged(); this.render(); break;
+      case 'quality': s.quality = arg === 'low' ? 'low' : 'high'; h.settingsChanged(); this.render(); break;
       case 'resetBinds': s.binds = { ...DEFAULT_BINDS }; h.settingsChanged(); this.render(); break;
       case 'rebind': {
         this.rebinding = arg as BindAction;
@@ -168,6 +169,10 @@ export class Screens {
         <button class="${s.mode === 'mouse' ? 'on' : ''}" data-act="mode" data-arg="mouse">纯鼠标<small>左键前进，右键短按交互／长按举灯，中键工具栏</small></button>
       </div>
       <h3>镜头与显示</h3>
+      <div class="btns">
+        <button class="${s.quality === 'high' ? 'on' : ''}" data-act="quality" data-arg="high">高画质<small>泛光、调色、软阴影与扬尘。推荐独立显卡</small></button>
+        <button class="${s.quality === 'low' ? 'on' : ''}" data-act="quality" data-arg="low">低画质<small>关闭后期与粒子，降低阴影分辨率。集成显卡保帧率</small></button>
+      </div>
       ${slider('sensitivity', '鼠标灵敏度', 0.2, 3, s.sensitivity)}
       ${slider('brightness', '亮度', 0.5, 2, s.brightness)}
       ${slider('volume', '音量', 0, 1, s.volume)}

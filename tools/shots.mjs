@@ -91,6 +91,7 @@ const SHOTS = [
 const { browser, page, errors } = await launch({ channel, headless });
 await page.goto(`${BASE}?preset=dev`);
 await waitFor(page, () => window.__awProbe?.state().perf.calls > 0);
+await page.evaluate(() => window.__awTexReady);
 // 进入「游戏中」但不捕获鼠标：模拟停住，画面与 HUD 照常更新
 await page.evaluate(() => { const d = window.__awDev; d.fakeLock(true); });
 await page.locator('#overlay button', { hasText: '新游戏' }).click();

@@ -1,11 +1,13 @@
 // 随状态变化的道具：门扇、门闩、栅门、壁灯、拾取件、祭台匣、晨钟、炉火（PRP-01…09、ANM-03 的程序化占位）。
+// 火焰用程序化着色器面片，火星用粒子柱（VFX-01/02）；低画质关闭火星。
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { BRAZIER, BrazierId, HEARTH, LightZone, WALL_LAMP } from '../config';
 import { BELL_POS, BRAZIER_POS, LAMP_POS, RAISED_Y } from '../sim/level';
 import { World } from '../sim/state';
 import { archLeaf, boxMesh, cyl, halfArchLeaf, lerp, mesh, put } from './geom';
-import { glowTexture, Materials } from './materials';
+import { glowTexture, Materials, smokeTexture } from './materials';
+import type { Quality } from './view';
 
 const R = RAISED_Y;
 const HALF_PI = Math.PI / 2;
@@ -18,18 +20,137 @@ function glowSprite(tex: THREE.Texture, color: number, size: number): THREE.Spri
   return s;
 }
 
-function flame(m: Materials, tex: THREE.Texture, size: number): THREE.Group {
+// —— 火焰着色器：交叉面片上的程序化火舌，加性混合 ——
+const FLAME_MATS: THREE.ShaderMaterial[] = [];
+const FLAME_VERT = /* glsl */`
+varying vec2 vUv;
+void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`;
+const FLAME_FRAG = /* glsl */`
+uniform float uTime, uPhase;
+uniform vec3 uA, uB, uC;
+varying vec2 vUv;
+void main() {
+  vec2 uv = vUv;
+  float t = uTime * 3.0 + uPhase;
+  float n = sin(uv.y * 9.0 - t * 2.2) * 0.5 + sin(uv.y * 19.0 - t * 3.7) * 0.25;
+  float x = uv.x - 0.5 + n * 0.09 * (1.0 - uv.y);
+  float width = mix(0.34, 0.02, pow(uv.y, 0.85));
+  float body = smoothstep(width, width * 0.25, abs(x));
+  float vert = smoothstep(0.0, 0.12, uv.y) * smoothstep(1.0, 0.5, uv.y);
+  float f = body * vert * (0.82 + 0.18 * sin(t * 5.0 + uv.y * 7.0));
+  vec3 col = mix(uA, uB, smoothstep(0.05, 0.7, uv.y));
+  float core = smoothstep(width * 0.55, 0.0, abs(x)) * smoothstep(0.55, 0.0, uv.y);
+  col = mix(col, uC, core * 0.85);
+  gl_FragColor = vec4(col * 1.15, f);
+  #include <tonemapping_fragment>
+  #include <colorspace_fragment>
+}`;
+
+function flameMaterial(phase: number): THREE.ShaderMaterial {
+  const mat = new THREE.ShaderMaterial({
+    vertexShader: FLAME_VERT, fragmentShader: FLAME_FRAG,
+    transparent: true, depthWrite: false, blending: THREE.NormalBlending, side: THREE.DoubleSide,
+    uniforms: {
+      uTime: { value: 0 }, uPhase: { value: phase },
+      uA: { value: new THREE.Color(0xc23208) }, uB: { value: new THREE.Color(0xff8820) }, uC: { value: new THREE.Color(0xffcf90) },
+    },
+  });
+  FLAME_MATS.push(mat);
+  return mat;
+}
+
+function flame(tex: THREE.Texture, size: number, phase = Math.random() * 10): THREE.Group {
   const g = new THREE.Group();
-  const core = mesh(new THREE.ConeGeometry(size * 0.32, size, 7), m.flame, false);
-  core.position.y = size * 0.5;
-  g.add(core, glowSprite(tex, 0xffa040, size * 3.2));
-  g.children[1].position.y = size * 0.45;
+  const mat = flameMaterial(phase);
+  const geo = new THREE.PlaneGeometry(size * 0.8, size);
+  for (const ry of [0, HALF_PI]) {
+    const card = new THREE.Mesh(geo, mat);
+    card.position.y = size * 0.5;
+    card.rotation.y = ry;
+    card.renderOrder = 2;
+    g.add(card);
+  }
+  const glow = glowSprite(tex, 0xff7020, size * 1.0);
+  glow.material.opacity = 0.1;
+  glow.position.y = size * 0.45;
+  g.add(glow);
   return g;
+}
+
+// —— 火星粒子柱 ——
+const EMBER_VERT = /* glsl */`
+attribute float aLife;
+varying float vLife;
+uniform float uSize;
+void main() {
+  vLife = aLife;
+  vec4 mv = modelViewMatrix * vec4(position, 1.0);
+  gl_PointSize = uSize * (1.0 - aLife * 0.7) * (300.0 / max(0.1, -mv.z));
+  gl_Position = projectionMatrix * mv;
+}`;
+const EMBER_FRAG = /* glsl */`
+varying float vLife;
+uniform vec3 uColor;
+void main() {
+  float d = length(gl_PointCoord - 0.5);
+  float a = smoothstep(0.5, 0.0, d) * (1.0 - vLife);
+  gl_FragColor = vec4(uColor * (1.6 - vLife), a);
+  #include <tonemapping_fragment>
+  #include <colorspace_fragment>
+}`;
+
+class Embers {
+  readonly points: THREE.Points;
+  private life: Float32Array;
+  private seed: Float32Array;
+  private n: number;
+  private h: number;
+  constructor(x: number, y: number, z: number, n: number, h: number, color: number, size: number) {
+    this.n = n; this.h = h;
+    this.life = new Float32Array(n);
+    this.seed = new Float32Array(n);
+    const pos = new Float32Array(n * 3);
+    for (let i = 0; i < n; i++) {
+      this.life[i] = Math.random();
+      this.seed[i] = Math.random() * 6.28;
+      pos[i * 3] = (Math.random() - 0.5) * 0.2;
+      pos[i * 3 + 1] = this.life[i] * h;
+      pos[i * 3 + 2] = (Math.random() - 0.5) * 0.2;
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    geo.setAttribute('aLife', new THREE.BufferAttribute(this.life, 1));
+    const mat = new THREE.ShaderMaterial({
+      vertexShader: EMBER_VERT, fragmentShader: EMBER_FRAG, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+      uniforms: { uSize: { value: size }, uColor: { value: new THREE.Color(color) } },
+    });
+    this.points = new THREE.Points(geo, mat);
+    this.points.position.set(x, y, -z);
+    this.points.frustumCulled = false;
+  }
+  update(dt: number, time: number, active: boolean): void {
+    this.points.visible = active;
+    if (!active) return;
+    const pos = this.points.geometry.attributes.position as THREE.BufferAttribute;
+    const arr = pos.array as Float32Array;
+    for (let i = 0; i < this.n; i++) {
+      this.life[i] += dt * (0.5 + (i % 5) * 0.12);
+      if (this.life[i] >= 1) {
+        this.life[i] = 0;
+        arr[i * 3] = (Math.random() - 0.5) * 0.18;
+        arr[i * 3 + 2] = (Math.random() - 0.5) * 0.18;
+      }
+      arr[i * 3 + 1] = this.life[i] * this.h;
+      arr[i * 3] += Math.sin(time * 2 + this.seed[i]) * dt * 0.12;
+    }
+    pos.needsUpdate = true;
+    (this.points.geometry.attributes.aLife as THREE.BufferAttribute).needsUpdate = true;
+  }
 }
 
 export function makeLantern(m: Materials, tex: THREE.Texture): { group: THREE.Group; glow: THREE.Object3D; glass: THREE.MeshStandardMaterial } {
   const group = new THREE.Group();
-  const glass = new THREE.MeshStandardMaterial({ color: 0x3a2a14, emissive: 0xffa640, emissiveIntensity: 0, roughness: 0.4, transparent: true, opacity: 0.85 });
+  const glass = new THREE.MeshStandardMaterial({ color: 0x3a2a14, emissive: 0xffa640, emissiveIntensity: 0, roughness: 0.35, transparent: true, opacity: 0.85 });
   const base = cyl(m.iron, 0.085, 0.095, 0.04, 8); base.position.y = -0.2;
   const body = mesh(new THREE.CylinderGeometry(0.07, 0.07, 0.17, 8), glass, false); body.position.y = -0.1;
   const hood = mesh(new THREE.ConeGeometry(0.11, 0.09, 8), m.iron); hood.position.y = 0.03;
@@ -42,7 +163,10 @@ export function makeLantern(m: Materials, tex: THREE.Texture): { group: THREE.Gr
   }
   const glow = glowSprite(tex, 0xffa848, 0.55);
   glow.position.y = -0.1;
+  // 次序保持 base,body,hood,ring,posts,glow（拾取件按 children[5] 隐藏光斑）
   group.add(base, body, hood, ring, posts, glow);
+  const vent = cyl(m.iron, 0.03, 0.05, 0.03, 6); vent.position.y = 0.085; group.add(vent);
+  const finial = mesh(new THREE.SphereGeometry(0.018, 6, 5), m.iron); finial.position.y = 0.16; group.add(finial);
   return { group, glow, glass };
 }
 
@@ -93,7 +217,6 @@ function boardTexture(): THREE.CanvasTexture {
   const g = c.getContext('2d')!;
   g.fillStyle = '#c9b891'; g.fillRect(0, 0, 256, 320);
   g.strokeStyle = '#3b2f24'; g.lineWidth = 3; g.lineCap = 'round';
-  // 钟座线稿：钟身、缺失的钟舌（虚线）与钟架
   g.beginPath(); g.moveTo(60, 60); g.lineTo(196, 60); g.moveTo(128, 60); g.lineTo(128, 84); g.stroke();
   g.beginPath(); g.moveTo(92, 200); g.quadraticCurveTo(96, 96, 128, 84); g.quadraticCurveTo(160, 96, 164, 200);
   g.lineTo(178, 214); g.lineTo(78, 214); g.closePath(); g.stroke();
@@ -136,12 +259,10 @@ function gateGeometry(): THREE.BufferGeometry {
   return mergeGeometries(parts.map((p) => (p.index ? p.toNonIndexed() : p)), false)!;
 }
 
-/** 亮区的地面光斑：圆盘裁到所在房间的矩形内，和规则里「光不穿墙」一致。 */
 function zoneDisc(zn: LightZone, tex: THREE.Texture, y: number): THREE.Mesh {
   const geo = new THREE.CircleGeometry(zn.r, 40);
   const pos = geo.attributes.position as THREE.BufferAttribute;
   for (let i = 0; i < pos.count; i++) {
-    // 圆盘随后绕 X 轴放平：本地 x 对应模拟 x，本地 y 对应模拟 z
     pos.setXY(i, Math.max(zn.x0, Math.min(zn.x1, zn.x + pos.getX(i))) - zn.x, Math.max(zn.z0, Math.min(zn.z1, zn.z + pos.getY(i))) - zn.z);
   }
   const disc = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ map: tex, color: 0xffa040, transparent: true, opacity: 0.4, depthWrite: false, blending: THREE.AdditiveBlending }));
@@ -156,12 +277,11 @@ export class Props {
   readonly hearthLight = new THREE.PointLight(0xff9a48, 0, 16, 1.6);
   readonly windowLight = new THREE.PointLight(0xff9a48, 0, 9, 1.8);
   readonly lampLight = new THREE.PointLight(0xffa850, 0, 18, 1.4);
-  /** 两个火盆共用一盏灯（少一盏点光源）：放在离玩家最近的那个点着的火盆上。 */
   readonly brazierLight = new THREE.PointLight(0xff9440, 0, 15, 1.5);
-  /** 开发预设下显示亮区边界。 */
   readonly lampDebugRing: THREE.Mesh;
 
   private glowTex = glowTexture();
+  private smokeTex = smokeTexture();
   private ghDoor = new THREE.Group();
   private boltBar: THREE.Mesh;
   private boltBracket: THREE.Mesh;
@@ -176,13 +296,15 @@ export class Props {
   private lampStub: THREE.Mesh;
   private lampFlame: THREE.Group;
   private lampGround: THREE.Mesh;
-  private braziers: { id: BrazierId; flame: THREE.Group; coals: THREE.Mesh; ground: THREE.Mesh }[] = [];
+  private braziers: { id: BrazierId; flame: THREE.Group; coals: THREE.Mesh; ground: THREE.Mesh; embers: Embers }[] = [];
   private pickLantern: THREE.Group;
   private shelfItems = new THREE.Group();
   private crateItems = new THREE.Group();
   private crateLid: THREE.Mesh;
   private flask: THREE.Group;
   private food: THREE.Group;
+  private mealBowl: THREE.Group;
+  private mealSteam: THREE.Sprite;
   private chestLid = new THREE.Group();
   private chestLock: THREE.Mesh;
   private chestGlow: THREE.Sprite;
@@ -194,14 +316,18 @@ export class Props {
   private bellT = 0;
   private flames: THREE.Group[] = [];
   private embers: THREE.Mesh;
+  private hearthEmbers: Embers;
+  private lampEmbers: Embers;
+  private chimneySmoke: THREE.Sprite[] = [];
   private potGlow: THREE.Sprite;
   private benchGlow: THREE.Sprite;
+  private quality: Quality = 'high';
 
   constructor(m: Materials) {
     const g = this.group;
     const tex = this.glowTex;
 
-    // 门房门与门闩（PRP-04）：门轴在西侧，向庭院开。门闩装在门的内侧。
+    // 门房门与门闩（PRP-04）
     put(this.ghDoor, -0.8, 0, 0.25);
     const leaf = mesh(archLeaf(1.6, 1.9, 2.6, 0.09, true), m.wood);
     this.ghDoor.add(leaf);
@@ -219,7 +345,7 @@ export class Props {
     const keeper = put(boxMesh(m.iron, 0.12, 0.16, 0.07, 1), 0.88, 1.25, 0.07);
     g.add(this.ghDoor, keeper);
 
-    // 侧廊栅门（PRP-03）：卡死、已修关门、已修开门三态。向庭院一侧开。
+    // 侧廊栅门（PRP-03）
     put(this.gate, 10.25, 0, 5.1);
     this.gate.add(mesh(gateGeometry(), m.iron));
     const wedge = boxMesh(m.wood, 0.12, 1.9, 0.1, 1); wedge.position.set(0.95, 0.85, 0.16); wedge.rotation.z = 0.5;
@@ -228,7 +354,7 @@ export class Props {
     this.gate.add(this.gateJam);
     g.add(this.gate);
 
-    // 礼拜堂正门：双开，向堂内开。
+    // 礼拜堂正门：双开
     put(this.frontL, 18.1, R, 25.25);
     put(this.frontR, 19.9, R, 25.25);
     for (const d of [this.frontL, this.frontR]) {
@@ -242,36 +368,38 @@ export class Props {
     }
     this.frontR.rotation.y = Math.PI;
     g.add(this.frontL, this.frontR);
-    // 礼拜堂侧门：门扇早已松脱，靠在侧廊墙边。
     const fallen = put(boxMesh(m.wood, 1.4, 2.2, 0.08, 1), 12.82, 1.05, 14.2);
     fallen.rotation.set(0, HALF_PI, 0.12);
     g.add(fallen);
 
-    // 庭院壁灯（PRP-02）：缺件、修复未点、点亮三态。
+    // 庭院壁灯（PRP-02）
     const lamp = put(new THREE.Group(), LAMP_POS.x - 0.18, LAMP_POS.y, LAMP_POS.z);
     const tri = new THREE.Shape();
     tri.moveTo(-0.26, 0.3); tri.lineTo(0.26, 0.3); tri.lineTo(0, -0.42); tri.lineTo(-0.26, 0.3);
     const plate = mesh(new THREE.ExtrudeGeometry(tri, { depth: 0.03, bevelEnabled: false }), m.iron);
     plate.rotation.y = HALF_PI;
     lamp.add(plate);
+    for (const [ry, rz] of [[-0.18, 0.22], [0.18, 0.22], [0, -0.3]]) {
+      const rivet = mesh(new THREE.SphereGeometry(0.02, 5, 4), m.iron); rivet.position.set(0.04, ry, rz); lamp.add(rivet);
+    }
     this.lampStub = boxMesh(m.iron, 0.2, 0.05, 0.05, 1); this.lampStub.position.set(0.1, -0.12, 0); this.lampStub.rotation.z = -0.7;
     const arm = boxMesh(m.iron, 0.5, 0.045, 0.045, 1); arm.position.set(0.28, -0.05, 0);
     const curl = mesh(new THREE.TorusGeometry(0.08, 0.02, 5, 10, Math.PI), m.iron); curl.position.set(0.5, 0.02, 0); curl.rotation.z = -HALF_PI;
     const cup = cyl(m.iron, 0.13, 0.09, 0.09, 8); cup.position.set(0.55, 0.14, 0);
     const oilCup = cyl(m.glass, 0.09, 0.09, 0.06, 8); oilCup.position.set(0.55, 0.2, 0);
-    this.lampArm.add(arm, curl, cup, oilCup);
+    const chimney = mesh(new THREE.CylinderGeometry(0.07, 0.09, 0.22, 8, 1, true), m.glass, false); chimney.position.set(0.55, 0.33, 0);
+    this.lampArm.add(arm, curl, cup, oilCup, chimney);
     for (let i = 0; i < 5; i++) {
       const prong = boxMesh(m.iron, 0.025, 0.1, 0.025, 1);
       prong.position.set(0.55 + Math.cos((i * Math.PI * 2) / 5) * 0.12, 0.22, Math.sin((i * Math.PI * 2) / 5) * 0.12);
       this.lampArm.add(prong);
     }
-    this.lampFlame = flame(m, tex, 0.2); this.lampFlame.position.set(0.55, 0.23, 0);
+    this.lampFlame = flame(tex, 0.2); this.lampFlame.position.set(0.55, 0.23, 0);
     this.lampArm.add(this.lampFlame);
     lamp.add(this.lampStub, this.lampArm);
     g.add(lamp);
     put(this.lampLight, LAMP_POS.x + 1.4, LAMP_POS.y + 0.5, LAMP_POS.z);
     g.add(this.lampLight);
-    // 地面光斑与调试边界：半径取自同一处亮区配置。
     const zn = WALL_LAMP.zone;
     this.lampGround = new THREE.Mesh(
       new THREE.CircleGeometry(zn.r, 40),
@@ -284,10 +412,12 @@ export class Props {
     put(this.lampDebugRing, zn.x, 0.06, zn.z);
     this.lampDebugRing.visible = false;
     g.add(this.lampGround, this.lampDebugRing);
+    this.lampEmbers = new Embers(LAMP_POS.x + 0.37, LAMP_POS.y + 0.3, LAMP_POS.z, 10, 0.7, 0xffb060, 0.06);
+    g.add(this.lampEmbers.points);
 
-    // 火盆：三脚铁架托一只浅盆，点着时有火苗和地面光斑。
+    // 火盆
     for (const id of BRAZIER_IDS) {
-      const at = BRAZIER_POS[id], zn = BRAZIER.zones[id];
+      const at = BRAZIER_POS[id], bz = BRAZIER.zones[id];
       const floor = at.y - 1.0;
       const stand = put(new THREE.Group(), at.x, floor, at.z);
       for (let i = 0; i < 3; i++) {
@@ -300,11 +430,12 @@ export class Props {
       const bowl = cyl(m.iron, 0.3, 0.16, 0.16, 10); bowl.position.y = 0.94;
       const rim = mesh(new THREE.TorusGeometry(0.3, 0.02, 5, 14), m.iron); rim.rotation.x = HALF_PI; rim.position.y = 1.02;
       const coals = mesh(new THREE.CylinderGeometry(0.26, 0.26, 0.04, 10), new THREE.MeshBasicMaterial({ color: 0x24201c }), false); coals.position.y = 1.02;
-      const fl = flame(m, tex, 0.42); fl.position.y = 1.03;
+      const fl = flame(tex, 0.42); fl.position.y = 1.03;
       stand.add(bowl, rim, coals, fl);
-      const ground = zoneDisc(zn, tex, floor + 0.03);
-      g.add(stand, ground);
-      this.braziers.push({ id, flame: fl, coals, ground });
+      const ground = zoneDisc(bz, tex, floor + 0.03);
+      const embers = new Embers(at.x, at.y + 0.05, at.z, 16, 1.1, 0xff9040, 0.08);
+      g.add(stand, ground, embers.points);
+      this.braziers.push({ id, flame: fl, coals, ground, embers });
     }
     g.add(this.brazierLight);
 
@@ -329,7 +460,7 @@ export class Props {
     this.flask = put(oilFlask(m), 22.3, R + 0.86, 23);
     g.add(this.flask);
 
-    // 祭台匣（PRP-05）：白天上锁，入夜微启，取走后大开。
+    // 祭台匣（PRP-05）
     const chest = put(new THREE.Group(), 19, R + 1.1, 9.35);
     const body = boxMesh(m.wood, 0.72, 0.26, 0.42, 0.6); body.position.y = 0.13;
     for (const x of [-0.3, 0.3]) {
@@ -345,7 +476,7 @@ export class Props {
     chest.add(body, this.chestLid, this.chestLock, this.chestGlow, this.chestClapper);
     g.add(chest);
 
-    // 晨钟（PRP-05）：钟身与钟舌分动，下垂一根拉绳。
+    // 晨钟（PRP-05）
     put(this.bell, BELL_POS.x, 3.0, BELL_POS.z);
     const bellMat = new THREE.MeshStandardMaterial({ color: 0x6b5a3a, roughness: 0.45, metalness: 0.8, side: THREE.DoubleSide });
     this.bell.add(mesh(bellGeometry(), bellMat));
@@ -368,7 +499,7 @@ export class Props {
     const stub = put(cyl(m.paper, 0.03, 0.035, 0.12, 6), 2.75, 1.01, -3.75);
     g.add(board, sheet, can, spout, funnel, rag, this.benchGlow, stub);
 
-    // 炉火套件（PRP-07）：壁炉、烹煮锅、储备食材
+    // 炉火套件（PRP-07）：壁炉、烹煮锅、储备食材、热食碗
     for (const [dz, rot] of [[-0.25, 0.25], [0.25, -0.2]]) {
       const log = put(cyl(m.wood, 0.1, 0.1, 0.8, 7), -2.6, 0.33, -4.4 + dz);
       log.rotation.set(HALF_PI, 0, rot);
@@ -377,10 +508,12 @@ export class Props {
     this.embers = put(boxMesh(m.ember, 0.5, 0.05, 1.0, 1), -2.6, 0.25, -4.4);
     this.embers.castShadow = false;
     g.add(this.embers);
-    for (const [dz, s] of [[-0.3, 0.55], [0.05, 0.8], [0.35, 0.5]]) {
-      const f = put(flame(m, tex, s), -2.6, 0.3, -4.4 + dz);
+    for (const [dz, s] of [[-0.22, 0.6], [0.22, 0.72]]) {
+      const f = put(flame(tex, s), -2.6, 0.3, -4.4 + dz);
       this.flames.push(f); g.add(f);
     }
+    this.hearthEmbers = new Embers(-2.6, 0.45, -4.4, 22, 1.5, 0xffa050, 0.09);
+    g.add(this.hearthEmbers.points);
     put(this.hearthLight, -1.9, 1.1, -4.4);
     put(this.windowLight, -2.0, 1.9, 1.4);
     g.add(this.hearthLight, this.windowLight);
@@ -392,6 +525,23 @@ export class Props {
     const root = cyl(m.paper, 0.03, 0.05, 0.16, 6); root.position.set(0.05, 0.33, 0); root.rotation.z = 0.4;
     this.food.add(sack, root);
     g.add(pot, potRim, this.potGlow, this.food);
+    // 热食碗：备餐完成后出现在锅旁，冒热气
+    const ceramic = new THREE.MeshStandardMaterial({ color: 0x9c8a72, roughness: 0.6 });
+    this.mealBowl = put(new THREE.Group(), -2.05, 0.32, -2.55);
+    const bowl = mesh(new THREE.CylinderGeometry(0.11, 0.07, 0.09, 10), ceramic); bowl.position.y = 0.045;
+    const stew = mesh(new THREE.CylinderGeometry(0.095, 0.095, 0.02, 10), new THREE.MeshStandardMaterial({ color: 0x7a4a22, roughness: 0.5, emissive: 0x3a1a08, emissiveIntensity: 0.3 })); stew.position.y = 0.085;
+    this.mealBowl.add(bowl, stew);
+    this.mealSteam = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.smokeTex, color: 0xd8d2c8, transparent: true, opacity: 0.3, depthWrite: false }));
+    this.mealSteam.scale.set(0.3, 0.5, 1); this.mealSteam.position.y = 0.3;
+    this.mealBowl.add(this.mealSteam);
+    g.add(this.mealBowl);
+    // 炉烟：从屋顶烟囱口升起
+    for (let i = 0; i < 3; i++) {
+      const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.smokeTex, color: 0x8a8a8a, transparent: true, opacity: 0, depthWrite: false }));
+      s.position.set(-2.6, 5.6 + i * 0.6, -4.4);
+      s.scale.setScalar(0.8 + i * 0.5);
+      this.chimneySmoke.push(s); g.add(s);
+    }
   }
 
   ringBell(): void {
@@ -399,7 +549,13 @@ export class Props {
     this.bellT = 0;
   }
 
+  setQuality(q: Quality): void {
+    this.quality = q;
+  }
+
   update(w: World, dt: number, time: number): void {
+    for (const fm of FLAME_MATS) fm.uniforms.uTime.value = time;
+    const hi = this.quality === 'high';
     const k = Math.min(1, dt * 3.2);
     const o = this.open;
     o.gatehouse = lerp(o.gatehouse, w.doors.gatehouse ? 1 : 0, k);
@@ -412,7 +568,6 @@ export class Props {
     this.frontL.rotation.y = -o.chapelFront * HALF_PI * 0.95;
     this.frontR.rotation.y = Math.PI + o.chapelFront * HALF_PI * 0.95;
 
-    // 门闩：闩杆滑动与锁定状态同步
     this.boltAmt = lerp(this.boltAmt, w.bolted ? 1 : 0, Math.min(1, dt * 8));
     this.boltBar.visible = this.boltKnob.visible = w.repairs.bolt;
     this.boltBar.position.x = 1.05 + this.boltAmt * 0.4;
@@ -427,10 +582,11 @@ export class Props {
     this.lampStub.visible = !w.repairs.lamp;
     this.lampFlame.visible = lit;
     const fade = lit ? Math.min(1, w.lampBurn / 12) : 0;
-    this.lampLight.intensity = 60 * fade * flick;
+    this.lampLight.intensity = 45 * fade * flick;
     this.lampGround.visible = lit;
     (this.lampGround.material as THREE.MeshBasicMaterial).opacity = 0.38 * fade * flick;
     this.lampFlame.scale.setScalar(0.6 + 0.4 * fade * flick);
+    this.lampEmbers.update(dt, time, lit && hi);
 
     // 火盆
     let near: BrazierId | null = null, nearD = Infinity;
@@ -443,6 +599,7 @@ export class Props {
       (b.coals.material as THREE.MeshBasicMaterial).color.setHex(on ? 0xff9040 : 0x24201c);
       b.ground.visible = on;
       (b.ground.material as THREE.MeshBasicMaterial).opacity = 0.36 * f * flick;
+      b.embers.update(dt, time, on && hi);
       const at = BRAZIER_POS[b.id];
       const d = Math.hypot(at.x - w.player.x, at.z - w.player.z);
       if (on && d < nearD) { near = b.id; nearD = d; }
@@ -450,7 +607,7 @@ export class Props {
     if (near) {
       const at = BRAZIER_POS[near];
       put(this.brazierLight, at.x, at.y + 0.7, at.z);
-      this.brazierLight.intensity = 46 * Math.min(1, w.braziers[near] / 12) * flick;
+      this.brazierLight.intensity = 30 * Math.min(1, w.braziers[near] / 12) * flick;
     } else this.brazierLight.intensity = 0;
 
     // 拾取前后的清空变化
@@ -459,6 +616,11 @@ export class Props {
     this.crateItems.visible = !w.taken.crate;
     this.flask.visible = !w.taken.flask;
     this.food.visible = !w.taken.food;
+    this.mealBowl.visible = w.inv.meal > 0;
+    if (this.mealBowl.visible) {
+      this.mealSteam.position.y = 0.3 + (time % 1.5) * 0.12;
+      this.mealSteam.material.opacity = 0.3 * (1 - (time % 1.5) / 1.5);
+    }
 
     // 祭台匣
     const unlocked = w.phase === 'night' || w.phase === 'dawn';
@@ -469,7 +631,7 @@ export class Props {
     this.chestGlow.material.opacity = 0.35 + 0.15 * Math.sin(time * 2);
     this.chestClapper.visible = unlocked && !w.taken.chest;
 
-    // 晨钟：敲响后阻尼摆动，钟舌相位滞后
+    // 晨钟
     this.bellClapper.visible = w.quest.installed;
     if (this.bellSwing > 0.002) {
       this.bellT += dt;
@@ -481,17 +643,27 @@ export class Props {
       this.bellClapper.rotation.x = 0;
     }
 
-    // 炉火：火势随剩余燃时变化
+    // 炉火
     const fire = !w.hearth.lit ? 0 : w.phase === 'night' ? 0.45 + 0.55 * Math.min(1, w.hearth.burn / (HEARTH.nightBurn * 0.5)) : 1;
     const hf = 0.85 + 0.1 * Math.sin(time * 9.1) + 0.08 * Math.sin(time * 17.3 + 0.7);
     this.flames.forEach((f, i) => {
       f.visible = fire > 0;
       f.scale.set(fire, fire * (0.85 + 0.25 * Math.sin(time * (7 + i * 2.3) + i)), fire);
     });
-    this.hearthLight.intensity = 34 * fire * hf;
-    this.windowLight.intensity = 9 * fire * hf;
+    this.hearthLight.intensity = 22 * fire * hf;
+    this.windowLight.intensity = 6 * fire * hf;
     (this.embers.material as THREE.MeshBasicMaterial).color.setHex(fire > 0 ? 0xff9040 : 0x24201c);
     this.potGlow.visible = fire > 0;
     this.benchGlow.material.opacity = 0.6 + 0.2 * Math.sin(time * 6.3);
+    this.hearthEmbers.update(dt, time, fire > 0 && hi);
+    this.chimneySmoke.forEach((s, i) => {
+      const on = fire > 0;
+      s.material.opacity = on ? 0.16 * fire : 0;
+      if (on) {
+        s.position.y = 5.6 + ((time * 0.4 + i * 0.6) % 2.2);
+        s.position.x = -2.6 + Math.sin(time * 0.5 + i) * 0.2;
+        s.scale.setScalar(0.8 + ((time * 0.4 + i * 0.6) % 2.2) * 0.6);
+      }
+    });
   }
 }

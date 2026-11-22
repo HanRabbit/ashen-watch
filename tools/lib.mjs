@@ -4,7 +4,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 export const ROOT = path.resolve(import.meta.dirname, '..');
-export const OUT = path.join(ROOT, 'docs', 'verification');
+/** 截图与报告的输出目录。设 AW_OUT 可改到别处，不覆盖 docs/verification 里已有的记录。 */
+export const OUT = process.env.AW_OUT ? path.resolve(process.env.AW_OUT) : path.join(ROOT, 'docs', 'verification');
 export const BASE = process.env.AW_URL ?? 'http://localhost:4173/';
 
 /** 临时目录放在项目内，避免占用系统盘。 */
@@ -13,10 +14,13 @@ fs.mkdirSync(TMP, { recursive: true });
 fs.mkdirSync(OUT, { recursive: true });
 process.env.TEMP = process.env.TMP = process.env.TMPDIR = TMP;
 
-export async function launch({ channel = 'chrome', headless = false, width = 1920, height = 1080 } = {}) {
+export async function launch({ channel = 'chrome', headless = false, width = Number(process.env.AW_W) || 1920, height = Number(process.env.AW_H) || 1080 } = {}) {
+  // channel 写 chromium 时用 Playwright 自带的浏览器（没有装 Chrome / Edge 的环境，如 CI 容器），并用软件渲染提供 WebGL
+  const bundled = channel === 'chromium';
   const browser = await chromium.launch({
-    channel, headless,
-    args: [`--window-size=${width},${height + 90}`, '--autoplay-policy=no-user-gesture-required', '--disable-features=CalculateNativeWinOcclusion'],
+    channel: bundled ? undefined : channel, headless,
+    args: [`--window-size=${width},${height + 90}`, '--autoplay-policy=no-user-gesture-required', '--disable-features=CalculateNativeWinOcclusion',
+      ...(bundled ? ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'] : [])],
   });
   const context = await browser.newContext({ viewport: { width, height }, deviceScaleFactor: 1 });
   // 游戏捕获鼠标时会请求原始输入（unadjustedMovement）。自动化浏览器一旦拿到原始输入，

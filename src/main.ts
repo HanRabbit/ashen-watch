@@ -4,6 +4,7 @@ import { FIXED_DT, GHOST, pickPreset, RepairId } from './config';
 import { GameAudio } from './audio';
 import { Input } from './input';
 import { RenderPose, SceneView } from './render/view';
+import { texturesReady } from './render/materials';
 import { loadSettings, saveSettings } from './settings';
 import { ghostThreatens } from './sim/ghosts';
 import { INTERACTS, regionAt } from './sim/level';
@@ -74,6 +75,7 @@ function updatePose(w: World, alpha: number): void {
 
 function applySettings(): void {
   view.brightness = settings.brightness;
+  view.setQuality(settings.quality);
   audio.setVolume(settings.volume);
   saveSettings(settings);
 }
@@ -292,6 +294,8 @@ function probe(): Record<string, unknown> {
 }
 
 const w = window as unknown as Record<string, unknown>;
+// 外部贴图加载完成（含离线回退）后兑现，截图工具据此等待，避免拍到兜底贴图。
+w.__awTexReady = texturesReady;
 if (params.get('probe') === '1' || preset.debug) {
   const gl = view.renderer.getContext();
   const ext = gl.getExtension('WEBGL_debug_renderer_info');
