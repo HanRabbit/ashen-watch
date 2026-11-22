@@ -1,28 +1,275 @@
-// 远景（art pass 3）：山崖城堡、第二城门塔楼、松林三层、山雾分层、墙外枯木。
-// 城堡/城门用「手动雾混合 + 烘焙形体明暗」的无雾材质：白天被山雾吞没大半但保留体积，
-// 夜晚保留冷蓝剪影 + 月勾顶 + 少量暖窗灯。对比度 ≤ 近景 40%（圣经第 6 节 Distant 层）。
+// 远景（art pass 3 · 第三轮）：单一主导山崖城堡（画面右上）+ 柔和低矮的全景剪影远山 + 中景补充 + 分层松林。
+// 远层（>=120 m）用「圆柱全景剪影带」：顶边噪声缓起伏、材质自上而下雾渐变、无光照 —— 明度可直接按验收指标调，
+// 轮廓为绘画感剪影而非低模锥体，draw calls 个位数。近层 foothill 与城堡山崖保持 3D。
+// 明度关系（显示空间）：天空 > 远山脊(越远越贴近天空) > 城堡(略暗于天空,差<=0.12) > 坡面 > 松树(比坡面暗0.04-0.10)。
+// 近景（庭院墙/礼拜堂）保持深值不变；压的是远景与天空的差（提亮远景/加雾混合），不压天空。
+// 昼夜读 scene.userData.night；驱动挂在恒可见的地盘上。大块风化（5.2）：岩层/碎石/坍塌缺口/补砌/残塔顶。
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { Batch } from './geom';
-import { Materials, scaleUV } from './materials';
-import { variants } from './materialVariants';
+import { Materials } from './materials';
 
 export interface Scenery {
   group: THREE.Group;
 }
 
-const clamp01 = (t: number): number => Math.max(0, Math.min(1, t));
 
-/** 低模松树：树干 + 三层锥体冠，合并为单一几何供 InstancedMesh 使用。 */
+// —— 逐片段天空上限：与主天空同梯度+同云，保证远景任何像素不亮于背后局部天空 ——
+const SKYCAP_GLSL = /* glsl */`
+uniform vec3 uScHorizon, uScZenith, uScCloudDark, uScCloudLit, uScSunColor, uScSunDir;
+uniform float uScTime, uScCover, uScStars, uScGlow, uScRim;
+float scHash(vec2 p){ p=fract(p*vec2(123.34,456.21)); p+=dot(p,p+45.32); return fract(p.x*p.y); }
+float scNoise(vec2 p){ vec2 i=floor(p),f=fract(p); f=f*f*(3.0-2.0*f);
+  float a=scHash(i),b=scHash(i+vec2(1,0)),c=scHash(i+vec2(0,1)),d=scHash(i+vec2(1,1));
+  return mix(mix(a,b,f.x),mix(c,d,f.x),f.y); }
+float scFbm(vec2 p){ float v=0.0,a=0.55; mat2 r=mat2(0.8,-0.6,0.6,0.8);
+  for(int i=0;i<5;i++){ v+=a*scNoise(p); p=r*p*2.03+11.7; a*=0.5; } return v; }
+float scFbm3(vec2 p){ float v=0.0,a=0.6;
+  for(int i=0;i<3;i++){ v+=a*scNoise(p); p=p*2.11+7.3; a*=0.5; } return v; }
+float scShape(vec2 uv){ vec2 w=vec2(scFbm3(uv*1.4+1.7),scFbm3(uv*1.4+9.2));
+  float b=scFbm(uv*1.8+w*0.40); float d=scFbm3(uv*3.2+w*0.6); return b*0.65+d*0.35; }
+float scGrad(vec2 uv){ return scFbm(uv*1.8); }
+vec3 awSkyCap(vec3 d){
+  float h=d.y;
+  vec3 col=mix(uScHorizon,uScZenith,pow(clamp(h,0.0,1.0),0.55));
+  vec3 sd=normalize(uScSunDir);
+  float cosA=clamp(dot(d,sd),0.0,1.0);
+  col+=uScSunColor*uScGlow*0.22*pow(cosA,3.0);
+  float hh=max(h,0.02);
+  vec2 proj=d.xz/(hh+0.35);
+  vec2 uv1=proj*0.45+uScTime*vec2(0.003,0.0013)+2.3;
+  float veil=smoothstep(0.55,0.95,scFbm(uv1))*0.22*(1.0-uScStars*0.6)*smoothstep(-0.02,0.12,h);
+  col=mix(col,mix(uScHorizon,uScCloudLit,0.35),veil);
+  vec2 uv2=proj*0.8+uScTime*vec2(0.004,0.0018);
+  float dens=scShape(uv2);
+  float lo=0.62-uScCover*0.20; float hi=lo+0.10;
+  float cover=smoothstep(lo,hi,dens)*smoothstep(-0.02,0.08,h);
+  float e=0.10;
+  vec2 grad=vec2(scGrad(uv2+vec2(e,0.0))-scGrad(uv2-vec2(e,0.0)), scGrad(uv2+vec2(0.0,e))-scGrad(uv2-vec2(0.0,e)));
+  vec3 cn=normalize(vec3(-grad.x*2.2,0.55,-grad.y*2.2));
+  float lambert=clamp(dot(cn,sd),0.0,1.0);
+  float topLight=mix(0.30,1.0,smoothstep(0.05,0.85,h));
+  float thick=smoothstep(lo,hi+0.10,dens);
+  float lit=clamp(0.12+0.88*lambert,0.0,1.0)*topLight*mix(1.0,0.45,thick);
+  vec3 cloudCol=mix(uScCloudDark,uScCloudLit,lit);
+  cloudCol+=uScSunColor*uScRim*cover*(1.0-cover)*4.0*pow(cosA,6.0);
+  return mix(col,cloudCol,cover);
+}
+`;
+
+const clamp01 = (t: number): number => Math.max(0, Math.min(1, t));
+const HALF_PI = Math.PI / 2;
+
+function rng(seed: number): () => number {
+  let s = seed >>> 0;
+  return () => {
+    s = (s + 0x6d2b79f5) >>> 0;
+    let t = Math.imul(s ^ (s >>> 15), 1 | s);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/** 烘焙形体明暗 + 高度渐变到顶点色（3D 近层用）。 */
+function bakeForm(geo: THREE.BufferGeometry, y0: number, span: number, contrast = 0.35): void {
+  const pos = geo.getAttribute('position') as THREE.BufferAttribute;
+  const nor = geo.getAttribute('normal') as THREE.BufferAttribute;
+  const cols = new Float32Array(pos.count * 3);
+  for (let i = 0; i < pos.count; i++) {
+    const top = clamp01(nor.getY(i));
+    const west = clamp01(-nor.getX(i));
+    let raw = 0.5 + 0.4 * top + 0.25 * west;
+    raw *= 0.8 + 0.3 * clamp01((pos.getY(i) - y0) / span);
+    // contrast=1 恢复强形体明暗（城堡/山崖/松林要读出形体）；小值=远景雾感压平
+    const form = 1 - contrast * (1 - Math.max(0.15, Math.min(1.0, raw)));
+    cols[i * 3] = cols[i * 3 + 1] = cols[i * 3 + 2] = form;
+  }
+  geo.setAttribute('color', new THREE.BufferAttribute(cols, 3));
+}
+
+/** 屋面/锥顶：整体压暗 + 轻微受光变化（深色锥顶是认出城堡的关键）。 */
+function bakeFlat(geo: THREE.BufferGeometry, base: number): void {
+  const pos = geo.getAttribute('position') as THREE.BufferAttribute;
+  const nor = geo.getAttribute('normal') as THREE.BufferAttribute;
+  const cols = new Float32Array(pos.count * 3);
+  for (let i = 0; i < pos.count; i++) {
+    const v = base * (0.85 + 0.3 * clamp01(nor.getY(i)));
+    cols[i * 3] = cols[i * 3 + 1] = cols[i * 3 + 2] = v;
+  }
+  geo.setAttribute('color', new THREE.BufferAttribute(cols, 3));
+}
+
+/** 中景「苔斑 / 雨渍」顶点色暗示（局部，不满铺）。 */
+function weatherTint(geo: THREE.BufferGeometry, seed: number): void {
+  const pos = geo.getAttribute('position') as THREE.BufferAttribute;
+  const col = geo.getAttribute('color') as THREE.BufferAttribute;
+  const r = rng(seed);
+  const patches = Array.from({ length: 14 }, () => ({ x: (r() - 0.5) * 220, z: (r() - 0.5) * 220, y: r() * 30, rad: 4 + r() * 9, kind: r() < 0.5 ? 0 : 1 }));
+  for (let i = 0; i < pos.count; i++) {
+    const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
+    let moss = 0, streak = 0;
+    for (const p of patches) {
+      const d = Math.hypot(x - p.x, z - p.z);
+      if (p.kind === 0 && y < p.y + 6 && d < p.rad) moss = Math.max(moss, 1 - d / p.rad);
+      if (p.kind === 1 && Math.abs(x - p.x) < 1.2 && y < p.y && y > p.y - 14) streak = Math.max(streak, 1 - Math.abs(x - p.x) / 1.2);
+    }
+    let rr = col.getX(i), gg = col.getY(i), bb = col.getZ(i);
+    rr = rr * (1 - moss * 0.25) + 0.29 * moss * 0.25;
+    gg = gg * (1 - moss * 0.25) + 0.35 * moss * 0.25;
+    bb = bb * (1 - moss * 0.25) + 0.24 * moss * 0.25;
+    const s = streak * 0.2;
+    col.setXYZ(i, rr * (1 - s), gg * (1 - s), bb * (1 - s));
+  }
+  col.needsUpdate = true;
+}
+
+/** 从实际地形网格 rasterize 高度场（取每格最高三角形 y），供植被落点采样，杜绝浮空。 */
+function heightGrid(geo: THREE.BufferGeometry, extent: number, step: number): { g: Float32Array; n: number; extent: number; step: number } {
+  const n = Math.ceil((extent * 2) / step) + 1;
+  const g = new Float32Array(n * n).fill(-1e9);
+  const pos = geo.getAttribute('position') as THREE.BufferAttribute;
+  for (let i = 0; i < pos.count; i += 3) {
+    const ax = pos.getX(i), az = pos.getZ(i), ay = pos.getY(i);
+    const bx = pos.getX(i + 1), bz = pos.getZ(i + 1), by = pos.getY(i + 1);
+    const cx = pos.getX(i + 2), cz = pos.getZ(i + 2), cy = pos.getY(i + 2);
+    const i0 = Math.max(0, Math.floor((Math.min(ax, bx, cx) + extent) / step));
+    const i1 = Math.min(n - 1, Math.ceil((Math.max(ax, bx, cx) + extent) / step));
+    const j0 = Math.max(0, Math.floor((Math.min(az, bz, cz) + extent) / step));
+    const j1 = Math.min(n - 1, Math.ceil((Math.max(az, bz, cz) + extent) / step));
+    const d = (bz - cz) * (ax - cx) + (cx - bx) * (az - cz);
+    if (Math.abs(d) < 1e-9) continue;
+    for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) {
+      const px = -extent + i * step, pz = -extent + j * step;
+      const w1 = ((bz - cz) * (px - cx) + (cx - bx) * (pz - cz)) / d;
+      const w2 = ((cz - az) * (px - cx) + (ax - cx) * (pz - cz)) / d;
+      const w3 = 1 - w1 - w2;
+      if (w1 < -0.02 || w2 < -0.02 || w3 < -0.02) continue;
+      const y = w1 * ay + w2 * by + w3 * cy;
+      const k = j * n + i;
+      if (y > g[k]) g[k] = y;
+    }
+  }
+  return { g, n, extent, step };
+}
+type HGrid = ReturnType<typeof heightGrid>;
+function sampleH(hg: HGrid, x: number, z: number): number {
+  const fx = (x + hg.extent) / hg.step, fz = (z + hg.extent) / hg.step;
+  const i = Math.floor(fx), j = Math.floor(fz);
+  if (i < 0 || j < 0 || i >= hg.n - 1 || j >= hg.n - 1) return -1e9;
+  const a = hg.g[j * hg.n + i], b = hg.g[j * hg.n + i + 1], c = hg.g[(j + 1) * hg.n + i], d = hg.g[(j + 1) * hg.n + i + 1];
+  if (a < -1e8 || b < -1e8 || c < -1e8 || d < -1e8) return -1e9;
+  const tx = fx - i, tz = fz - j;
+  return (a * (1 - tx) + b * tx) * (1 - tz) + (c * (1 - tx) + d * tx) * tz;
+}
+
+/** 圆柱全景剪影带：顶边 = 多频噪声缓起伏（非等腰三角），顶点色自上而下雾渐变（顶贴近天空、底略深）。 */
+function panoramaBand(radius: number, crest: number, amp: number, seed: number, bottomFactor: number): THREE.BufferGeometry {
+  const SEG = 160;
+  const pos: number[] = [];
+  const col: number[] = [];
+  const idx: number[] = [];
+  const crestAt = (a: number): number =>
+    crest + amp * (0.5 * Math.sin(a * 3 + seed) + 0.3 * Math.sin(a * 7 + seed * 2.3) + 0.2 * Math.sin(a * 13 + seed * 4.1));
+  for (let i = 0; i <= SEG; i++) {
+    const a = (i / SEG) * Math.PI * 2;
+    const x = Math.sin(a) * radius, z = Math.cos(a) * radius;
+    const yTop = crestAt(a);
+    pos.push(x, yTop, z, x, -14, z);
+    col.push(1, 1, 1, bottomFactor, bottomFactor, bottomFactor);
+    if (i < SEG) {
+      const t0 = i * 2, b0 = i * 2 + 1, t1 = i * 2 + 2, b1 = i * 2 + 3;
+      idx.push(t0, b0, t1, b0, b1, t1);
+    }
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+  g.setIndex(idx);
+  return g;
+}
+
+/** 分层枝条松树：可见树干 + 6 层外伸枝盘（锯齿底环、层间留空）+ 尖顶。 */
 function pineGeometry(): THREE.BufferGeometry {
   const parts: THREE.BufferGeometry[] = [];
-  const trunk = new THREE.CylinderGeometry(0.12, 0.2, 1.6, 5);
+  const trunk = new THREE.CylinderGeometry(0.09, 0.17, 1.6, 5);
   trunk.translate(0, 0.8, 0);
   parts.push(trunk);
-  const tiers: [number, number, number][] = [[2.6, 3.8, 1.2], [2.1, 3.2, 2.9], [1.5, 2.8, 4.6]];
-  for (const [r, h, y] of tiers) {
-    const cone = new THREE.ConeGeometry(r, h, 7);
-    cone.translate(0, y + h / 2, 0);
+  for (let i = 0; i < 6; i++) {
+    const t = i / 6;
+    const r = 1.55 * (1 - t * 0.82);
+    const skirt = new THREE.ConeGeometry(r, 0.78, 7, 1, true);
+    const sp = skirt.getAttribute('position') as THREE.BufferAttribute;
+    for (let k = 8; k < 16; k++) {
+      const f = k % 2 ? 1.3 : 0.72;
+      sp.setX(k, sp.getX(k) * f);
+      sp.setZ(k, sp.getZ(k) * f);
+    }
+    skirt.translate(0, 1.35 + i * 0.92 + 0.39, 0);
+    parts.push(skirt);
+  }
+  const spike = new THREE.ConeGeometry(0.22, 1.0, 5);
+  spike.translate(0, 6.9, 0);
+  parts.push(spike);
+  const geo = mergeGeometries(parts.map((g) => g.toNonIndexed()), false)!;
+  for (const g of parts) g.dispose();
+  bakeForm(geo, 0, 7.4, 1.0); // 单株内部受光/背光明暗 => 森林内部对比
+  return geo;
+}
+
+function canopyGeometry(): THREE.BufferGeometry {
+  const parts: THREE.BufferGeometry[] = [];
+  for (let i = 0; i < 3; i++) {
+    const c = new THREE.ConeGeometry(1.5 * (1 - i * 0.3), 1.6, 6, 1, true);
+    c.translate(0, 1.4 + i * 1.3, 0);
+    parts.push(c);
+  }
+  const geo = mergeGeometries(parts.map((g) => g.toNonIndexed()), false)!;
+  for (const g of parts) g.dispose();
+  bakeForm(geo, 0, 5.2, 1.0);
+  return geo;
+}
+
+function deadTreeGeometry(): THREE.BufferGeometry {
+  const parts: THREE.BufferGeometry[] = [];
+  const grow = (x: number, y: number, z: number, len: number, ang: number, tilt: number, depth: number): void => {
+    const g = new THREE.CylinderGeometry(0.03 * depth + 0.02, 0.05 * depth + 0.04, len, 5);
+    const dx = Math.sin(ang) * Math.sin(tilt), dy = Math.cos(tilt), dz = Math.cos(ang) * Math.sin(tilt);
+    g.applyMatrix4(new THREE.Matrix4().compose(
+      new THREE.Vector3(x + dx * len / 2, y + dy * len / 2, z + dz * len / 2),
+      new THREE.Quaternion().setFromEuler(new THREE.Euler(tilt, ang, 0, 'YXZ')),
+      new THREE.Vector3(1, 1, 1),
+    ));
+    parts.push(g);
+    if (depth <= 0) return;
+    const ex = x + dx * len, ey = y + dy * len, ez = z + dz * len;
+    grow(ex, ey, ez, len * 0.68, ang + 0.5, tilt + 0.35, depth - 1);
+    grow(ex, ey, ez, len * 0.6, ang - 0.6, tilt + 0.5, depth - 1);
+  };
+  grow(0, 0, 0, 2.6, 0.3, 0.15, 3);
+  const geo = mergeGeometries(parts.map((g) => g.toNonIndexed()), false)!;
+  for (const g of parts) g.dispose();
+  return geo;
+}
+
+/** 低缓 foothill  mound 环（3D 近层）。 */
+function moundRing(radius: number, baseH: number, varH: number, peaks: number, seed: number): THREE.BufferGeometry {
+  const r = rng(seed);
+  const parts: THREE.BufferGeometry[] = [];
+  for (let i = 0; i < peaks; i++) {
+    const a = (i / peaks) * Math.PI * 2 + (r() - 0.5) * 0.2;
+    const h = baseH + (r() - 0.35) * varH;
+    const pr = radius * (0.3 + r() * 0.2);
+    const cone = new THREE.ConeGeometry(pr, h, 9, 3);
+    const pos = cone.getAttribute('position') as THREE.BufferAttribute;
+    for (let k = 0; k < pos.count; k++) {
+      const px = pos.getX(k), py = pos.getY(k), pz = pos.getZ(k);
+      const n = Math.sin(px * 0.16 + pz * 0.13 + seed) * Math.cos(pz * 0.11 - px * 0.07);
+      if (py < h / 2 - 0.1) {
+        pos.setX(k, px * (1 + n * 0.2));
+        pos.setZ(k, pz * (1 + n * 0.2));
+      }
+    }
+    cone.computeVertexNormals();
+    cone.translate(Math.sin(a) * radius, h / 2 - 6, Math.cos(a) * radius);
     parts.push(cone);
   }
   const geo = mergeGeometries(parts.map((g) => g.toNonIndexed()), false)!;
@@ -30,419 +277,556 @@ function pineGeometry(): THREE.BufferGeometry {
   return geo;
 }
 
-/** 圆塔 + 尖锥顶 + 垛口环（城堡用，局部坐标，底在 y0）。 */
-function tower(parts: THREE.BufferGeometry[], x: number, z: number, y0: number, r: number, h: number, spire: number, merlons = true): void {
-  const body = new THREE.CylinderGeometry(r, r * 1.08, h, 10);
-  body.translate(x, y0 + h / 2, z);
-  parts.push(body);
-  const cap = new THREE.CylinderGeometry(r * 1.15, r * 1.15, 0.6, 10);
-  cap.translate(x, y0 + h + 0.3, z);
-  parts.push(cap);
-  if (merlons) {
-    const n = 8;
-    for (let i = 0; i < n; i++) {
-      const a = (i / n) * Math.PI * 2;
-      const m = new THREE.BoxGeometry(r * 0.42, 0.9, r * 0.3);
+/** 圆塔：分段 + 收分（下粗上细）+ 檐口环 + 锥顶脊线 / 残缺顶 + 可选垛口。
+ *  石砌体进 stone[]，锥顶/脊线/残顶进 roof[]（屋面比墙面暗，靠内部对比认出城堡）。 */
+function tower(stone: THREE.BufferGeometry[], roof: THREE.BufferGeometry[], x: number, z: number, y0: number, r: number, h: number, spire: number, opts: { merlons?: boolean; broken?: boolean } = {}): void {
+  const seg = 10;
+  for (let b = 0; b < 3; b++) {
+    const bh = h / 3;
+    const rr = r * (1.12 - b * 0.09); // 收分
+    const body = new THREE.CylinderGeometry(rr * 0.97, rr * 1.04, bh, seg);
+    body.translate(x, y0 + bh * (b + 0.5), z);
+    stone.push(body);
+    if (b < 2) {
+      const ring = new THREE.CylinderGeometry(rr * 1.1, rr * 1.1, 0.35, seg);
+      ring.translate(x, y0 + bh * (b + 1), z);
+      stone.push(ring);
+    }
+  }
+  const cap = new THREE.CylinderGeometry(r * 1.16, r * 1.16, 0.5, seg);
+  cap.translate(x, y0 + h + 0.25, z);
+  stone.push(cap);
+  if (opts.merlons) {
+    for (let i = 0; i < 8; i++) {
+      const a = (i / 8) * Math.PI * 2;
+      const m = new THREE.BoxGeometry(r * 0.4, 0.9, r * 0.28);
       m.rotateY(-a);
-      m.translate(x + Math.cos(a) * r * 1.05, y0 + h + 0.9, z + Math.sin(a) * r * 1.05);
-      parts.push(m);
+      m.translate(x + Math.cos(a) * r * 1.05, y0 + h + 0.85, z + Math.sin(a) * r * 1.05);
+      stone.push(m);
     }
   }
-  const cone = new THREE.ConeGeometry(r * 1.2, spire, 10);
-  cone.translate(x, y0 + h + 0.6 + spire / 2, z);
-  parts.push(cone);
-}
-
-/** 方形主楼 + 垛口 + 四角角塔（concept/01 的主楼语汇）。 */
-function keep(parts: THREE.BufferGeometry[], x: number, z: number, y0: number, w: number, h: number): void {
-  const body = new THREE.BoxGeometry(w, h, w);
-  body.translate(x, y0 + h / 2, z);
-  parts.push(body);
-  // 垛口：四边
-  const n = Math.floor(w / 1.8);
-  for (let side = 0; side < 4; side++) {
-    for (let i = 0; i < n; i++) {
-      const t = (i + 0.5) / n - 0.5;
-      const m = new THREE.BoxGeometry(side % 2 ? 0.9 : 1.1, 1.2, side % 2 ? 1.1 : 0.9);
-      const ox = side === 0 ? t * w : side === 1 ? w / 2 : side === 2 ? t * w : -w / 2;
-      const oz = side === 0 ? -w / 2 : side === 1 ? t * w : side === 2 ? w / 2 : t * w;
-      m.translate(x + ox, y0 + h + 0.6, z + oz);
-      parts.push(m);
+  if (opts.broken) {
+    const stub = new THREE.ConeGeometry(r * 1.15, spire * 0.4, seg, 1, true);
+    stub.translate(x, y0 + h + 0.5 + spire * 0.2, z);
+    roof.push(stub);
+    const jag = new THREE.BoxGeometry(r * 0.7, spire * 0.25, r * 0.5);
+    jag.rotateY(0.6);
+    jag.translate(x + r * 0.3, y0 + h + 0.5 + spire * 0.35, z);
+    roof.push(jag);
+  } else {
+    const cone = new THREE.ConeGeometry(r * 1.2, spire, seg);
+    cone.translate(x, y0 + h + 0.5 + spire / 2, z);
+    roof.push(cone);
+    const cR = r * 1.2;
+    const slopeLen = Math.hypot(cR, spire);
+    const tilt = Math.atan2(cR, spire);
+    for (let i = 0; i < 4; i++) {
+      const a = (i / 4) * Math.PI * 2 + Math.PI / 4;
+      const rib = new THREE.BoxGeometry(0.08, slopeLen * 0.9, 0.08);
+      rib.rotateZ(tilt);
+      rib.rotateY(-a);
+      rib.translate(x + Math.cos(a) * cR * 0.5, y0 + h + 0.5 + spire * 0.5, z + Math.sin(a) * cR * 0.5);
+      roof.push(rib);
     }
   }
-  // 四角角塔（细高 + 尖锥）
-  for (const [dx, dz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) {
-    tower(parts, x + dx * w / 2, z + dz * w / 2, y0 + h * 0.55, w * 0.16, h * 0.62, w * 0.42, false);
-  }
 }
 
-/** 烘焙形体明暗到顶点色：顶面亮、西侧面次之、底面暗 + 高度渐变（底部沉入雾）。 */
-function bakeForm(geo: THREE.BufferGeometry, y0: number, span: number): void {
-  const pos = geo.getAttribute('position') as THREE.BufferAttribute;
-  const nor = geo.getAttribute('normal') as THREE.BufferAttribute;
-  const cols = new Float32Array(pos.count * 3);
-  for (let i = 0; i < pos.count; i++) {
-    const ny = nor.getY(i), nx = nor.getX(i);
-    const top = clamp01(ny);
-    const west = clamp01(-nx);
-    let form = 0.42 + 0.38 * top + 0.2 * west;
-    const h = clamp01((pos.getY(i) - y0) / span);
-    form *= 0.7 + 0.4 * h;
-    form = Math.max(0.25, Math.min(1.1, form));
-    cols[i * 3] = cols[i * 3 + 1] = cols[i * 3 + 2] = form;
-  }
-  geo.setAttribute('color', new THREE.BufferAttribute(cols, 3));
-}
+interface SkyUniforms { uHorizon: { value: THREE.Color }; uZenith: { value: THREE.Color }; uCloudDark: { value: THREE.Color }; uCover: { value: number } }
 
-const HALF_PI = Math.PI / 2;
-
-export function buildScenery(m: Materials): Scenery {
+export function buildScenery(_m: Materials): Scenery {
   const group = new THREE.Group();
   group.name = 'scenery';
-  const v = variants(m);
+  const R = rng(1234);
+  const dummy = new THREE.Object3D();
+  const tmpC = new THREE.Color();
 
-  // ——— 大地盘：延伸至雾外的暗色地面 ———
-  const groundMat = new THREE.MeshStandardMaterial({ color: 0x4a4a44, roughness: 1 });
-  const ground = new THREE.Mesh(new THREE.CircleGeometry(320, 40), groundMat);
+  // 与主天空同步的 uniform 值（每帧拷贝），供逐片段天空上限
+  const skyU = {
+    uScHorizon: { value: new THREE.Color() }, uScZenith: { value: new THREE.Color() },
+    uScCloudDark: { value: new THREE.Color() }, uScCloudLit: { value: new THREE.Color() },
+    uScSunColor: { value: new THREE.Color() }, uScSunDir: { value: new THREE.Vector3(0, 1, 0) },
+    uScTime: { value: 0 }, uScCover: { value: 0.8 }, uScStars: { value: 0 }, uScGlow: { value: 0 }, uScRim: { value: 0 },
+  };
+  const attachSkyCap = (mat: THREE.MeshBasicMaterial): void => {
+    mat.onBeforeCompile = (shader) => {
+      Object.assign(shader.uniforms, skyU);
+      shader.vertexShader = 'varying vec3 vAwSkyPos;\n' + shader.vertexShader.replace(
+        '#include <project_vertex>',
+        '#include <project_vertex>\n vAwSkyPos = (modelMatrix * vec4(transformed, 1.0)).xyz;',
+      );
+      shader.fragmentShader = SKYCAP_GLSL + 'varying vec3 vAwSkyPos;\n' + shader.fragmentShader.replace(
+        '#include <tonemapping_fragment>',
+        'gl_FragColor.rgb = min(gl_FragColor.rgb, awSkyCap(normalize(vAwSkyPos - cameraPosition)) * 0.93);\n#include <tonemapping_fragment>',
+      );
+    };
+    mat.customProgramCacheKey = () => 'aw-skycap';
+  };
+  const atmo: { mat: THREE.MeshBasicMaterial; day: THREE.Color; night: THREE.Color; df: number; nf: number; crestY: number; dist: number; K: number }[] = [];
+  const basic = (day: number, night: number, df: number, nf: number, vc = true): THREE.MeshBasicMaterial => {
+    const mat = new THREE.MeshBasicMaterial({ color: day, fog: false, vertexColors: vc });
+    attachSkyCap(mat);
+    atmo.push({ mat, day: new THREE.Color(day), night: new THREE.Color(night), df, nf, crestY: 30, dist: 100, K: 0.9 });
+    return mat;
+  };
+
+  /** 登记该层的屏幕高度上限钳制参数：crestY=层顶世界高、dist=水平距、K=天空上限系数。 */
+  const setClamp = (mat: THREE.MeshBasicMaterial, crestY: number, dist: number, K: number): void => {
+    const e = atmo.find((a) => a.mat === mat);
+    if (e) { e.crestY = crestY; e.dist = dist; e.K = K; }
+  };
+
+  // ——— 大地盘（恒可见，承载大气驱动）———
+  const ground = new THREE.Mesh(new THREE.CircleGeometry(600, 48), new THREE.MeshStandardMaterial({ color: 0x4a4a44, roughness: 1 }));
   ground.rotation.x = -Math.PI / 2;
   ground.position.y = -0.62;
   ground.receiveShadow = false;
   group.add(ground);
 
-  // ——— 山丘（岩石质感，正常场景雾）———
-  const hillBatch = new Batch();
-  const hillMat = v.rock; // 山体岩面（材质族 rock，env 合并后换 rock_face 贴图）
-  const hills: [number, number, number, number][] = [
-    // [x, z, 半径, 高]（城堡山改用下方独立岩崖）
-    [-11, 78, 16, 7],   // 城门塔楼丘
-    [-45, 100, 42, 16],
-    [20, 125, 50, 22],
-    [-80, 55, 34, 12],
-    [100, 115, 46, 18],
-    [45, 105, 30, 12],
+  // ——— 中景 foothill（3D 低缓 mound，承载中景元素）———
+  const footGeo = moundRing(70, 14, 6, 34, 71);
+  bakeForm(footGeo, -6, 24, 0.5);
+  weatherTint(footGeo, 72);
+  const footMat = basic(0x9aa4ae, 0x161e2b, 0.68, 0.4);
+  setClamp(footMat, 22, 70, 0.9);
+  const foot = new THREE.Mesh(footGeo, footMat);
+  const hg = heightGrid(footGeo, 110, 2);
+  foot.castShadow = false; foot.receiveShadow = false;
+  group.add(foot);
+
+  // ——— 四层全景剪影带（120/220/350/500 m）：低矮柔和、越远越贴近天空 ———
+  // [radius, crest, amp, seed, day, df, bottomFactor]
+  const bandSpec: [number, number, number, number, number, number, number][] = [
+    [120, 40, 10, 11, 0xa8b2bc, 0.72, 0.9],
+    [220, 52, 12, 22, 0xb4bec8, 0.82, 0.92],
+    [350, 64, 14, 33, 0xc0cad4, 0.88, 0.94],
+    [500, 78, 16, 44, 0xccd6e0, 0.93, 0.96],
   ];
-  for (const [x, z, r, h] of hills) {
-    const cone = new THREE.ConeGeometry(r, h, 12, 3);
-    const pos = cone.getAttribute('position') as THREE.BufferAttribute;
-    for (let i = 0; i < pos.count; i++) {
-      const px = pos.getX(i), py = pos.getY(i), pz = pos.getZ(i);
-      const n = Math.sin(px * 0.35 + pz * 0.27) * Math.cos(pz * 0.31 - px * 0.19);
-      if (py < h / 2 - 0.1) {
-        pos.setX(i, px * (1 + n * 0.14));
-        pos.setZ(i, pz * (1 + n * 0.14));
-        pos.setY(i, py + n * h * 0.06);
-      }
-    }
-    cone.computeVertexNormals();
-    hillBatch.geo(hillMat, scaleUV(cone, 0.06), x, h / 2 - 1.2, z);
+  for (const [rad, crest, amp, sd, day, df, bf] of bandSpec) {
+    const g = panoramaBand(rad, crest, amp, sd, bf);
+    const mat = basic(day, 0x1a2433, df, 0.4 + df * 0.3);
+    mat.side = THREE.DoubleSide;
+    setClamp(mat, crest + amp, rad, rad === 120 ? 0.7 : rad === 220 ? 0.92 : rad === 350 ? 0.96 : 0.98);
+    const mesh = new THREE.Mesh(g, mat);
+    mesh.castShadow = false; mesh.receiveShadow = false;
+    group.add(mesh);
   }
 
-  // ——— 城堡岩崖：多面体岩石山（flat shading + 顶点扰动），顶承城堡 ———
-  const cx = 70, czSim = 60, cy = 22; // 城堡基座（岩崖顶）
+  // ——— 城堡岩崖（单一视觉主导，画面右上）+ 坡脚碎石 ———
+  const cx = 120, czSim = -55, cy = 60;
   const cz = -czSim;
-  const cragMat = v.rock;
-  const crag = new THREE.CylinderGeometry(15, 32, 26, 10, 4);
+  const crag = new THREE.CylinderGeometry(16, 40, cy + 6, 12, 7);
   {
     const pos = crag.getAttribute('position') as THREE.BufferAttribute;
     for (let i = 0; i < pos.count; i++) {
       const px = pos.getX(i), py = pos.getY(i), pz = pos.getZ(i);
-      const n = Math.sin(px * 0.5 + pz * 0.33) * Math.cos(pz * 0.41 - px * 0.23);
-      const n2 = Math.sin(py * 0.7 + px * 0.2);
-      if (py < 12.9) {
-        pos.setX(i, px * (1 + n * 0.22));
-        pos.setZ(i, pz * (1 + n * 0.22));
-        pos.setY(i, py + n2 * 1.6);
+      const ang = Math.atan2(px, pz);
+      const strata = Math.floor((py + cy / 2) / 7) * 0.9;
+      const joint = Math.sin(ang * 6) > 0.72 ? -2.2 : 0;
+      const n = Math.sin(px * 0.3 + pz * 0.22) * Math.cos(pz * 0.26 - px * 0.15);
+      if (py < (cy + 6) / 2 - 0.1) {
+        const s = 1 + n * 0.16 + joint * 0.02 - strata * 0.012;
+        pos.setX(i, px * s); pos.setZ(i, pz * s); pos.setY(i, py + n * 1.4);
       }
     }
     crag.computeVertexNormals();
   }
-  const cragMeshGeo = scaleUV(crag, 0.05);
-  const scree = new THREE.ConeGeometry(36, 8, 10, 1);
-  hillBatch.geo(cragMat, cragMeshGeo, cx, cy - 13, czSim);
-  hillBatch.geo(cragMat, scaleUV(scree, 0.05), cx, -2, czSim);
-  hillBatch.build(group, false);
+  const cragParts = [crag.toNonIndexed()];
+  crag.dispose();
+  const screeCone = new THREE.ConeGeometry(46, 12, 12, 2);
+  screeCone.translate(0, -(cy + 6) / 2 + 6, 0);
+  cragParts.push(screeCone.toNonIndexed());
+  screeCone.dispose();
+  for (let i = 0; i < 26; i++) {
+    const a = R() * Math.PI * 2, rr = 34 + R() * 16;
+    const b = new THREE.DodecahedronGeometry(1.5 + R() * 2.5, 0);
+    b.translate(Math.sin(a) * rr, -(cy + 6) / 2 + 7 + R() * 3, Math.cos(a) * rr);
+    cragParts.push(b.toNonIndexed());
+    b.dispose();
+  }
+  const cragGeo = mergeGeometries(cragParts, false)!;
+  for (const g of cragParts) g.dispose();
+  bakeForm(cragGeo, -6, cy + 10, 1.8);
+  { // 块面明暗：节理阴影 + 岩层阴面 + 阳面/阴面
+    const pp = cragGeo.getAttribute('position') as THREE.BufferAttribute;
+    const cc = cragGeo.getAttribute('color') as THREE.BufferAttribute;
+    const nn = cragGeo.getAttribute('normal') as THREE.BufferAttribute;
+    for (let i = 0; i < pp.count; i++) {
+      const ang = Math.atan2(pp.getX(i), pp.getZ(i));
+      let f = 0.65 + 0.55 * clamp01(-nn.getX(i));
+      if (Math.sin(ang * 6) > 0.72) f *= 0.4;
+      if (nn.getY(i) < -0.15) f *= 0.6;
+      if (Math.floor((pp.getY(i) + 33) / 7) % 2 === 0) f *= 0.75; // 岩层阳/阴交替
+      cc.setXYZ(i, cc.getX(i) * f, cc.getY(i) * f, cc.getZ(i) * f);
+    }
+    cc.needsUpdate = true;
+  }
+  weatherTint(cragGeo, 73);
+  const cragMat = basic(0xb4bec8, 0x151d2a, 0.68, 0.42);
+  setClamp(cragMat, cy + 6, 140, 0.95);
+  const cragMesh = new THREE.Mesh(cragGeo, cragMat);
+  cragMesh.position.set(cx, (cy + 6) / 2 - 6, cz);
+  cragMesh.castShadow = false; cragMesh.receiveShadow = false;
+  group.add(cragMesh);
 
-  // ——— 山顶城堡：主楼 + 中央尖塔 + 外圈圆塔 + 城墙（剪影丰富，对标 concept/01/03）———
-  const castleParts: THREE.BufferGeometry[] = [];
-  keep(castleParts, cx, cz, cy, 12, 24);
-  // 中央细高尖塔（天际线焦点）
-  tower(castleParts, cx + 1.5, cz - 1.5, cy + 20, 2.6, 16, 10, false);
-  // 外圈圆塔 + 城墙
-  const ring: [number, number, number, number][] = [
-    [-14, -9, 2.8, 18], [-15, 7, 2.6, 15], [13, -11, 3.0, 20], [15, 6, 2.7, 16],
-    [-2, -15, 2.4, 14], [5, 14, 2.5, 15], [-9, 13, 2.2, 13],
+  // ——— 山顶城堡 ———
+  const cp: THREE.BufferGeometry[] = [];
+  const cr: THREE.BufferGeometry[] = [];
+  const kw = 13, kh = 26;
+  for (let b = 0; b < 3; b++) {
+    const bh = kh / 3;
+    const box = new THREE.BoxGeometry(kw - b * 0.8, bh, kw - b * 0.8);
+    box.translate(cx, cy + bh * (b + 0.5), cz);
+    cp.push(box);
+    const band = new THREE.BoxGeometry(kw - b * 0.8 + 0.5, 0.4, kw - b * 0.8 + 0.5);
+    band.translate(cx, cy + bh * (b + 1), cz);
+    cp.push(band);
+  }
+  // 主楼壁柱（竖向砌体分段）
+  for (const [dx, dz] of [[-1, 0], [1, 0], [0, -1], [0, 1]]) {
+    const pil = new THREE.BoxGeometry(dx ? 0.7 : kw * 0.9, kh, dz ? 0.7 : kw * 0.9);
+    pil.translate(cx + dx * (kw / 2), cy + kh / 2, cz + dz * (kw / 2));
+    cp.push(pil);
+  }
+  for (let side = 0; side < 4; side++) {
+    for (let i = 0; i < 6; i++) {
+      const t = (i + 0.5) / 6 - 0.5;
+      const m = new THREE.BoxGeometry(side % 2 ? 0.9 : 1.2, 1.3, side % 2 ? 1.2 : 0.9);
+      const ox = side === 0 ? t * kw : side === 1 ? kw / 2 : side === 2 ? t * kw : -kw / 2;
+      const oz = side === 0 ? -kw / 2 : side === 1 ? t * kw : side === 2 ? kw / 2 : t * kw;
+      m.translate(cx + ox, cy + kh + 0.65, cz + oz);
+      cp.push(m);
+    }
+  }
+  const roof = new THREE.ConeGeometry(kw * 0.78, 12, 4);
+  roof.rotateY(Math.PI / 4);
+  roof.translate(cx, cy + kh + 6, cz);
+  cr.push(roof);
+  const ridge = new THREE.BoxGeometry(0.5, 0.5, kw * 0.5);
+  ridge.translate(cx, cy + kh + 9, cz);
+  cr.push(ridge);
+  for (const [dx, dz] of [[-3, -2], [3, 2]]) {
+    const ch = new THREE.BoxGeometry(1.2, 5, 1.2);
+    ch.translate(cx + dx, cy + kh + 8, cz + dz);
+    cp.push(ch);
+  }
+  for (const [dx, dz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) {
+    tower(cp, cr, cx + dx * kw / 2, cz + dz * kw / 2, cy + kh * 0.5, 2.0, kh * 0.62, 7, { broken: dx === 1 && dz === -1 });
+  }
+  const ring: [number, number, number, number, boolean][] = [
+    [-16, -10, 3.0, 20, false], [-17, 8, 2.6, 16, true], [14, -12, 3.2, 23, false],
+    [16, 7, 2.7, 17, false], [-3, -17, 2.4, 15, true], [6, 15, 2.5, 18, false], [-10, 14, 2.2, 14, false],
   ];
-  for (const [dx, dz, r, h] of ring) tower(castleParts, cx + dx, cz + dz, cy - 2, r, h, r * 2.4);
+  for (const [dx, dz, r, h, broken] of ring) tower(cp, cr, cx + dx, cz + dz, cy - 3, r, h, r * 2.3, { merlons: true, broken });
   const wallPairs: [number, number, number, number][] = [
-    [-13, -8, -2, -14], [-2, -14, 12, -10], [12, -10, 14, 5], [14, 5, 4, 13],
-    [4, 13, -8, 12], [-8, 12, -14, 6], [-14, 6, -13, -8],
+    [-15, -9, -3, -16], [-3, -16, 13, -11], [13, -11, 15, 6], [15, 6, 5, 14],
+    [5, 14, -9, 13], [-9, 13, -16, 7], [-16, 7, -15, -9],
   ];
+  let wi = 0;
   for (const [ax, az, bx, bz] of wallPairs) {
     const len = Math.hypot(bx - ax, bz - az);
     const ang = Math.atan2(bx - ax, bz - az);
-    const wall = new THREE.BoxGeometry(1.6, 7, len);
+    const collapsed = wi === 2;
+    const wh = collapsed ? 3.5 : 7;
+    const wall = new THREE.BoxGeometry(1.7, wh, len);
     wall.rotateY(ang);
-    wall.translate(cx + (ax + bx) / 2, cy + 1.5, cz + (az + bz) / 2);
-    castleParts.push(wall);
+    wall.translate(cx + (ax + bx) / 2, cy - 1 + wh / 2, cz + (az + bz) / 2);
+    cp.push(wall);
+    const walk = new THREE.BoxGeometry(2.6, 0.4, len);
+    walk.rotateY(ang);
+    walk.translate(cx + (ax + bx) / 2, cy - 1 + wh - 0.6, cz + (az + bz) / 2);
+    cp.push(walk);
     const n = Math.floor(len / 2.2);
     for (let i = 0; i < n; i++) {
+      if (collapsed && i % 2 === 0) continue;
       const t = (i + 0.5) / n;
-      const mx = ax + (bx - ax) * t, mz = az + (bz - az) * t;
       const merlon = new THREE.BoxGeometry(1.7, 1.1, 1.0);
       merlon.rotateY(ang);
-      merlon.translate(cx + mx, cy + 5.5, cz + mz);
-      castleParts.push(merlon);
+      merlon.translate(cx + ax + (bx - ax) * t, cy - 1 + wh + 0.55, cz + az + (bz - az) * t);
+      cp.push(merlon);
     }
+    if (collapsed) {
+      for (let i = 0; i < 8; i++) {
+        const t = R();
+        const b = new THREE.DodecahedronGeometry(0.8 + R() * 1.2, 0);
+        b.translate(cx + ax + (bx - ax) * t, cy - 2 + R() * 2, cz + az + (bz - az) * t);
+        cp.push(b);
+      }
+    }
+    wi++;
   }
-  const castleGeo = mergeGeometries(castleParts.map((g) => g.toNonIndexed()), false)!;
-  for (const g of castleParts) g.dispose();
-  bakeForm(castleGeo, cy - 4, 46);
-  const castleMat = new THREE.MeshBasicMaterial({ color: 0x6a7480, fog: false, vertexColors: true });
+  tower(cp, cr, cx - 4, cz - 16, cy - 3, 2.6, 18, 7, { merlons: true });
+  tower(cp, cr, cx + 4, cz - 16, cy - 3, 2.6, 18, 7, { merlons: true });
+  const gateWall = new THREE.BoxGeometry(10, 14, 3);
+  gateWall.translate(cx, cy + 4, cz - 16);
+  cp.push(gateWall);
+  const castleGeo = mergeGeometries(cp.map((g) => g.toNonIndexed()), false)!;
+  for (const g of cp) g.dispose();
+  bakeForm(castleGeo, cy - 6, 50, 1.4);
+  weatherTint(castleGeo, 74);
+  const castleMat = basic(0xccd6e0, 0x1a2434, 0.5, 0.45);
+  setClamp(castleMat, cy + 40, 140, 0.95);
   const castle = new THREE.Mesh(castleGeo, castleMat);
   castle.castShadow = false; castle.receiveShadow = false;
   group.add(castle);
+  for (const g of cr) bakeFlat(g, 0.30);
 
-  // ——— 第二城门塔楼（概念图左侧远处）：双圆塔 + 垛口 + 真实门洞 + 夜暖光 ———
-  const gateParts: THREE.BufferGeometry[] = [];
-  const gx = -11, gzSim = 78, gy = 5.5;
-  const gz = -gzSim;
-  tower(gateParts, gx - 3.4, gz, gy, 2.4, 16, 7);
-  tower(gateParts, gx + 3.4, gz, gy, 2.4, 16, 7);
-  const gateWall = new THREE.BoxGeometry(9.5, 12, 3);
-  gateWall.translate(gx, gy + 6, gz);
-  gateParts.push(gateWall);
-  // 门楼山墙顶（木构坡顶语汇简化为石脊）
-  const gateRoof = new THREE.ConeGeometry(5.6, 4.5, 4);
-  gateRoof.rotateY(Math.PI / 4);
-  gateRoof.translate(gx, gy + 14.2, gz);
-  gateParts.push(gateRoof);
-  // 城墙垛口
-  for (let i = 0; i < 5; i++) {
-    const mlon = new THREE.BoxGeometry(1.0, 1.0, 3.2);
-    mlon.translate(gx - 3.8 + i * 1.9, gy + 12.5, gz);
-    gateParts.push(mlon);
-  }
-  const gateGeo = mergeGeometries(gateParts.map((g) => g.toNonIndexed()), false)!;
-  for (const g of gateParts) g.dispose();
-  bakeForm(gateGeo, gy, 24);
-  const gateTower = new THREE.Mesh(gateGeo, castleMat);
-  gateTower.castShadow = false; gateTower.receiveShadow = false;
-  group.add(gateTower);
-  // 门洞：暗色凹陷（尖拱近似）+ 夜暖光 + 吊闸剪影
-  const archDarkMat = new THREE.MeshBasicMaterial({ color: 0x0a0d12, fog: false });
-  const archBatch = new Batch();
-  archBatch.geo(archDarkMat, new THREE.BoxGeometry(2.6, 4.6, 3.4), gx, gy + 2.3, gzSim);
-  archBatch.geo(archDarkMat, new THREE.BoxGeometry(2.4, 3.4, 0.12), gx, gy + 2.6, gzSim + 1.7);
-  archBatch.build(group, false);
-  const gateGlowMat = new THREE.MeshBasicMaterial({ color: 0xffb25e, fog: false, transparent: true, opacity: 0, side: THREE.DoubleSide });
-  const gateGlow = new THREE.Mesh(new THREE.PlaneGeometry(2.2, 3.6), gateGlowMat);
-  gateGlow.position.set(gx, gy + 2.0, gz - 1.75);
-  group.add(gateGlow);
+  // 门洞暗色 + 吊闸（合批）
+  const archDark = new THREE.MeshBasicMaterial({ color: 0x0a0d12, fog: false });
+  const archParts: THREE.BufferGeometry[] = [];
+  const a1 = new THREE.BoxGeometry(3, 5.5, 3.6); a1.translate(cx, cy + 0.5, cz - 16); archParts.push(a1);
+  const gx = 40, gzSim = 60, gy = 16, gz = -gzSim;
+  const a2 = new THREE.BoxGeometry(2.8, 5, 3.4); a2.translate(gx, gy + 2.5, gz); archParts.push(a2);
+  const a3 = new THREE.BoxGeometry(2.6, 3.6, 0.12); a3.translate(gx, gy + 3, gz + 1.75); archParts.push(a3);
+  const archGeo = mergeGeometries(archParts.map((g) => g.toNonIndexed()), false)!;
+  for (const g of archParts) g.dispose();
+  group.add(new THREE.Mesh(archGeo, archDark));
+  const glowMat = new THREE.MeshBasicMaterial({ color: 0xffb25e, fog: false, transparent: true, opacity: 0, side: THREE.DoubleSide });
+  const glowParts: THREE.BufferGeometry[] = [];
+  const g1 = new THREE.PlaneGeometry(2.6, 4.4); g1.translate(cx, cy + 0.2, cz - 17.9); glowParts.push(g1);
+  const g2 = new THREE.PlaneGeometry(2.4, 4); g2.translate(gx, gy + 2.2, gz + 1.8); glowParts.push(g2);
+  const glowGeo = mergeGeometries(glowParts.map((g) => g.toNonIndexed()), false)!;
+  for (const g of glowParts) g.dispose();
+  group.add(new THREE.Mesh(glowGeo, glowMat));
 
-  // ——— 城堡暖窗灯（夜晚少量琥珀点，不整齐排列）———
-  const winMat = new THREE.MeshBasicMaterial({ color: 0xffb25e, fog: false, transparent: true, opacity: 0, side: THREE.DoubleSide });
-  const winBatch = new Batch();
-  const winSpots: [number, number, number, number][] = [
-    [cx - 6.06, cy + 15, czSim - 2.5, -HALF_PI],
-    [cx - 6.06, cy + 21, czSim + 1.8, -HALF_PI],
-    [cx - 1.5, cy + 18, czSim - 6.06, 0],
-    [cx + 12.9, cy + 12, czSim - 11.2, -1.13],
-    [cx - 14.6, cy + 9, czSim - 8.4, -1.35],
-    // 城门塔楼暖窗（夜剪影上的可读暖点，不整齐）
-    [gx - 3.4, gy + 10, gzSim - 2.45, 0],
-    [gx + 3.4, gy + 12.5, gzSim - 2.45, 0],
+  // 城堡暖窗（不整齐、亮度不一；白天暗洞）
+  const winMat = new THREE.MeshBasicMaterial({ color: 0x0d1118, fog: false, side: THREE.DoubleSide });
+  const winSpots: [number, number, number, number, number][] = [
+    [cx - 6.6, cy + 12, cz - 3, -HALF_PI, 0.9],
+    [cx - 6.6, cy + 20, cz + 2, -HALF_PI, 0.55],
+    [cx - 2, cy + 16, cz - 6.6, 0, 0.75],
+    [cx + 3, cy + 22, cz - 6.6, 0, 0.4],
+    [cx + 14, cy + 10, cz - 12, -1.2, 0.8],
+    [cx - 17, cy + 8, cz + 8, -1.4, 0.5],
+    [cx - 4, cy + 12, cz - 17.6, 0, 0.65],
+    [gx - 3.6, gy + 12, gz + 2.6, 0, 0.7],
+    [gx + 3.6, gy + 14, gz + 2.6, 0, 0.5],
   ];
-  for (const [x, y, z, rot] of winSpots) {
-    winBatch.geo(winMat, new THREE.PlaneGeometry(0.7, 1.3), x, y, z, rot);
-  }
-  winBatch.build(group, false);
+  const winInst = new THREE.InstancedMesh(new THREE.PlaneGeometry(0.8, 1.5), winMat, winSpots.length);
+  winSpots.forEach(([x, y, z, rot, b], i) => {
+    dummy.position.set(x, y, z);
+    dummy.rotation.set(0, rot, 0);
+    dummy.scale.set(1, 1, 1);
+    dummy.updateMatrix();
+    winInst.setMatrixAt(i, dummy.matrix);
+    tmpC.setRGB(b, b * 0.92, b * 0.8);
+    winInst.setColorAt(i, tmpC);
+  });
+  winInst.instanceMatrix.needsUpdate = true;
+  if (winInst.instanceColor) winInst.instanceColor.needsUpdate = true;
+  group.add(winInst);
 
-  // ——— 外墙延伸与外侧塔楼（庭院东北角外，正常雾）———
-  const outerBatch = new Batch();
-  outerBatch.box(v.wallRubble, 25, 28.5, 56, 29.5, 0, 5.5);
-  for (let x = 26; x < 56; x += 1.6) outerBatch.box(v.wallTrim, x, 28.5, x + 0.8, 29.5, 5.5, 6.1);
-  for (const x of [36, 52]) {
-    outerBatch.geo(v.wallRubble, scaleUV(new THREE.CylinderGeometry(2.2, 2.5, 9, 10), 0.4), x, 4.5, 29);
-    outerBatch.geo(v.roofShingle, scaleUV(new THREE.ConeGeometry(2.6, 4, 10), 0.4), x, 11, 29);
-  }
-  outerBatch.box(v.wallRubble, -10.5, 29, -9.5, 62, 0, 5);
-  for (let z = 30; z < 62; z += 1.6) outerBatch.box(v.wallTrim, -10.5, z, -9.5, z + 0.8, 5, 5.6);
-  outerBatch.build(group, false);
+  // ——— 第二城门塔（画面左侧远景）———
+  const gp: THREE.BufferGeometry[] = [];
+  const gr: THREE.BufferGeometry[] = [];
+  tower(gp, gr, gx - 3.6, gz, gy, 2.5, 17, 7, { merlons: true });
+  tower(gp, gr, gx + 3.6, gz, gy, 2.5, 17, 7, { merlons: true, broken: true });
+  const gwall = new THREE.BoxGeometry(9.5, 12, 3);
+  gwall.translate(gx, gy + 6, gz);
+  gp.push(gwall);
+  const groof = new THREE.ConeGeometry(5.6, 4.5, 4);
+  groof.rotateY(Math.PI / 4);
+  groof.translate(gx, gy + 14.2, gz);
+  gr.push(groof);
+  const gateGeo = mergeGeometries(gp.map((g) => g.toNonIndexed()), false)!;
+  for (const g of gp) g.dispose();
+  bakeForm(gateGeo, gy, 26, 0.7);
+  for (const g of gr) bakeFlat(g, 0.30);
+  weatherTint(gateGeo, 75);
+  const gateMat = basic(0xb8c2cc, 0x182231, 0.6, 0.42);
+  setClamp(gateMat, gy + 24, 70, 0.92);
+  const gate = new THREE.Mesh(gateGeo, gateMat);
+  gate.castShadow = false; gate.receiveShadow = false;
+  group.add(gate);
 
-  // ——— 松林：三层 InstancedMesh，由近到远渐淡 ———
-  const pineGeo = pineGeometry();
-  let seed = 977;
-  const rnd = (): number => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; };
-  const layers: { count: number; r0: number; r1: number; color: number; h0: number; h1: number }[] = [
-    { count: 160, r0: 26, r1: 46, color: 0x2f3630, h0: 4.5, h1: 8 },
-    { count: 260, r0: 46, r1: 88, color: 0x3c443c, h0: 7, h1: 13 },
-    { count: 230, r0: 88, r1: 150, color: 0x4d564e, h0: 9, h1: 16 },
-  ];
-  const dummy = new THREE.Object3D();
-  const col = new THREE.Color();
-  for (const layer of layers) {
-    const mat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 1 });
-    const inst = new THREE.InstancedMesh(pineGeo, mat, layer.count);
-    let placed = 0, guard = 0;
-    while (placed < layer.count && guard++ < layer.count * 12) {
-      const a = rnd() * Math.PI * 2;
-      const r = layer.r0 + rnd() * (layer.r1 - layer.r0);
-      const x = Math.sin(a) * r * 1.15;
-      const z = 14 + Math.cos(a) * r;
-      if (x > -13 && x < 27 && z > -11 && z < 32) continue;
-      if (z < -20 && Math.abs(x) < 20) continue;
-      if (z < 6 && rnd() < 0.7) continue;
-      if (Math.hypot(x - 70, z - 60) < 32) continue; // 城堡岩崖用下方专属松环
-      if (Math.hypot(x + 11, z - 78) < 16) continue;
-      const h = layer.h0 + rnd() * (layer.h1 - layer.h0);
-      const s = h / 7.3;
-      dummy.position.set(x, -0.3, -z);
-      dummy.rotation.y = rnd() * Math.PI * 2;
-      dummy.scale.set(s * (0.85 + rnd() * 0.3), s, s * (0.85 + rnd() * 0.3));
-      dummy.updateMatrix();
-      inst.setMatrixAt(placed, dummy.matrix);
-      col.setHex(layer.color).multiplyScalar(0.8 + rnd() * 0.4);
-      inst.setColorAt(placed, col);
-      placed++;
+  // ——— 中景补充：下城郭 / 坍塌墙 / 瞭望塔 ———
+  const midParts: THREE.BufferGeometry[] = [];
+  const mr: THREE.BufferGeometry[] = [];
+  const townSpots: [number, number][] = [[62, -26], [70, -10], [58, 8], [76, -38], [52, 26], [44, 48], [30, 62], [-24, 58], [-36, 44]];
+  for (const [tx, tz] of townSpots) {
+    const n = 3 + Math.floor(R() * 3);
+    for (let i = 0; i < n; i++) {
+      const hx = tx + (R() - 0.5) * 12, hz = tz + (R() - 0.5) * 12;
+      const sy = sampleH(hg, hx, hz);
+      const hy = (sy < -1e8 ? 6 : sy - 0.5) + R() * 1.5;
+      const hw = 2.0 + R() * 1.6, hh = 3 + R() * 1.6;
+      const body = new THREE.BoxGeometry(hw, hh, hw * 1.4);
+      body.translate(hx, hy + hh / 2, -hz);
+      midParts.push(body);
+      const rf = new THREE.ConeGeometry(hw * 0.95, 2.6, 4);
+      rf.rotateY(Math.PI / 4);
+      rf.translate(hx, hy + hh + 1.3, -hz);
+      midParts.push(rf);
     }
-    inst.count = placed;
+  }
+  for (let i = 0; i < 7; i++) {
+    const h = i === 3 ? 1.5 : 4 + (i % 2);
+    const cwY = sampleH(hg, 46 + i * 3, -40);
+    const base = cwY < -1e8 ? 8 : cwY - 0.5;
+    const seg = new THREE.BoxGeometry(3, h, 1.6);
+    seg.translate(46 + i * 3, base + h / 2, -40);
+    midParts.push(seg);
+    if (i === 3) {
+      for (let k = 0; k < 5; k++) {
+        const b = new THREE.DodecahedronGeometry(0.7 + R(), 0);
+        b.translate(46 + i * 3 + (R() - 0.5) * 3, base + R(), -40 + (R() - 0.5) * 3);
+        midParts.push(b);
+      }
+    }
+  }
+  const wtY = sampleH(hg, -28, -62);
+  tower(midParts, mr, -28, -62, wtY < -1e8 ? 10 : wtY - 0.5, 2.2, 22, 6, { merlons: true });
+  const midGeo = mergeGeometries(midParts.map((g) => g.toNonIndexed()), false)!;
+  for (const g of midParts) g.dispose();
+  bakeForm(midGeo, 4, 30, 0.6);
+  for (const g of mr) bakeFlat(g, 0.30);
+  weatherTint(midGeo, 76);
+  const midMat = basic(0x9aa4ae, 0x161e2b, 0.68, 0.4);
+  setClamp(midMat, 34, 70, 0.9);
+  const mid = new THREE.Mesh(midGeo, midMat);
+  mid.castShadow = false; mid.receiveShadow = false;
+  group.add(mid);
+
+  // 屋面/锥顶统一合批：比墙面暗 0.10-0.18，靠内部对比认出城堡
+  const roofAll = mergeGeometries([...cr, ...gr, ...mr].map((g) => g.toNonIndexed()), false)!;
+  for (const g of [...cr, ...gr, ...mr]) g.dispose();
+  const roofMat = basic(0x8a94a0, 0x141c28, 0.5, 0.45);
+  setClamp(roofMat, cy + 40, 140, 0.95);
+  const roofMesh = new THREE.Mesh(roofAll, roofMat);
+  roofMesh.castShadow = false; roofMesh.receiveShadow = false;
+  group.add(roofMesh);
+
+  // 裸岩 outcrop
+  const outGeo = new THREE.DodecahedronGeometry(3, 0);
+  outGeo.scale(1, 0.7, 1);
+  const outMat = basic(0x9aa4ae, 0x151d2a, 0.68, 0.4, false);
+  setClamp(outMat, 20, 70, 0.9);
+  const outInst = new THREE.InstancedMesh(outGeo, outMat, 24);
+  for (let i = 0; i < 24; i++) {
+    const a = R() * Math.PI * 2, rr = 45 + R() * 55;
+    const ox = Math.sin(a) * rr, oz = Math.cos(a) * rr;
+    const sy = sampleH(hg, ox, oz);
+    dummy.position.set(ox, sy < -1e8 ? -60 : sy - 0.5, -oz);
+    dummy.rotation.set(R() * 0.4, R() * 3, R() * 0.4);
+    const s = 0.7 + R() * 1.4;
+    dummy.scale.set(s, s, s);
+    dummy.updateMatrix();
+    outInst.setMatrixAt(i, dummy.matrix);
+  }
+  outInst.instanceMatrix.needsUpdate = true;
+  outInst.castShadow = false; outInst.receiveShadow = false;
+  group.add(outInst);
+
+  // ——— 松林：foothill 单株（比坡面暗）+ 一脊带顶林冠线 + 枯阔叶 ———
+  const pineGeo = pineGeometry();
+  const mkPines = (spots: { x: number; y: number; z: number; h: number }[], day: number, df: number): void => {
+    const pmat = basic(day, 0x1a2430, df, 0.4, true);
+    setClamp(pmat, 30, 70, 0.7);
+    const inst = new THREE.InstancedMesh(pineGeo, pmat, spots.length);
+    spots.forEach((p, i) => {
+      const s = p.h / 7.4;
+      dummy.position.set(p.x, p.y, -p.z);
+      dummy.rotation.set((R() - 0.5) * 0.12, R() * Math.PI * 2, (R() - 0.5) * 0.12);
+      dummy.scale.set(s * (0.85 + R() * 0.3), s, s * (0.85 + R() * 0.3));
+      dummy.updateMatrix();
+      inst.setMatrixAt(i, dummy.matrix);
+      tmpC.setScalar(0.7 + R() * 0.3);
+      inst.setColorAt(i, tmpC);
+    });
     inst.instanceMatrix.needsUpdate = true;
     if (inst.instanceColor) inst.instanceColor.needsUpdate = true;
-    inst.castShadow = false;
-    inst.receiveShadow = false;
+    inst.castShadow = false; inst.receiveShadow = false;
     group.add(inst);
-  }
-
-  // ——— 城堡岩崖坡面 + 城门丘的松环（贴合坡面高度，环绕山脚）———
-  const slopeMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 1 });
-  const slopeSpots: { x: number; y: number; z: number; h: number }[] = [];
-  for (let i = 0; i < 90; i++) {
-    const a = rnd() * Math.PI * 2;
-    const r = 17 + rnd() * 14; // 岩崖坡面 r16..32
-    const x = cx + Math.sin(a) * r, z = czSim + Math.cos(a) * r;
-    const y = -2 + 24 * clamp01((32 - r) / 16) - 0.6;
-    slopeSpots.push({ x, y, z, h: 6 + rnd() * 6 });
-  }
-  for (let i = 0; i < 26; i++) {
-    const a = rnd() * Math.PI * 2;
-    if (Math.abs(a - Math.PI) < 0.7) continue; // 门洞朝南（庭院）一侧留空，保证夜暖光可读
-    const r = 9 + rnd() * 6;
-    const x = gx + Math.sin(a) * r, z = gzSim + Math.cos(a) * r;
-    const y = -1.2 + 7 * clamp01((16 - r) / 16) - 0.4;
-    slopeSpots.push({ x, y, z, h: 4 + rnd() * 4 });
-  }
-  const slopeInst = new THREE.InstancedMesh(pineGeo, slopeMat, slopeSpots.length);
-  slopeSpots.forEach((p, i) => {
-    const s = p.h / 7.3;
-    dummy.position.set(p.x, p.y, -p.z);
-    dummy.rotation.y = rnd() * Math.PI * 2;
-    dummy.scale.set(s * (0.85 + rnd() * 0.3), s, s * (0.85 + rnd() * 0.3));
-    dummy.updateMatrix();
-    slopeInst.setMatrixAt(i, dummy.matrix);
-    col.setHex(0x39423a).multiplyScalar(0.8 + rnd() * 0.4);
-    slopeInst.setColorAt(i, col);
-  });
-  slopeInst.instanceMatrix.needsUpdate = true;
-  if (slopeInst.instanceColor) slopeInst.instanceColor.needsUpdate = true;
-  slopeInst.castShadow = false; slopeInst.receiveShadow = false;
-  group.add(slopeInst);
-
-  // ——— 墙外枯木（替换旧裸枝"X"）：可见主干 + 递归粗枝 + 少量秋叶，读作树而非漂浮棍 ———
-  const barkMat = new THREE.MeshStandardMaterial({ color: 0x3a322c, roughness: 1 });
-  const leafMat = new THREE.MeshStandardMaterial({ color: 0x7a2a1c, roughness: 0.9, side: THREE.DoubleSide });
-  const treeBatch = new Batch();
-  const leafSpots: [number, number, number][] = [];
-  const branch = (x: number, y: number, z: number, len: number, ang: number, tilt: number, depth: number): void => {
-    const r0 = 0.05 * depth + 0.05, r1 = 0.04 * depth + 0.03;
-    const geo = new THREE.CylinderGeometry(r1, r0, len, 6);
-    const dx = Math.sin(ang) * Math.sin(tilt), dy = Math.cos(tilt), dz = Math.cos(ang) * Math.sin(tilt);
-    treeBatch.geo(barkMat, geo, x + dx * len / 2, y + dy * len / 2, z + dz * len / 2, ang, tilt, 0);
-    const ex = x + dx * len, ey = y + dy * len, ez = z + dz * len;
-    if (depth <= 0) { leafSpots.push([ex, ey, ez]); return; }
-    branch(ex, ey, ez, len * 0.7, ang + 0.5, tilt + 0.3, depth - 1);
-    branch(ex, ey, ez, len * 0.62, ang - 0.6, tilt + 0.45, depth - 1);
   };
-  // 主干（粗、微倾）+ 三级分枝
-  treeBatch.geo(barkMat, new THREE.CylinderGeometry(0.14, 0.3, 5.2, 7), -13.5, 2.6, 21, 0, 0.1, 0.06);
-  branch(-13.5, 5.0, 21, 3.2, 0.3, 0.35, 3);
-  branch(-13.5, 4.2, 21, 2.6, 2.6, 0.7, 2);
-  branch(-13.5, 4.6, 21, 2.4, -1.4, 0.6, 2);
-  for (const [lx, ly, lz] of leafSpots) {
-    if (rnd() < 0.5) continue; // 稀疏秋叶
-    treeBatch.geo(leafMat, new THREE.IcosahedronGeometry(0.35 + rnd() * 0.3, 0), lx, ly, lz, rnd() * 3);
+  const footPines: { x: number; y: number; z: number; h: number }[] = [];
+  for (let i = 0; i < 420; i++) {
+    const a = R() * Math.PI * 2, rr = 50 + R() * 38;
+    const x = Math.sin(a) * rr, z = Math.cos(a) * rr;
+    if (x > -13 && x < 32 && z > -11 && z < 32) continue;
+    const sy = sampleH(hg, x, z);
+    if (sy < -1e8) continue;
+    footPines.push({ x, y: sy - 0.4, z, h: 5 + R() * 4 });
   }
-  treeBatch.build(group, false);
+  mkPines(footPines, 0x5f6961, 0.25); // 比 foothill 坡面(0x9aa4ae/0.62)暗
 
-  // ——— 山雾分层：几片巨大的软雾团，横在庭院与城堡之间 ———
-  const mistTex = makeMistTexture();
-  const mistMat = new THREE.SpriteMaterial({ map: mistTex, color: 0x9aa2a8, transparent: true, opacity: 0.3, depthWrite: false, fog: false });
-  const mists: THREE.Sprite[] = [];
-  const mistSpots: [number, number, number, number, number][] = [
-    // [x, y, z, 宽, 高]
-    [48, 12, 44, 55, 13], [70, 30, 62, 72, 18], [-4, 7, 46, 45, 10],
-    [15, 16, 90, 80, 20], [60, 8, 36, 40, 9], [-14, 11, 70, 50, 12],
-    [70, 6, 52, 60, 10],  // 城堡岩崖脚低雾（吞没山脚）
-    [-11, 4, 70, 40, 8],  // 城门丘脚低雾
-  ];
-  for (const [x, y, z, w, h] of mistSpots) {
-    const sp = new THREE.Sprite(mistMat);
-    sp.position.set(x, y, -z);
-    sp.scale.set(w, h, 1);
-    mists.push(sp);
-    group.add(sp);
+  // 一脊带顶林冠线（沿 crest 噪声放置，比带面暗）
+  const crest1 = (a: number): number => 40 + 10 * (0.5 * Math.sin(a * 3 + 11) + 0.3 * Math.sin(a * 7 + 25.3) + 0.2 * Math.sin(a * 13 + 45.1));
+  const canMat = basic(0x5f6961, 0x1c2632, 0.25, 0.45, true);
+  setClamp(canMat, 50, 120, 0.7);
+  const canInst = new THREE.InstancedMesh(canopyGeometry(), canMat, 220);
+  for (let i = 0; i < 220; i++) {
+    const a = (i / 220) * Math.PI * 2 + R() * 0.1;
+    const rr = 114 + R() * 4;
+    const s = (7 + R() * 5) / 5.2;
+    dummy.position.set(Math.sin(a) * rr, crest1(a) - 6 + R() * 1.5, -Math.cos(a) * rr);
+    dummy.rotation.set(0, R() * 3, 0);
+    dummy.scale.set(s, s, s);
+    dummy.updateMatrix();
+    canInst.setMatrixAt(i, dummy.matrix);
+    tmpC.setScalar(0.7 + R() * 0.3);
+    canInst.setColorAt(i, tmpC);
   }
+  canInst.instanceMatrix.needsUpdate = true;
+  if (canInst.instanceColor) canInst.instanceColor.needsUpdate = true;
+  canInst.castShadow = false; canInst.receiveShadow = false;
+  group.add(canInst);
 
-  // ——— 每帧大气驱动：读 scene.userData.night 判断昼夜，手动混合城堡剪影色与雾色 ———
-  const dayBase = new THREE.Color(0x6a7480);
-  const nightBase = new THREE.Color(0x1a2434);
+  const deadMat = basic(0x8a8478, 0x1a222c, 0.5, 0.4, false);
+  setClamp(deadMat, 26, 80, 0.88);
+  const deadInst = new THREE.InstancedMesh(deadTreeGeometry(), deadMat, 36);
+  for (let i = 0; i < 36; i++) {
+    const a = R() * Math.PI * 2, rr = 46 + R() * 70;
+    const s = 1.2 + R() * 1.4;
+    const dx = Math.sin(a) * rr, dz = Math.cos(a) * rr;
+    const sy = sampleH(hg, dx, dz);
+    dummy.position.set(dx, sy < -1e8 ? -60 : sy - 0.3, -dz);
+    dummy.rotation.set(0, R() * 3, (R() - 0.5) * 0.15);
+    dummy.scale.set(s, s, s);
+    dummy.updateMatrix();
+    deadInst.setMatrixAt(i, dummy.matrix);
+  }
+  deadInst.instanceMatrix.needsUpdate = true;
+  deadInst.castShadow = false; deadInst.receiveShadow = false;
+  group.add(deadInst);
+
+  // ——— 每帧大气驱动（挂恒可见地盘）；雾感锚定天空地平线值（uHorizon），不随 fog.color 漂移 ———
   const tmpA = new THREE.Color(), tmpB = new THREE.Color();
-  castle.onBeforeRender = (_r, scene) => {
+  let skyUniforms: SkyUniforms | null = null;
+  ground.onBeforeRender = (_r, scene, _camera) => {
     const fog = scene.fog as THREE.Fog | null;
     if (!fog) return;
+    if (!skyUniforms) {
+      scene.traverse((o) => {
+        const mm = (o as THREE.Mesh).material as THREE.ShaderMaterial | undefined;
+        if (!skyUniforms && mm && mm.uniforms && mm.uniforms.uHorizon && mm.uniforms.uZenith && mm.uniforms.uCloudDark) skyUniforms = mm.uniforms as unknown as SkyUniforms;
+      });
+    }
     const night: number = scene.userData.night ?? 0;
-    const dist = 97;
-    const f = clamp01((dist - fog.near) / Math.max(1, fog.far - fog.near));
-    tmpA.copy(dayBase).lerp(nightBase, night);
-    tmpB.copy(fog.color).multiplyScalar(1 + night * 1.6);
-    // 白天吞没 ~55%（保留体积但对比 ≤ 近景 40%）；夜晚保留冷蓝剪影 ~45% 混雾
-    const amount = Math.min(0.68, f * 0.5) * (1 - night) + 0.45 * night;
-    castleMat.color.copy(tmpA).lerp(tmpB, Math.min(0.8, amount));
-    winMat.opacity = night * 0.9;
-    gateGlowMat.opacity = night * 0.55;
-    archDarkMat.color.setHex(0x0a0d12).lerp(tmpB, night * 0.25);
-    mistMat.opacity = 0.32 * (1 - night) + 0.06 * night;
-    mistMat.color.copy(fog.color).multiplyScalar(1.45 - night * 0.25);
+    const haze = skyUniforms ? skyUniforms.uHorizon.value : fog.color;
+    for (const a of atmo) {
+      tmpA.copy(a.day).lerp(a.night, night);
+      tmpB.copy(haze).multiplyScalar(1 + night * 0.6);
+      const amount = Math.min(0.95, a.df) * (1 - night) + a.nf * night;
+      a.mat.color.copy(tmpA).lerp(tmpB, Math.min(0.95, amount));
+      a.mat.color.multiplyScalar(a.K); // 层间明度阶梯（近脊略暗于天空，远带贴近天空）
+    }
+    if (skyUniforms) {
+      skyU.uScHorizon.value.copy(skyUniforms.uHorizon.value);
+      skyU.uScZenith.value.copy(skyUniforms.uZenith.value);
+      skyU.uScCloudDark.value.copy(skyUniforms.uCloudDark.value);
+      const su = skyUniforms as unknown as Record<string, { value: unknown }>;
+      if (su.uCloudLit) skyU.uScCloudLit.value.copy(su.uCloudLit.value as THREE.Color);
+      if (su.uSunColor) skyU.uScSunColor.value.copy(su.uSunColor.value as THREE.Color);
+      if (su.uSunDir) skyU.uScSunDir.value.copy(su.uSunDir.value as THREE.Vector3);
+      if (su.uTime) skyU.uScTime.value = su.uTime.value as number;
+      if (su.uCover) skyU.uScCover.value = su.uCover.value as number;
+      if (su.uStars) skyU.uScStars.value = su.uStars.value as number;
+      if (su.uGlow) skyU.uScGlow.value = su.uGlow.value as number;
+      if (su.uRim) skyU.uScRim.value = su.uRim.value as number;
+    }
+    winMat.color.setHex(night > 0.5 ? 0xffb25e : 0x0d1118);
+    glowMat.opacity = night * 0.6;
+    archDark.color.setHex(0x0a0d12).lerp(tmpB, night * 0.2);
   };
 
   return { group };
-}
-
-/** 横向软雾带：上下软衰减 + 絮状噪声。 */
-function makeMistTexture(): THREE.CanvasTexture {
-  const W = 256, H = 128;
-  const c = document.createElement('canvas');
-  c.width = W; c.height = H;
-  const g = c.getContext('2d')!;
-  const img = g.createImageData(W, H);
-  let s = 613;
-  const rnd = (): number => { s = (s * 1103515245 + 12345) & 0x7fffffff; return s / 0x7fffffff; };
-  const waves = Array.from({ length: 6 }, () => ({ fx: 1 + rnd() * 3, fy: 1 + rnd() * 2, ph: rnd() * 6.28, a: 0.5 + rnd() * 0.5 }));
-  for (let y = 0; y < H; y++) {
-    for (let x = 0; x < W; x++) {
-      const u = x / W, v = y / H;
-      let n = 0;
-      for (const w of waves) n += w.a * Math.cos(u * w.fx * 6 + w.ph) * Math.cos(v * w.fy * 4 + w.ph * 1.6);
-      n = n / waves.length * 0.5 + 0.5;
-      const vert = Math.sin(v * Math.PI);
-      const horiz = Math.min(1, Math.min(u, 1 - u) * 6);
-      const a = Math.pow(vert, 1.6) * horiz * (0.35 + 0.65 * n);
-      const i = (y * W + x) * 4;
-      img.data[i] = img.data[i + 1] = img.data[i + 2] = 255;
-      img.data[i + 3] = Math.min(255, a * 255);
-    }
-  }
-  g.putImageData(img, 0, 0);
-  const t = new THREE.CanvasTexture(c);
-  t.colorSpace = THREE.SRGBColorSpace;
-  return t;
 }
