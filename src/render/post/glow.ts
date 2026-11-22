@@ -20,13 +20,17 @@ export const LightGlowShader = {
     uTanHalfFov: { value: new THREE.Vector2(1, 1) },
     uInvView: { value: new THREE.Matrix4() }, uCamPos: { value: new THREE.Vector3() },
     uAmber: { value: new THREE.Color(0xffb25e) }, // 美术总纲灯火琥珀 2200–2700K
+    // 高光压缩（色调映射前）：超过阈值的亮度按色相区分滚降——
+    // 暖色（灯火/火）保留亮琥珀长条，冷色（月光镜面）压成弱而柔的蓝反射。
+    // 天空像素（深度≈far）豁免，月盘/光晕本身可以亮。
+    uHiThresh: { value: 3.0 }, uHiKneeCool: { value: 0.6 }, uHiKneeWarm: { value: 0.25 },
   },
   vertexShader: /* glsl */`
     varying vec2 vUv;
     void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
   fragmentShader: /* glsl */`
     uniform sampler2D tDiffuse, tDepth;
-    uniform float uHasDepth, uNear, uFar, uAspect, uStrength, uScatter;
+    uniform float uHasDepth, uNear, uFar, uAspect, uStrength, uScatter, uHiThresh, uHiKneeCool, uHiKneeWarm;
     uniform vec3 uFog, uCamPos, uAmber;
     uniform vec2 uTanHalfFov;
     uniform mat4 uInvView;
@@ -68,12 +72,34 @@ export const LightGlowShader = {
           toL /= max(dist, 1e-4);
           float wy = (uInvView * vec4(vp, 1.0)).y;
           float fogAmt = 1.0 - exp(-uFog.x * here * exp(-uFog.y * max(wy - uFog.z, 0.0)));
-          float phase = 0.3 + 0.7 * pow(clamp(dot(normalize(vp), toL), 0.0, 1.0), 6.0);
+          // Henyey-Greenstein 相位（g=0.55 前向散射）：视线朝灯方向时雾内散射最强
+          float g = 0.55;
+          float pc = clamp(dot(normalize(vp), toL), -1.0, 1.0);
+          float hg = (1.0 - g * g) / (12.566 * pow(1.0 + g * g - 2.0 * g * pc, 1.5));
+          float phase = clamp(hg * 2.2, 0.0, 1.4);
           float att2 = 1.0 / (1.0 + dist * dist * 0.08);
           vec3 fireCol = mix(uLightCols[i], uAmber, 0.6);
           c += fireCol * (uScatter * L.w * phase * fogAmt * att2 * occ);
         }
       }
+      // 高光滚降：保色相压缩超阈值亮度（能量守恒软钳制，随后才进 ACES）。
+      // 天空（月盘/云/晕）豁免；几何上的暖高光保留、冷镜面压柔。
+      bool isSky = uHasDepth > 0.5 && here >= uFar * 0.999;
+      if (!isSky) {
+        float luma = dot(c, vec3(0.2126, 0.7152, 0.0722));
+        float warmth = clamp((c.r - c.b) / max(luma, 1e-3), -1.0, 1.0);
+        float knee = mix(uHiKneeCool, uHiKneeWarm, smoothstep(-0.1, 0.25, warmth));
+        float over = max(luma - uHiThresh, 0.0);
+        c *= 1.0 / (1.0 + over * knee);
+      }
+      // NaN/Inf 防护：材质视差/法线在石缝陡梯度处可能产生 NaN，穿透一切 clamp 形成白线；
+      // 这里钳制为 0（暗缝），保证画面无花屏（圣经验收：无 NaN 花屏）。ES1 兼容写法。
+      c = min(max(c, vec3(0.0)), vec3(60000.0));
+      vec3 ok = vec3(
+        (c.r >= 0.0 || c.r <= 0.0) ? 1.0 : 0.0,
+        (c.g >= 0.0 || c.g <= 0.0) ? 1.0 : 0.0,
+        (c.b >= 0.0 || c.b <= 0.0) ? 1.0 : 0.0);
+      c *= ok;
       gl_FragColor = vec4(c, 1.0);
     }`,
 };

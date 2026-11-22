@@ -221,7 +221,8 @@ export class Screens {
     const noteHtml = note ? `<p class="warn">${esc(note)}</p>` : '';
     switch (id) {
       case 'title':
-        return `<div class="panel">
+        return `<div class="embers" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i></div>
+        <div class="panel title-panel">
           <h1>灰烬守夜</h1><p class="sub-title">ASHEN WATCH · 首夜</p>
           <p>接手一座被遗弃的城堡。白天抢修，入夜取回礼拜堂的钟舌，天亮时敲响晨钟。</p>
           ${noteHtml}
