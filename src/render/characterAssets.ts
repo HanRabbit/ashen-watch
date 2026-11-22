@@ -256,12 +256,14 @@ export function ghostCloth(mat: THREE.MeshStandardMaterial, localHeight: number)
       .replace('#include <begin_vertex>', /* glsl */`#include <begin_vertex>
         vLocal = position;
         float hh = clamp(transformed.y / uHeight, 0.0, 1.5);
-        transformed.z -= uLean * hh * hh * uHeight * 0.55;
-        float armW = smoothstep(0.10 * uHeight, 0.28 * uHeight, transformed.x) * smoothstep(0.5 * uHeight, 0.62 * uHeight, transformed.y);
+        transformed.z += uLean * hh * hh * uHeight * 0.55;
+        float armW = smoothstep(0.16 * uHeight, 0.30 * uHeight, transformed.z)
+          * smoothstep(0.66 * uHeight, 0.72 * uHeight, transformed.y)
+          * (1.0 - smoothstep(0.84 * uHeight, 0.88 * uHeight, transformed.y));
         float ca = cos(uArmRaise), sa = sin(uArmRaise);
-        vec2 rel = vec2(transformed.x - 0.1 * uHeight, transformed.y - 0.66 * uHeight);
-        vec2 rot = vec2(rel.x * ca - rel.y * sa, rel.x * sa + rel.y * ca);
-        transformed.xy = mix(transformed.xy, rot + vec2(0.1 * uHeight, 0.66 * uHeight), armW);
+        vec2 rel = vec2(transformed.z - 0.1 * uHeight, transformed.y - 0.78 * uHeight);
+        vec2 rot = vec2(rel.x * ca + rel.y * sa, -rel.x * sa + rel.y * ca);
+        transformed.zy = mix(transformed.zy, rot + vec2(0.1 * uHeight, 0.78 * uHeight), armW);
         float fl = (1.0 - hh) * (1.0 - hh);
         transformed.x += sin(uTime * 2.3 + transformed.y * 4.0 + transformed.z * 2.0) * uFlutter * fl * uHeight;
         transformed.z += cos(uTime * 1.7 + transformed.x * 3.0) * uFlutter * fl * uHeight * 0.7;`);
@@ -306,7 +308,7 @@ export function wraithSkin(mat: THREE.MeshStandardMaterial): WraithUniforms {
       .replace('#include <common>', `#include <common>\nuniform float uTime, uRim, uOpacity, uErode;\nuniform vec3 uRimColor;\nvarying vec3 vLocal;\nvarying vec3 vWpos;\n${NOISE_GLSL}`)
       .replace('#include <map_fragment>', /* glsl */`#include <map_fragment>
         float lum = dot(diffuseColor.rgb, vec3(0.3333));
-        diffuseColor.rgb = mix(vec3(lum), diffuseColor.rgb, 0.22) * vec3(0.42, 0.46, 0.52) + vec3(0.045, 0.055, 0.075);`)
+        diffuseColor.rgb = mix(vec3(lum), diffuseColor.rgb, 0.22) * vec3(0.42, 0.46, 0.52) + vec3(0.03, 0.038, 0.052);`)
       .replace('#include <emissivemap_fragment>', /* glsl */`#include <emissivemap_fragment>
         float ndv = saturate(dot(normalize(vViewPosition), normal));
         float rimF = pow(1.0 - ndv, 2.0);
@@ -330,7 +332,7 @@ function prepReaper(gltf: GLTF): ReaperAsset {
   const scene = gltf.scene;
   // 镰刀不是鬼的一部分：按节点名隐藏。
   scene.traverse((o) => { if (/scythe/i.test(o.name)) o.visible = false; });
-  const { wrap } = normalize(scene, 2.15, Math.PI / 2);
+  const { wrap } = normalize(scene, 2.15, Math.PI);
   let body: THREE.Mesh | undefined;
   scene.traverse((o) => {
     const m = o as THREE.Mesh;
@@ -367,7 +369,7 @@ function prepCreature(gltf: GLTF): CreatureAsset {
   const mat = new THREE.MeshStandardMaterial({
     map: src.map ?? null, normalMap: src.normalMap ?? null,
     color: 0xffffff, roughness: 0.9, metalness: 0,
-    emissive: 0x2a3440, emissiveIntensity: 0.7,
+    emissive: 0x2a3440, emissiveIntensity: 0.6,
   });
   m.material = mat;
   const skin = wraithSkin(mat);

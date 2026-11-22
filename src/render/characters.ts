@@ -394,9 +394,9 @@ function makeHoodAndCloak(m: Materials): { hood: THREE.Group; cloakPivot: THREE.
   for (let i = 0; i < cp.count; i++) {
     const x = cp.getX(i), y = cp.getY(i), z = cp.getZ(i);
     const ang = Math.atan2(x, z);
-    const fold = 1 + Math.sin(ang * 7) * 0.05 * (0.4 + (0.39 - y) / 0.78);
+    const fold = 1 + Math.sin(ang * 7) * 0.085 * (0.4 + (0.39 - y) / 0.78);
     cp.setX(i, x * fold); cp.setZ(i, z * fold);
-    if (y < -0.3) cp.setY(i, y + Math.sin(ang * 5) * 0.06);
+    if (y < -0.3) cp.setY(i, y + Math.sin(ang * 5) * 0.09);
   }
   cloakGeo.computeVertexNormals();
   const cloakPivot = new THREE.Group();
@@ -469,11 +469,6 @@ export class PlayerModel {
     const a = this.asset;
     const p = w.player;
     this.group.position.set(at.x, groundY(at.x, at.z), -at.z);
-    if (!(this as unknown as { dbg?: boolean }).dbg) {
-      (this as unknown as { dbg?: boolean }).dbg = true;
-      const wp = (o: THREE.Object3D): number[] => o.getWorldPosition(new THREE.Vector3()).toArray().map((n) => +n.toFixed(2));
-      console.log('[chrdbg]', JSON.stringify({ group: wp(this.group), head: wp(a.bones.head), headAnchor: wp(a.headAnchor), hand: wp(a.bones.handR), handAnchor: wp(a.handAnchor), lantern: wp(this.lantern.group), hips: wp(a.bones.hips), chest: wp(a.chestAnchor) }));
-    }
     // 转身惯性：偏航平滑
     const target = yawToRot(yaw);
     if (this.rotS === null) this.rotS = target;
@@ -732,7 +727,7 @@ export class GhostModels {
       case 'chase': crouch = -0.1; rear = -0.12; break;
       case 'windup': {
         const k = Math.min(1, g.t / GHOST.wraith.windup);
-        rear = lerp(0.1, 0.8, k); flare = 1 + k * 0.5; crouch = -0.16 * (1 - k); rimS = lerp(0.85, 1.3, k);
+        rear = lerp(0.1, 0.8, k); flare = 1 + k * 0.5; crouch = -0.16 * (1 - k); rimS = lerp(0.85, 1.05, k);
         break;
       }
       case 'recover': rear = lerp(-0.35, 0, Math.min(1, g.t / 0.6)); crouch = -0.12; break;
