@@ -162,6 +162,15 @@ function buildHood(cloakMat: THREE.Material, voidMat: THREE.Material): THREE.Gro
   return hood;
 }
 
+/** 角色风化噪声（圣经 §5.2）：局部遮罩用，不做满铺均匀脏。 */
+const CLOTH_NOISE = /* glsl */`
+float cwHash(vec3 p) { p = fract(p * 0.3183099 + vec3(0.1, 0.2, 0.3)); p *= 17.0; return fract(p.x * p.y * p.z * (p.x + p.y + p.z)); }
+float cwNoise(vec3 p) {
+  vec3 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
+  return mix(mix(mix(cwHash(i), cwHash(i + vec3(1, 0, 0)), f.x), mix(cwHash(i + vec3(0, 1, 0)), cwHash(i + vec3(1, 1, 0)), f.x), f.y),
+    mix(mix(cwHash(i + vec3(0, 0, 1)), cwHash(i + vec3(1, 0, 1)), f.x), mix(cwHash(i + vec3(0, 1, 1)), cwHash(i + vec3(1, 1, 1)), f.x), f.y), f.z);
+}`;
+
 function makeCloakOutfit(tex: CharTextures | null): {
   hood: THREE.Group; mantle: THREE.Group; cloakPivot: THREE.Group; belt: THREE.Group; cloakMat: THREE.MeshStandardMaterial;
 } {
@@ -177,26 +186,63 @@ function makeCloakOutfit(tex: CharTextures | null): {
   cloakMat.onBeforeCompile = (sh) => {
     Object.assign(sh.uniforms, cloakFlutter);
     sh.vertexShader = sh.vertexShader
-      .replace('#include <common>', '#include <common>\nuniform float uTime, uSway;')
+      .replace('#include <common>', '#include <common>\nuniform float uTime, uSway;\nvarying vec3 vPos;')
       .replace('#include <begin_vertex>', /* glsl */`#include <begin_vertex>
+        vPos = position;
         float hem = smoothstep(0.1, -0.45, position.y);
         transformed.x += sin(uTime * 3.1 + position.y * 6.0 + position.z * 3.0) * 0.022 * (0.3 + uSway) * hem;
         transformed.z += cos(uTime * 2.4 + position.x * 5.0) * 0.018 * (0.3 + uSway) * hem;`);
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', `#include <common>\nvarying vec3 vPos;\n${CLOTH_NOISE}`)
+      .replace('#include <roughnessmap_fragment>', /* glsl */`#include <roughnessmap_fragment>
+        float wn = cwNoise(vPos * 8.0);
+        float wn2 = cwNoise(vPos * 22.0 + 3.1);
+        // 下摆泥渍（水造成，沿重力向上渐淡）：泥 #2b2620，局部噪声遮罩不满铺
+        float mudH = smoothstep(-0.12, -0.46, vPos.y);
+        float mud = mudH * smoothstep(0.35, 0.72, wn);
+        diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.023, 0.019, 0.014), mud * 0.7);
+        // 肩背磨亮（人用出来）：只降 roughness，不改色相
+        float wear = smoothstep(0.12, 0.34, vPos.y) * smoothstep(0.4, 0.78, wn2);
+        roughnessFactor *= 1.0 - 0.4 * wear;
+        // 下摆破边磨损露暖褐
+        float fray = mudH * smoothstep(0.62, 0.9, wn2);
+        diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.16, 0.12, 0.08), fray * 0.4);`);
   };
-  cloakMat.customProgramCacheKey = () => 'cloakFlutter';
+  cloakMat.customProgramCacheKey = () => 'cloakWeather';
   const leatherMat = new THREE.MeshStandardMaterial({
     color: 0xffffff, roughness: 0.82, metalness: 0,
     map: leather?.map ?? null, normalMap: leather?.normalMap ?? null, roughnessMap: leather?.roughnessMap ?? null,
     normalScale: new THREE.Vector2(0.7, 0.7),
   });
-  // 皮革扫描偏黑：提亮并暖化到圣经皮革 #4a3a2c，保留 Pebble 粒面故事层。
+  // 皮革扫描偏黑：提亮并暖化到圣经皮革 #4a3a2c；常摸处磨亮（只降 roughness）。
   leatherMat.onBeforeCompile = (sh) => {
-    sh.fragmentShader = sh.fragmentShader.replace('#include <map_fragment>', /* glsl */`#include <map_fragment>
-      diffuseColor.rgb *= vec3(6.0, 4.8, 3.2);`);
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vPos;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvPos = position;');
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', `#include <common>\nvarying vec3 vPos;\n${CLOTH_NOISE}`)
+      .replace('#include <map_fragment>', /* glsl */`#include <map_fragment>
+        diffuseColor.rgb *= vec3(6.0, 4.8, 3.2);`)
+      .replace('#include <roughnessmap_fragment>', /* glsl */`#include <roughnessmap_fragment>
+        roughnessFactor *= 1.0 - 0.35 * smoothstep(0.5, 0.85, cwNoise(vPos * 16.0));`);
   };
-  leatherMat.customProgramCacheKey = () => 'leatherBoost';
+  leatherMat.customProgramCacheKey = () => 'leatherWeather';
   const voidMat = new THREE.MeshStandardMaterial({ color: 0x0d0b09, roughness: 1 });
+  // 铁扣：边缘/凹处锈斑 #5a3a24（时间与遗弃），凸起磨亮。
   const ironMat = new THREE.MeshStandardMaterial({ color: 0x1d1e20, roughness: 0.6, metalness: 1 });
+  ironMat.onBeforeCompile = (sh) => {
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vPos;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvPos = position;');
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', `#include <common>\nvarying vec3 vPos;\n${CLOTH_NOISE}`)
+      .replace('#include <map_fragment>', /* glsl */`#include <map_fragment>
+        float rn = cwNoise(vPos * 34.0);
+        diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.11, 0.045, 0.018), smoothstep(0.55, 0.82, rn) * 0.6);`)
+      .replace('#include <roughnessmap_fragment>', /* glsl */`#include <roughnessmap_fragment>
+        roughnessFactor = mix(roughnessFactor, 0.4, smoothstep(0.6, 0.9, cwNoise(vPos * 20.0 + 7.0)) * 0.5);`);
+  };
+  ironMat.customProgramCacheKey = () => 'ironWeather';
 
   const hood = buildHood(cloakMat, voidMat);
 
@@ -570,6 +616,8 @@ class RagWraith {
 
   constructor() {
     const ragMat = new THREE.MeshStandardMaterial({ color: 0x2a2b2f, roughness: 1, metalness: 0 });
+    // 实例差异（圣经 §5.2）：每只黑影轻微色值抖动。
+    ragMat.color.multiplyScalar(0.9 + Math.random() * 0.2);
     this.uni = wraithRags(ragMat);
     this.voidMat = new THREE.MeshBasicMaterial({ color: 0x0a0b0d, transparent: true });
     const r = rng(4242);

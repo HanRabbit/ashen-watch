@@ -423,6 +423,9 @@ function prepReaper(gltf: GLTF): ReaperAsset {
     map: src.map ?? null, normalMap: src.normalMap ?? null,
     color: 0x4a4843, roughness: 0.97, metalness: 0,
   });
+  // 实例差异（圣经 §5.2）：每只灰影轻微色值/粗糙度抖动，避免复制感。
+  mat.color.multiplyScalar(0.92 + Math.random() * 0.16);
+  mat.roughness = Math.min(1, 0.94 + Math.random() * 0.06);
   b.material = mat;
   const cloth = ghostCloth(mat, localHeight);
   return { root: wrap, body: b, localHeight, cloth };
