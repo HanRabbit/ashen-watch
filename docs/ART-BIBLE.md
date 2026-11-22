@@ -104,6 +104,54 @@
 - 底层必须是真实贴图（Poly Haven / ambientCG 扫描），程序化噪声只做故事层与去重复，**不得只用噪声**。
 - 贴图密度（texel density）：近景 hero ~1024 px/m，中景 ~512 px/m，远景 ≤128 px/m。同一画面同类物体密度一致。
 - 外部模型的材质必须重新归一到本表参数（覆盖原模型过亮/过饱和/过光滑的贴图），否则视为风格不符。
+- 室内石灰抹面（礼拜堂内墙、门房上半墙）：roughness 0.85–0.95、metalness 0；颜色取 4.1 干石色上端 `#6b7178` 附近，剥落处露出下层石块，**不得发白、不得偏暖**。
+
+### 5.1 材质族与区域分配（防单调，v2.1）
+
+问题：全场墙只有一张贴图、地面只有一张贴图，画面单调、重复明显。concept/01–03 的同一画面里至少有 3–4 种砌法：幕墙乱石、礼拜堂整齐方石、门窗套与压顶的细凿大石、墙基粗石、木构。
+
+**原则：变化来自砌法、石块尺度、表面粗细和风化程度，不来自色相。** 所有材质族都在第 4 节色板（冷灰石、旧橡木、锻铁）之内。禁止红砖、黄砂岩、白大理石、彩色瓷砖。Poly Haven 原贴图普遍偏暖偏黄，必须去饱和并压到 4.1 色值。
+
+**共享材质族**（代码契约：`src/render/materialVariants.ts` 的 `variants(m)`；名字固定，任何代理不得自建同类材质；实现与贴图由 env 代理负责）：
+
+| 名称 | 用途 | 推荐底图（Poly Haven CC0，择一） | 参数行（第 5 节） |
+|---|---|---|---|
+| `wallRubble` | 庭院幕墙、外墙大面 | castle_wall_varriation（现用）、defense_wall | 石墙 |
+| `wallAshlar` | 礼拜堂立面与侧墙、扶壁、门房外墙 | medieval_blocks_03、stone_wall_04 | 石墙（块更大、更整齐） |
+| `wallTrim` | 门窗套、券石、压顶、勒脚、线脚、隅石、台阶、垛口 | stone_block_wall、granite_wall、medieval_blocks_03（放大） | 石墙，roughness 0.75–0.85，倒角明显 |
+| `wallRough` | 地窖、墙基、补砌段、坍塌处、拱顶 | broken_wall、rustic_stone_wall_02、stone_wall | 石墙，AO 更深 |
+| `wallPlaster` | 礼拜堂内墙、门房上半墙 | worn_mossy_plasterwall、plastered_stone_wall | 石灰抹面 |
+| `floorFlag` | 庭院主路、外廊 | stone_pavers（现用） | 石板地面 |
+| `floorFlagWorn` | 庭院边缘与次要区、城墙步道 | grey_stone_path、monastery_stone_floor | 石板地面 |
+| `floorCobble` | 侧廊、门洞通道、井台一圈 | cobblestone_large_01、mossy_cobblestone（去绿） | 石板地面 |
+| `floorDirt` | 墙脚泥土落叶带、坍塌处、地窖 | brown_mud_leaves_01、muddy_tracks | roughness 0.85–1 |
+| `floorInterior` | 门房（concept/02 是石板+地毯）、礼拜堂正厅 | patterned_slate_tiles、worn_tile_floor、rock_tile_floor | 石板地面 |
+| `woodBeam` | 梁、柱、井架、门框、木构 | medieval_wood（现用）、rough_wood | 木 |
+| `woodPlank` | 门扇、箱板、脚手架、栅板、护栏 | weathered_planks、old_planks_02 | 木 |
+| `woodFloorOld` | 二层上廊、楼梯踏板 | old_wood_floor、wood_planks_dirt | 木 |
+| `roofShingle` | 井棚、外廊披檐、门楼（与主屋顶区分） | roof_slates_03、grey_roof_tiles | 屋顶瓦 |
+| `rock` | 山崖、地窖开凿岩壁 | rock_face、lichen_rock、rock_wall_08 | 石墙（干） |
+
+**区域主材表**（主材 / 辅材 / 点缀）：
+
+| 区域 | 主材 | 辅材 | 点缀与故事层 |
+|---|---|---|---|
+| 庭院幕墙 | wallRubble | wallTrim（压顶、勒脚、垛口） | wallRough 补砌段、坍塌缺口、潮湿、雨渍、苔、爬藤 |
+| 礼拜堂外立面 | wallAshlar | wallTrim（门窗套、扶壁、线脚、尖塔） | 屋顶 roof、雨渍竖纹、苔斑 |
+| 门房 | 外墙 wallAshlar，内墙 wallRubble | woodBeam（梁、拱肋）、wallPlaster（上半墙） | floorInterior + 地毯（cloth），炉口熏黑 |
+| 礼拜堂室内 | wallPlaster | wallAshlar（柱、拱、窗套） | floorInterior、蜡油、剥落 |
+| 地窖 B1 | wallRough | rock、floorDirt / floorFlagWorn | 渗水、霉斑、木架 |
+| 城墙步道 2F | floorFlagWorn | wallTrim（垛口、护墙） | 苔、积水、落叶 |
+| 礼拜堂上廊 2F | woodFloorOld | woodBeam、wallPlaster | 锻铁护栏、灰尘 |
+| 庭院地面 | floorFlag（主路） | floorFlagWorn（边缘）、floorCobble（井台、侧廊） | floorDirt 墙脚带、积水、落叶、草 |
+
+**反重复规则**：
+1. 同一贴图在一个机位里，连续大面积（墙面宽 > 6 m 或地面 > 40 m²）必须被打断。可以用结构打断（扶壁、壁柱、线脚、门窗、补砌、换材质），也可以用宏观变化打断（世界空间低频色差、湿度、污渍）。
+2. 平铺用世界空间 UV。墙按段做随机偏移，地面按块做随机偏移或旋转；不得出现可见的重复周期。
+3. 每段墙至少三层信息：主材 + 结构件（勒脚、压顶、线脚、扶壁至少两项）+ 故事层（潮湿、雨渍、苔、锈流、补砌、裂缝至少两项）。
+4. 材质过渡要混合，不要硬切：墙脚泥土和苔从地面向上渐变 0–0.8 m；地面在墙脚 0.5–1 m 带过渡到 floorDirt；主路磨亮。
+5. 相邻材质族之间亮度差在 ±12% 以内，色相保持冷灰，不得有拼贴感。
+6. 贴图预算：新增套组默认 1K（diff、nor、rough、ao）；只有 wallAshlar、floorFlagWorn、floorInterior 可以用 2K 并带 disp。`public/textures` 总量 ≤ 120 MB。
 
 ## 6. 细节预算（Detail Hierarchy）
 
@@ -175,9 +223,11 @@
 4. 细节密度是否符合第 6 节的层级？与相邻物体是否相差 ≤1 层级？
 5. 在白天与夜晚 rig 下的光照响应是否与周围资产一致（不过亮、不塑料、不发光）？
 6. 放在 `ref-day` / `ref-night` 机位里，与现有资产并排时是否像同一款游戏？
+7. 是否按 5.1 的区域主材表选用了材质族（通过 `variants(m)`），没有大面积单一贴图，也没有自建同类材质？
 
 任何一条为"否" → 修改资产，不修改本文件。
 
 ## 变更记录
 - v1（art pass 2 启动）：`/tmp/aw-agents/art-bible.md`。
 - v2（2026-11-22）：扩展为完整美术圣经（形体、比例、完整色板、材质表、细节预算、渲染规则、角色、VFX、UI、镜头、验收清单）；明确黑影按 concept/05 的四足破布体，否决"鹿角/骷髅舞者"造型。
+- v2.1（2026-11-23）：新增 5.1 材质族与区域分配、室内石灰抹面参数、验收第 7 条。理由：用户反馈环境单一（墙和地各只有一张贴图）。所有变体都在原色板和材质参数之内，只增加砌法、尺度和风化的变化，不改变风格。门房地面按 concept/02 改为石板加地毯（原木地板与已批准参考不符）。
