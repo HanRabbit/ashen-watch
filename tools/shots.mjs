@@ -39,8 +39,13 @@ const stage = (page, spec) => page.evaluate((s) => {
 const COURT_CAM = { pos: [4, 2.0, 1.2], look: [0.5, 3.0, 19.2] };
 const GHOST_CAM = { pos: [0, 1.5, 17.6], look: [0, 1.0, 22] };
 const DEG = Math.PI / 180;
+// 参考机位：对标 concept/03（左侧壁灯墙、中景井台、右侧东墙栅门、远处礼拜堂与远景城堡）
+const REF_CAM = { pos: [-8.2, 1.75, 3.2], look: [9, 4.6, 22] };
 
 const SHOTS = [
+  // 参考机位昼夜对照（美术第二轮的主验收图）
+  ['ref-day', { phase: 'day', clock: 300, at: [-6, 1.6], yaw: 0, cam: REF_CAM, hud: false, repairs: { lamp: true, gate: true }, doors: { gatehouse: true } }],
+  ['ref-night', { phase: 'night', at: [-6, 1.6], yaw: 0, cam: REF_CAM, hud: false, repairs: { lamp: true, gate: true }, lampBurn: 250, lantern: false, doors: { gatehouse: true } }],
   // A13：门房（回程地标、炉火、补油台、门闩）
   ['a13-gatehouse-hearth', { phase: 'day', clock: 200, at: [0.6, -1.6], yaw: -150 * DEG, pitch: 0.12, lantern: false }],
   ['a13-gatehouse-door-unbolted', { phase: 'night', at: [0.2, -3.2], yaw: 4 * DEG, pitch: 0.05, lantern: true, repairs: { bolt: true } }],
