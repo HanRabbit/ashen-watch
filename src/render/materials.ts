@@ -554,6 +554,14 @@ export interface AwUniforms {
   uAwPuddleAmt: { value: number };
   /** 积水洼地中心（世界 xz）+ 半径 + 强度，与 vfx.ts 的 PUDDLES 保持一致。 */
   uAwPuddles: { value: THREE.Vector4[] };
+  /** 主路↔边缘混合过渡（5.1 反重复第 4 条）：第二套贴图 + 世界 x 噪声遮罩，仅庭院地面启用。 */
+  uAwBlendAlbedo: { value: THREE.Texture };
+  uAwBlendNormal: { value: THREE.Texture };
+  uAwBlendRough: { value: THREE.Texture };
+  uAwBlendDisp: { value: THREE.Texture };
+  uAwHasBlend: { value: number };
+  uAwBlendHalf: { value: number };
+  uAwBlendBand: { value: number };
 }
 
 /** 庭院积水洼地（模拟坐标 x,z,r），与 vfx.ts PUDDLES 完全一致；着色器里 z 取负转到世界坐标。 */
@@ -589,6 +597,13 @@ export function awUniforms(floor: number, wet: number, desat: number, tint: [num
     uAwGrid: { value: 0 },
     uAwPuddleAmt: { value: 0 },
     uAwPuddles: { value: PUDDLE_CENTERS.map(([x, z, r]) => new THREE.Vector4(x, -z, r, 0.9)) },
+    uAwBlendAlbedo: { value: AW_FALLBACK_HEIGHT },
+    uAwBlendNormal: { value: AW_FALLBACK_HEIGHT },
+    uAwBlendRough: { value: AW_FALLBACK_HEIGHT },
+    uAwBlendDisp: { value: AW_FALLBACK_HEIGHT },
+    uAwHasBlend: { value: 0 },
+    uAwBlendHalf: { value: 4.5 },
+    uAwBlendBand: { value: 1.2 },
   };
 }
 
@@ -616,15 +631,18 @@ const AW_FRAG_PREFIX = /* glsl */`
 varying vec3 vAwWorldPos;
 varying vec3 vAwWorldNormal;
 uniform float uAwSteps, uAwFloor, uAwWet, uAwDesat, uAwHeightScale, uAwHasDisp, uAwHasCells, uAwGrid, uAwPuddleAmt;
+uniform float uAwHasBlend, uAwBlendHalf, uAwBlendBand;
 uniform vec2 uAwStreakBand;
 uniform vec4 uAwWear[3];
 uniform vec4 uAwPuddles[4];
 float awPolish;
 uniform vec3 uAwTint;
 uniform sampler2D uAwHeightMap, uAwAlbedo, uAwCellMap;
+uniform sampler2D uAwBlendAlbedo, uAwBlendNormal, uAwBlendRough, uAwBlendDisp;
 vec2 awUv;
-float awWet, awMoss, awBase, awMacro, awMacro2, awUp, awJGeo, awSlabHash, awPuddle, awStoneA, awEdge;
+float awWet, awMoss, awBase, awMacro, awMacro2, awUp, awJGeo, awSlabHash, awPuddle, awStoneA, awEdge, awBlend;
 vec2 awW;
+mat3 awTBNg;
 float awHash(vec2 p) { p = fract(p * vec2(123.34, 456.21)); p += dot(p, p + 45.32); return fract(p.x * p.y); }
 float awNoise(vec2 p) {
   vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
@@ -633,7 +651,9 @@ float awNoise(vec2 p) {
 }
 float awFbm(vec2 p) { return 0.6 * awNoise(p) + 0.3 * awNoise(p * 2.13 + 7.7) + 0.1 * awNoise(p * 4.7 + 3.1); }
 float awHeight(vec2 uv) {
-  return uAwHasDisp > 0.5 ? texture2D(uAwHeightMap, uv).r : dot(texture2D(uAwAlbedo, uv).rgb, vec3(0.3333));
+  float h = uAwHasDisp > 0.5 ? texture2D(uAwHeightMap, uv).r : dot(texture2D(uAwAlbedo, uv).rgb, vec3(0.3333));
+  if (uAwHasBlend > 0.5) h = mix(h, texture2D(uAwBlendDisp, uv).r, awBlend);
+  return h;
 }
 vec2 awPom(vec2 uv, vec3 vTs) {
   if (uAwSteps < 1.0) return uv;
@@ -664,6 +684,14 @@ const AW_MAP_BLOCK = /* glsl */`
 {
   vec3 awN = normalize(vAwWorldNormal);
   vec3 awV = normalize(cameraPosition - vAwWorldPos);
+  awW = vAwWorldPos.xz;
+  // 主路↔边缘混合遮罩（5.1 第 4 条）：世界 x + 低频噪声不规则边界，仅庭院地面（y≈0、|x|<11）
+  awBlend = 0.0;
+  if (uAwHasBlend > 0.5) {
+    float awBN = (awFbm(awW * 0.8 + 5.0) - 0.5) * 1.7;
+    awBlend = smoothstep(uAwBlendHalf - uAwBlendBand, uAwBlendHalf + uAwBlendBand, abs(vAwWorldPos.x) + awBN);
+    awBlend *= (1.0 - smoothstep(0.05, 0.2, vAwWorldPos.y)) * (1.0 - smoothstep(10.5, 11.5, abs(vAwWorldPos.x)));
+  }
   vec3 dp1 = dFdx(vAwWorldPos), dp2 = dFdy(vAwWorldPos);
   vec2 duv1 = dFdx(vMapUv), duv2 = dFdy(vMapUv);
   vec3 dp2p = cross(dp2, awN), dp1p = cross(awN, dp1);
@@ -671,8 +699,8 @@ const AW_MAP_BLOCK = /* glsl */`
   vec3 B = dp2p * duv1.y + dp1p * duv2.y;
   float invmax = inversesqrt(max(dot(T, T), dot(B, B)) + 1e-8);
   mat3 awTBN = mat3(T * invmax, B * invmax, awN);
+  awTBNg = awTBN;
   awUv = awPom(vMapUv, awV * awTBN);
-  awW = vAwWorldPos.xz;
   awMacro = awFbm(awW * 0.16 + 3.7);
   awMacro2 = awFbm(awW * 0.45 + 11.3);
   vec2 awWallUv = vec2(vAwWorldPos.x + vAwWorldPos.z, vAwWorldPos.y);
@@ -713,6 +741,11 @@ const AW_MAP_BLOCK = /* glsl */`
     awPuddle *= 1.0 - smoothstep(0.05, 0.2, vAwWorldPos.y); // 只在庭院地面，不上抬高的礼拜堂/外廊
     awPuddle = clamp(awPuddle, 0.0, 1.0);
     awWet = clamp(uAwWet * 0.45 + awPuddle, 0.0, 1.0);
+    // 过渡带内 monastery 单元特征渐隐，让位给边缘旧石板（避免两套缝叠加）
+    awJGeo *= 1.0 - awBlend;
+    awSlabHash = mix(awSlabHash, 0.5, awBlend);
+    awPuddle *= 1.0 - awBlend * 0.7;
+    awStoneA = mix(awStoneA, 1.0, awBlend);
   } else if (uAwFloor > 0.5) {
     // 离线兜底：错缝网格石板
     vec2 awCellUv = vMapUv * 4.0;
@@ -735,6 +768,10 @@ const AW_MAP_BLOCK = /* glsl */`
   }
 }
 vec4 sampledDiffuseColor = texture2D(map, awUv);
+// 主路↔边缘 albedo 混合（不规则噪声边界，消除直缝）
+if (uAwHasBlend > 0.5 && awBlend > 0.001) {
+  sampledDiffuseColor = mix(sampledDiffuseColor, texture2D(uAwBlendAlbedo, vMapUv), awBlend);
+}
 // 墙石：把过亮的白色灰缝压暗到石色系（高亮度 + 低饱和 = 灰缝）
 if (uAwFloor < 0.5) {
   float awLum0 = dot(sampledDiffuseColor.rgb, vec3(0.3333));
@@ -764,6 +801,11 @@ diffuseColor.rgb *= 1.0 - 0.62 * awJGeo;
   diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.043, 0.038, 0.030) * (0.7 + 0.6 * awMacro2), awJGeo * 0.85);
   float awGress = awJGeo * smoothstep(0.62, 0.82, awFbm(vMapUv * 90.0 + 7.0)) * uAwFloor;
   diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.15, 0.15, 0.085), awGress * 0.5);
+  // 过渡带混入泥土点缀（"被人踩出来的路"而非施工缝），边缘渐脏
+  float awBand = awBlend * (1.0 - awBlend) * 4.0;
+  float awDirt = awBand * smoothstep(0.52, 0.74, awFbm(awW * 1.6 + 8.0));
+  diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.05, 0.045, 0.037) * (0.7 + 0.6 * awMacro2), awDirt * 0.7);
+  diffuseColor.rgb *= 1.0 - 0.12 * awBlend * uAwFloor;
   // 石板边缘倒角积 dirt
   diffuseColor.rgb *= 1.0 - 0.22 * (1.0 - smoothstep(0.0, 0.5, awEdge)) * awStoneA * uAwFloor;
   diffuseColor.rgb *= 1.0 - 0.5 * awBase;
@@ -777,6 +819,9 @@ diffuseColor.rgb *= 1.0 - 0.62 * awJGeo;
 
 const AW_ROUGH_BLOCK = /* glsl */`
 roughnessFactor = clamp(roughnessFactor, 0.0, 1.0);
+if (uAwHasBlend > 0.5 && awBlend > 0.001) {
+  roughnessFactor = mix(roughnessFactor, texture2D(uAwBlendRough, vMapUv).r * 0.82, awBlend);
+}
 roughnessFactor *= 1.0 - 0.22 * awWet * uAwFloor * (1.0 - awPuddle);
 roughnessFactor = mix(roughnessFactor, 0.34, awPolish);
 roughnessFactor = mix(roughnessFactor, 0.92, awJGeo * 0.55);
@@ -787,6 +832,12 @@ roughnessFactor = max(roughnessFactor, awJGeo * 0.55); // 石缝/灰浆不得镜
 `;
 
 const AW_NORMAL_BLOCK = /* glsl */`
+if (uAwHasBlend > 0.5 && awBlend > 0.001) {
+  vec3 awBN = texture2D(uAwBlendNormal, vMapUv).xyz * 2.0 - 1.0;
+  awBN.xy *= normalScale;
+  vec3 awBlendN = normalize(mat3(viewMatrix) * normalize(awTBNg * awBN)); // 世界→视图空间再混
+  normal = normalize(mix(normal, awBlendN, awBlend));
+}
 normal = normalize(mix(normal, nonPerturbedNormal, clamp(awPuddle * 0.9 + awMoss * 0.2 + awPolish * 0.3, 0.0, 1.0)));
 `;
 
@@ -887,6 +938,22 @@ function loadFlagstone(mat: THREE.MeshStandardMaterial, normalScale: number, pen
       u.uAwHasCells.value = 1;
     } catch { /* 保留兜底 */ }
   });
+  // 边缘旧石板 stone_pavers 作为混合目标：主路↔边缘世界 x 噪声过渡（5.1 第 4 条）
+  const grabB = (slot: string, srgb: boolean, apply: (t: THREE.Texture) => void): void => {
+    pending.push(new Promise<void>((resolve) => {
+      loader.load(`textures/stone_pavers_${slot}.jpg`, (t) => {
+        t.wrapS = t.wrapT = THREE.RepeatWrapping;
+        t.colorSpace = srgb ? THREE.SRGBColorSpace : THREE.NoColorSpace;
+        t.anisotropy = 8;
+        apply(t);
+        resolve();
+      }, undefined, () => resolve());
+    }));
+  };
+  grabB('diff', true, (t) => { u.uAwBlendAlbedo.value = t; });
+  grabB('nor', false, (t) => { u.uAwBlendNormal.value = t; });
+  grabB('rough', false, (t) => { u.uAwBlendRough.value = t; });
+  grabB('disp', false, (t) => { u.uAwBlendDisp.value = t; u.uAwHasBlend.value = 1; });
 }
 
 /** 把额外的异步资源（如 glTF 模型）并入 texturesReady 的等待链。 */
