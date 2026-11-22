@@ -269,7 +269,8 @@ async function playthrough(name, { mouseOnly, query, repairs, duskWaitSecs, dayW
   try {
     await page.goto(`${BASE}?probe=1${query ? `&${query}` : ''}`);
     await ready(page);
-    await page.evaluate(() => localStorage.clear());
+    // map: 无头 swiftshader 下 VSM 阴影间歇崩溃；无头验收用 high(PCF) 档，cinematic 预算另以 ref 机位核验
+    await page.evaluate((hl) => { localStorage.clear(); if (hl) localStorage.setItem('ashen-watch/settings', JSON.stringify({ mode: 'kbm', sensitivity: 1, brightness: 1, volume: 0.7, quality: 'high', binds: {} })); }, headless);
     await page.reload(); await ready(page);
     rep.data.gpu = await page.evaluate(() => window.__awProbe.gpu());
     rep.data.preset = (await fullOf(page)).preset;
