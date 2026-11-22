@@ -12,6 +12,50 @@ export interface Scenery {
   group: THREE.Group;
 }
 
+
+// —— 逐片段天空上限：与主天空同梯度+同云，保证远景任何像素不亮于背后局部天空 ——
+const SKYCAP_GLSL = /* glsl */`
+uniform vec3 uScHorizon, uScZenith, uScCloudDark, uScCloudLit, uScSunColor, uScSunDir;
+uniform float uScTime, uScCover, uScStars, uScGlow, uScRim;
+float scHash(vec2 p){ p=fract(p*vec2(123.34,456.21)); p+=dot(p,p+45.32); return fract(p.x*p.y); }
+float scNoise(vec2 p){ vec2 i=floor(p),f=fract(p); f=f*f*(3.0-2.0*f);
+  float a=scHash(i),b=scHash(i+vec2(1,0)),c=scHash(i+vec2(0,1)),d=scHash(i+vec2(1,1));
+  return mix(mix(a,b,f.x),mix(c,d,f.x),f.y); }
+float scFbm(vec2 p){ float v=0.0,a=0.55; mat2 r=mat2(0.8,-0.6,0.6,0.8);
+  for(int i=0;i<5;i++){ v+=a*scNoise(p); p=r*p*2.03+11.7; a*=0.5; } return v; }
+float scFbm3(vec2 p){ float v=0.0,a=0.6;
+  for(int i=0;i<3;i++){ v+=a*scNoise(p); p=p*2.11+7.3; a*=0.5; } return v; }
+float scShape(vec2 uv){ vec2 w=vec2(scFbm3(uv*1.4+1.7),scFbm3(uv*1.4+9.2));
+  float b=scFbm(uv*1.8+w*0.40); float d=scFbm3(uv*3.2+w*0.6); return b*0.65+d*0.35; }
+float scGrad(vec2 uv){ return scFbm(uv*1.8); }
+vec3 awSkyCap(vec3 d){
+  float h=d.y;
+  vec3 col=mix(uScHorizon,uScZenith,pow(clamp(h,0.0,1.0),0.55));
+  vec3 sd=normalize(uScSunDir);
+  float cosA=clamp(dot(d,sd),0.0,1.0);
+  col+=uScSunColor*uScGlow*0.22*pow(cosA,3.0);
+  float hh=max(h,0.02);
+  vec2 proj=d.xz/(hh+0.35);
+  vec2 uv1=proj*0.45+uScTime*vec2(0.003,0.0013)+2.3;
+  float veil=smoothstep(0.55,0.95,scFbm(uv1))*0.22*(1.0-uScStars*0.6)*smoothstep(-0.02,0.12,h);
+  col=mix(col,mix(uScHorizon,uScCloudLit,0.35),veil);
+  vec2 uv2=proj*0.8+uScTime*vec2(0.004,0.0018);
+  float dens=scShape(uv2);
+  float lo=0.62-uScCover*0.20; float hi=lo+0.10;
+  float cover=smoothstep(lo,hi,dens)*smoothstep(-0.02,0.08,h);
+  float e=0.10;
+  vec2 grad=vec2(scGrad(uv2+vec2(e,0.0))-scGrad(uv2-vec2(e,0.0)), scGrad(uv2+vec2(0.0,e))-scGrad(uv2-vec2(0.0,e)));
+  vec3 cn=normalize(vec3(-grad.x*2.2,0.55,-grad.y*2.2));
+  float lambert=clamp(dot(cn,sd),0.0,1.0);
+  float topLight=mix(0.30,1.0,smoothstep(0.05,0.85,h));
+  float thick=smoothstep(lo,hi+0.10,dens);
+  float lit=clamp(0.12+0.88*lambert,0.0,1.0)*topLight*mix(1.0,0.45,thick);
+  vec3 cloudCol=mix(uScCloudDark,uScCloudLit,lit);
+  cloudCol+=uScSunColor*uScRim*cover*(1.0-cover)*4.0*pow(cosA,6.0);
+  return mix(col,cloudCol,cover);
+}
+`;
+
 const clamp01 = (t: number): number => Math.max(0, Math.min(1, t));
 const HALF_PI = Math.PI / 2;
 
@@ -36,7 +80,7 @@ function bakeForm(geo: THREE.BufferGeometry, y0: number, span: number, contrast 
     let raw = 0.5 + 0.4 * top + 0.25 * west;
     raw *= 0.8 + 0.3 * clamp01((pos.getY(i) - y0) / span);
     // contrast=1 恢复强形体明暗（城堡/山崖/松林要读出形体）；小值=远景雾感压平
-    const form = 1 - contrast * (1 - Math.max(0.15, Math.min(1.2, raw)));
+    const form = 1 - contrast * (1 - Math.max(0.15, Math.min(1.0, raw)));
     cols[i * 3] = cols[i * 3 + 1] = cols[i * 3 + 2] = form;
   }
   geo.setAttribute('color', new THREE.BufferAttribute(cols, 3));
@@ -76,6 +120,45 @@ function weatherTint(geo: THREE.BufferGeometry, seed: number): void {
     col.setXYZ(i, rr * (1 - s), gg * (1 - s), bb * (1 - s));
   }
   col.needsUpdate = true;
+}
+
+/** 从实际地形网格 rasterize 高度场（取每格最高三角形 y），供植被落点采样，杜绝浮空。 */
+function heightGrid(geo: THREE.BufferGeometry, extent: number, step: number): { g: Float32Array; n: number; extent: number; step: number } {
+  const n = Math.ceil((extent * 2) / step) + 1;
+  const g = new Float32Array(n * n).fill(-1e9);
+  const pos = geo.getAttribute('position') as THREE.BufferAttribute;
+  for (let i = 0; i < pos.count; i += 3) {
+    const ax = pos.getX(i), az = pos.getZ(i), ay = pos.getY(i);
+    const bx = pos.getX(i + 1), bz = pos.getZ(i + 1), by = pos.getY(i + 1);
+    const cx = pos.getX(i + 2), cz = pos.getZ(i + 2), cy = pos.getY(i + 2);
+    const i0 = Math.max(0, Math.floor((Math.min(ax, bx, cx) + extent) / step));
+    const i1 = Math.min(n - 1, Math.ceil((Math.max(ax, bx, cx) + extent) / step));
+    const j0 = Math.max(0, Math.floor((Math.min(az, bz, cz) + extent) / step));
+    const j1 = Math.min(n - 1, Math.ceil((Math.max(az, bz, cz) + extent) / step));
+    const d = (bz - cz) * (ax - cx) + (cx - bx) * (az - cz);
+    if (Math.abs(d) < 1e-9) continue;
+    for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) {
+      const px = -extent + i * step, pz = -extent + j * step;
+      const w1 = ((bz - cz) * (px - cx) + (cx - bx) * (pz - cz)) / d;
+      const w2 = ((cz - az) * (px - cx) + (ax - cx) * (pz - cz)) / d;
+      const w3 = 1 - w1 - w2;
+      if (w1 < -0.02 || w2 < -0.02 || w3 < -0.02) continue;
+      const y = w1 * ay + w2 * by + w3 * cy;
+      const k = j * n + i;
+      if (y > g[k]) g[k] = y;
+    }
+  }
+  return { g, n, extent, step };
+}
+type HGrid = ReturnType<typeof heightGrid>;
+function sampleH(hg: HGrid, x: number, z: number): number {
+  const fx = (x + hg.extent) / hg.step, fz = (z + hg.extent) / hg.step;
+  const i = Math.floor(fx), j = Math.floor(fz);
+  if (i < 0 || j < 0 || i >= hg.n - 1 || j >= hg.n - 1) return -1e9;
+  const a = hg.g[j * hg.n + i], b = hg.g[j * hg.n + i + 1], c = hg.g[(j + 1) * hg.n + i], d = hg.g[(j + 1) * hg.n + i + 1];
+  if (a < -1e8 || b < -1e8 || c < -1e8 || d < -1e8) return -1e9;
+  const tx = fx - i, tz = fz - j;
+  return (a * (1 - tx) + b * tx) * (1 - tz) + (c * (1 - tx) + d * tx) * tz;
 }
 
 /** 圆柱全景剪影带：顶边 = 多频噪声缓起伏（非等腰三角），顶点色自上而下雾渐变（顶贴近天空、底略深）。 */
@@ -248,6 +331,8 @@ function tower(stone: THREE.BufferGeometry[], roof: THREE.BufferGeometry[], x: n
   }
 }
 
+interface SkyUniforms { uHorizon: { value: THREE.Color }; uZenith: { value: THREE.Color }; uCloudDark: { value: THREE.Color }; uCover: { value: number } }
+
 export function buildScenery(_m: Materials): Scenery {
   const group = new THREE.Group();
   group.name = 'scenery';
@@ -255,11 +340,39 @@ export function buildScenery(_m: Materials): Scenery {
   const dummy = new THREE.Object3D();
   const tmpC = new THREE.Color();
 
-  const atmo: { mat: THREE.MeshBasicMaterial; day: THREE.Color; night: THREE.Color; df: number; nf: number }[] = [];
+  // 与主天空同步的 uniform 值（每帧拷贝），供逐片段天空上限
+  const skyU = {
+    uScHorizon: { value: new THREE.Color() }, uScZenith: { value: new THREE.Color() },
+    uScCloudDark: { value: new THREE.Color() }, uScCloudLit: { value: new THREE.Color() },
+    uScSunColor: { value: new THREE.Color() }, uScSunDir: { value: new THREE.Vector3(0, 1, 0) },
+    uScTime: { value: 0 }, uScCover: { value: 0.8 }, uScStars: { value: 0 }, uScGlow: { value: 0 }, uScRim: { value: 0 },
+  };
+  const attachSkyCap = (mat: THREE.MeshBasicMaterial): void => {
+    mat.onBeforeCompile = (shader) => {
+      Object.assign(shader.uniforms, skyU);
+      shader.vertexShader = 'varying vec3 vAwSkyPos;\n' + shader.vertexShader.replace(
+        '#include <project_vertex>',
+        '#include <project_vertex>\n vAwSkyPos = (modelMatrix * vec4(transformed, 1.0)).xyz;',
+      );
+      shader.fragmentShader = SKYCAP_GLSL + 'varying vec3 vAwSkyPos;\n' + shader.fragmentShader.replace(
+        '#include <tonemapping_fragment>',
+        'gl_FragColor.rgb = min(gl_FragColor.rgb, awSkyCap(normalize(vAwSkyPos - cameraPosition)) * 0.93);\n#include <tonemapping_fragment>',
+      );
+    };
+    mat.customProgramCacheKey = () => 'aw-skycap';
+  };
+  const atmo: { mat: THREE.MeshBasicMaterial; day: THREE.Color; night: THREE.Color; df: number; nf: number; crestY: number; dist: number; K: number }[] = [];
   const basic = (day: number, night: number, df: number, nf: number, vc = true): THREE.MeshBasicMaterial => {
     const mat = new THREE.MeshBasicMaterial({ color: day, fog: false, vertexColors: vc });
-    atmo.push({ mat, day: new THREE.Color(day), night: new THREE.Color(night), df, nf });
+    attachSkyCap(mat);
+    atmo.push({ mat, day: new THREE.Color(day), night: new THREE.Color(night), df, nf, crestY: 30, dist: 100, K: 0.9 });
     return mat;
+  };
+
+  /** 登记该层的屏幕高度上限钳制参数：crestY=层顶世界高、dist=水平距、K=天空上限系数。 */
+  const setClamp = (mat: THREE.MeshBasicMaterial, crestY: number, dist: number, K: number): void => {
+    const e = atmo.find((a) => a.mat === mat);
+    if (e) { e.crestY = crestY; e.dist = dist; e.K = K; }
   };
 
   // ——— 大地盘（恒可见，承载大气驱动）———
@@ -273,7 +386,10 @@ export function buildScenery(_m: Materials): Scenery {
   const footGeo = moundRing(70, 14, 6, 34, 71);
   bakeForm(footGeo, -6, 24, 0.5);
   weatherTint(footGeo, 72);
-  const foot = new THREE.Mesh(footGeo, basic(0x9aa4ae, 0x161e2b, 0.68, 0.4));
+  const footMat = basic(0x9aa4ae, 0x161e2b, 0.68, 0.4);
+  setClamp(footMat, 22, 70, 0.9);
+  const foot = new THREE.Mesh(footGeo, footMat);
+  const hg = heightGrid(footGeo, 110, 2);
   foot.castShadow = false; foot.receiveShadow = false;
   group.add(foot);
 
@@ -289,6 +405,7 @@ export function buildScenery(_m: Materials): Scenery {
     const g = panoramaBand(rad, crest, amp, sd, bf);
     const mat = basic(day, 0x1a2433, df, 0.4 + df * 0.3);
     mat.side = THREE.DoubleSide;
+    setClamp(mat, crest + amp, rad, rad === 120 ? 0.7 : rad === 220 ? 0.92 : rad === 350 ? 0.96 : 0.98);
     const mesh = new THREE.Mesh(g, mat);
     mesh.castShadow = false; mesh.receiveShadow = false;
     group.add(mesh);
@@ -328,7 +445,7 @@ export function buildScenery(_m: Materials): Scenery {
   }
   const cragGeo = mergeGeometries(cragParts, false)!;
   for (const g of cragParts) g.dispose();
-  bakeForm(cragGeo, -6, cy + 10, 1.5);
+  bakeForm(cragGeo, -6, cy + 10, 1.8);
   { // 块面明暗：节理阴影 + 岩层阴面 + 阳面/阴面
     const pp = cragGeo.getAttribute('position') as THREE.BufferAttribute;
     const cc = cragGeo.getAttribute('color') as THREE.BufferAttribute;
@@ -336,15 +453,16 @@ export function buildScenery(_m: Materials): Scenery {
     for (let i = 0; i < pp.count; i++) {
       const ang = Math.atan2(pp.getX(i), pp.getZ(i));
       let f = 0.65 + 0.55 * clamp01(-nn.getX(i));
-      if (Math.sin(ang * 6) > 0.72) f *= 0.5;
+      if (Math.sin(ang * 6) > 0.72) f *= 0.4;
       if (nn.getY(i) < -0.15) f *= 0.6;
-      if (Math.floor((pp.getY(i) + 33) / 7) % 2 === 0) f *= 0.82; // 岩层阳/阴交替
+      if (Math.floor((pp.getY(i) + 33) / 7) % 2 === 0) f *= 0.75; // 岩层阳/阴交替
       cc.setXYZ(i, cc.getX(i) * f, cc.getY(i) * f, cc.getZ(i) * f);
     }
     cc.needsUpdate = true;
   }
   weatherTint(cragGeo, 73);
   const cragMat = basic(0xb4bec8, 0x151d2a, 0.68, 0.42);
+  setClamp(cragMat, cy + 6, 140, 0.95);
   const cragMesh = new THREE.Mesh(cragGeo, cragMat);
   cragMesh.position.set(cx, (cy + 6) / 2 - 6, cz);
   cragMesh.castShadow = false; cragMesh.receiveShadow = false;
@@ -445,10 +563,12 @@ export function buildScenery(_m: Materials): Scenery {
   for (const g of cp) g.dispose();
   bakeForm(castleGeo, cy - 6, 50, 1.4);
   weatherTint(castleGeo, 74);
-  const castle = new THREE.Mesh(castleGeo, basic(0xccd6e0, 0x1a2434, 0.5, 0.45));
+  const castleMat = basic(0xccd6e0, 0x1a2434, 0.5, 0.45);
+  setClamp(castleMat, cy + 40, 140, 0.95);
+  const castle = new THREE.Mesh(castleGeo, castleMat);
   castle.castShadow = false; castle.receiveShadow = false;
   group.add(castle);
-  for (const g of cr) bakeFlat(g, 0.32);
+  for (const g of cr) bakeFlat(g, 0.30);
 
   // 门洞暗色 + 吊闸（合批）
   const archDark = new THREE.MeshBasicMaterial({ color: 0x0a0d12, fog: false });
@@ -510,9 +630,11 @@ export function buildScenery(_m: Materials): Scenery {
   const gateGeo = mergeGeometries(gp.map((g) => g.toNonIndexed()), false)!;
   for (const g of gp) g.dispose();
   bakeForm(gateGeo, gy, 26, 0.7);
-  for (const g of gr) bakeFlat(g, 0.32);
+  for (const g of gr) bakeFlat(g, 0.30);
   weatherTint(gateGeo, 75);
-  const gate = new THREE.Mesh(gateGeo, basic(0xb8c2cc, 0x182231, 0.6, 0.42));
+  const gateMat = basic(0xb8c2cc, 0x182231, 0.6, 0.42);
+  setClamp(gateMat, gy + 24, 70, 0.92);
+  const gate = new THREE.Mesh(gateGeo, gateMat);
   gate.castShadow = false; gate.receiveShadow = false;
   group.add(gate);
 
@@ -524,8 +646,8 @@ export function buildScenery(_m: Materials): Scenery {
     const n = 3 + Math.floor(R() * 3);
     for (let i = 0; i < n; i++) {
       const hx = tx + (R() - 0.5) * 12, hz = tz + (R() - 0.5) * 12;
-      const rr = Math.hypot(hx, hz);
-      const hy = 4 + 11 * clamp01((88 - rr) / 38) + R() * 2;
+      const sy = sampleH(hg, hx, hz);
+      const hy = (sy < -1e8 ? 6 : sy - 0.5) + R() * 1.5;
       const hw = 2.0 + R() * 1.6, hh = 3 + R() * 1.6;
       const body = new THREE.BoxGeometry(hw, hh, hw * 1.4);
       body.translate(hx, hy + hh / 2, -hz);
@@ -538,41 +660,52 @@ export function buildScenery(_m: Materials): Scenery {
   }
   for (let i = 0; i < 7; i++) {
     const h = i === 3 ? 1.5 : 4 + (i % 2);
+    const cwY = sampleH(hg, 46 + i * 3, -40);
+    const base = cwY < -1e8 ? 8 : cwY - 0.5;
     const seg = new THREE.BoxGeometry(3, h, 1.6);
-    seg.translate(46 + i * 3, 8 + h / 2, -40);
+    seg.translate(46 + i * 3, base + h / 2, -40);
     midParts.push(seg);
     if (i === 3) {
       for (let k = 0; k < 5; k++) {
         const b = new THREE.DodecahedronGeometry(0.7 + R(), 0);
-        b.translate(46 + i * 3 + (R() - 0.5) * 3, 8 + R(), -40 + (R() - 0.5) * 3);
+        b.translate(46 + i * 3 + (R() - 0.5) * 3, base + R(), -40 + (R() - 0.5) * 3);
         midParts.push(b);
       }
     }
   }
-  tower(midParts, mr, -28, -62, 10, 2.2, 22, 6, { merlons: true });
+  const wtY = sampleH(hg, -28, -62);
+  tower(midParts, mr, -28, -62, wtY < -1e8 ? 10 : wtY - 0.5, 2.2, 22, 6, { merlons: true });
   const midGeo = mergeGeometries(midParts.map((g) => g.toNonIndexed()), false)!;
   for (const g of midParts) g.dispose();
   bakeForm(midGeo, 4, 30, 0.6);
-  for (const g of mr) bakeFlat(g, 0.32);
+  for (const g of mr) bakeFlat(g, 0.30);
   weatherTint(midGeo, 76);
-  const mid = new THREE.Mesh(midGeo, basic(0x9aa4ae, 0x161e2b, 0.68, 0.4));
+  const midMat = basic(0x9aa4ae, 0x161e2b, 0.68, 0.4);
+  setClamp(midMat, 34, 70, 0.9);
+  const mid = new THREE.Mesh(midGeo, midMat);
   mid.castShadow = false; mid.receiveShadow = false;
   group.add(mid);
 
   // 屋面/锥顶统一合批：比墙面暗 0.10-0.18，靠内部对比认出城堡
   const roofAll = mergeGeometries([...cr, ...gr, ...mr].map((g) => g.toNonIndexed()), false)!;
   for (const g of [...cr, ...gr, ...mr]) g.dispose();
-  const roofMesh = new THREE.Mesh(roofAll, basic(0x8a94a0, 0x141c28, 0.5, 0.45));
+  const roofMat = basic(0x8a94a0, 0x141c28, 0.5, 0.45);
+  setClamp(roofMat, cy + 40, 140, 0.95);
+  const roofMesh = new THREE.Mesh(roofAll, roofMat);
   roofMesh.castShadow = false; roofMesh.receiveShadow = false;
   group.add(roofMesh);
 
   // 裸岩 outcrop
   const outGeo = new THREE.DodecahedronGeometry(3, 0);
   outGeo.scale(1, 0.7, 1);
-  const outInst = new THREE.InstancedMesh(outGeo, basic(0x9aa4ae, 0x151d2a, 0.68, 0.4, false), 24);
+  const outMat = basic(0x9aa4ae, 0x151d2a, 0.68, 0.4, false);
+  setClamp(outMat, 20, 70, 0.9);
+  const outInst = new THREE.InstancedMesh(outGeo, outMat, 24);
   for (let i = 0; i < 24; i++) {
     const a = R() * Math.PI * 2, rr = 45 + R() * 55;
-    dummy.position.set(Math.sin(a) * rr, 4 + R() * 6, -Math.cos(a) * rr);
+    const ox = Math.sin(a) * rr, oz = Math.cos(a) * rr;
+    const sy = sampleH(hg, ox, oz);
+    dummy.position.set(ox, sy < -1e8 ? -60 : sy - 0.5, -oz);
     dummy.rotation.set(R() * 0.4, R() * 3, R() * 0.4);
     const s = 0.7 + R() * 1.4;
     dummy.scale.set(s, s, s);
@@ -586,7 +719,9 @@ export function buildScenery(_m: Materials): Scenery {
   // ——— 松林：foothill 单株（比坡面暗）+ 一脊带顶林冠线 + 枯阔叶 ———
   const pineGeo = pineGeometry();
   const mkPines = (spots: { x: number; y: number; z: number; h: number }[], day: number, df: number): void => {
-    const inst = new THREE.InstancedMesh(pineGeo, basic(day, 0x1a2430, df, 0.4, true), spots.length);
+    const pmat = basic(day, 0x1a2430, df, 0.4, true);
+    setClamp(pmat, 30, 70, 0.7);
+    const inst = new THREE.InstancedMesh(pineGeo, pmat, spots.length);
     spots.forEach((p, i) => {
       const s = p.h / 7.4;
       dummy.position.set(p.x, p.y, -p.z);
@@ -594,7 +729,7 @@ export function buildScenery(_m: Materials): Scenery {
       dummy.scale.set(s * (0.85 + R() * 0.3), s, s * (0.85 + R() * 0.3));
       dummy.updateMatrix();
       inst.setMatrixAt(i, dummy.matrix);
-      tmpC.setScalar(0.75 + R() * 0.35);
+      tmpC.setScalar(0.7 + R() * 0.3);
       inst.setColorAt(i, tmpC);
     });
     inst.instanceMatrix.needsUpdate = true;
@@ -603,27 +738,31 @@ export function buildScenery(_m: Materials): Scenery {
     group.add(inst);
   };
   const footPines: { x: number; y: number; z: number; h: number }[] = [];
-  for (let i = 0; i < 240; i++) {
+  for (let i = 0; i < 420; i++) {
     const a = R() * Math.PI * 2, rr = 50 + R() * 38;
     const x = Math.sin(a) * rr, z = Math.cos(a) * rr;
     if (x > -13 && x < 32 && z > -11 && z < 32) continue;
-    footPines.push({ x, y: 3 + 11 * clamp01((88 - rr) / 38) + R() * 2, z, h: 5 + R() * 4 });
+    const sy = sampleH(hg, x, z);
+    if (sy < -1e8) continue;
+    footPines.push({ x, y: sy - 0.4, z, h: 5 + R() * 4 });
   }
-  mkPines(footPines, 0x747e76, 0.3); // 比 foothill 坡面(0x9aa4ae/0.62)暗
+  mkPines(footPines, 0x5f6961, 0.25); // 比 foothill 坡面(0x9aa4ae/0.62)暗
 
   // 一脊带顶林冠线（沿 crest 噪声放置，比带面暗）
   const crest1 = (a: number): number => 40 + 10 * (0.5 * Math.sin(a * 3 + 11) + 0.3 * Math.sin(a * 7 + 25.3) + 0.2 * Math.sin(a * 13 + 45.1));
-  const canInst = new THREE.InstancedMesh(canopyGeometry(), basic(0x747e76, 0x1c2632, 0.3, 0.45, true), 220);
+  const canMat = basic(0x5f6961, 0x1c2632, 0.25, 0.45, true);
+  setClamp(canMat, 50, 120, 0.7);
+  const canInst = new THREE.InstancedMesh(canopyGeometry(), canMat, 220);
   for (let i = 0; i < 220; i++) {
     const a = (i / 220) * Math.PI * 2 + R() * 0.1;
-    const rr = 118 + R() * 6;
+    const rr = 114 + R() * 4;
     const s = (7 + R() * 5) / 5.2;
-    dummy.position.set(Math.sin(a) * rr, crest1(a) - 2 + R() * 2, -Math.cos(a) * rr);
+    dummy.position.set(Math.sin(a) * rr, crest1(a) - 6 + R() * 1.5, -Math.cos(a) * rr);
     dummy.rotation.set(0, R() * 3, 0);
     dummy.scale.set(s, s, s);
     dummy.updateMatrix();
     canInst.setMatrixAt(i, dummy.matrix);
-    tmpC.setScalar(0.75 + R() * 0.35);
+    tmpC.setScalar(0.7 + R() * 0.3);
     canInst.setColorAt(i, tmpC);
   }
   canInst.instanceMatrix.needsUpdate = true;
@@ -631,11 +770,15 @@ export function buildScenery(_m: Materials): Scenery {
   canInst.castShadow = false; canInst.receiveShadow = false;
   group.add(canInst);
 
-  const deadInst = new THREE.InstancedMesh(deadTreeGeometry(), basic(0x8a8478, 0x1a222c, 0.5, 0.4, false), 36);
+  const deadMat = basic(0x8a8478, 0x1a222c, 0.5, 0.4, false);
+  setClamp(deadMat, 26, 80, 0.88);
+  const deadInst = new THREE.InstancedMesh(deadTreeGeometry(), deadMat, 36);
   for (let i = 0; i < 36; i++) {
     const a = R() * Math.PI * 2, rr = 46 + R() * 70;
     const s = 1.2 + R() * 1.4;
-    dummy.position.set(Math.sin(a) * rr, 4 + 12 * clamp01((116 - rr) / 70), -Math.cos(a) * rr);
+    const dx = Math.sin(a) * rr, dz = Math.cos(a) * rr;
+    const sy = sampleH(hg, dx, dz);
+    dummy.position.set(dx, sy < -1e8 ? -60 : sy - 0.3, -dz);
     dummy.rotation.set(0, R() * 3, (R() - 0.5) * 0.15);
     dummy.scale.set(s, s, s);
     dummy.updateMatrix();
@@ -647,14 +790,14 @@ export function buildScenery(_m: Materials): Scenery {
 
   // ——— 每帧大气驱动（挂恒可见地盘）；雾感锚定天空地平线值（uHorizon），不随 fog.color 漂移 ———
   const tmpA = new THREE.Color(), tmpB = new THREE.Color();
-  let skyUniforms: { uHorizon: { value: THREE.Color } } | null = null;
-  ground.onBeforeRender = (_r, scene) => {
+  let skyUniforms: SkyUniforms | null = null;
+  ground.onBeforeRender = (_r, scene, _camera) => {
     const fog = scene.fog as THREE.Fog | null;
     if (!fog) return;
     if (!skyUniforms) {
       scene.traverse((o) => {
         const mm = (o as THREE.Mesh).material as THREE.ShaderMaterial | undefined;
-        if (!skyUniforms && mm && mm.uniforms && mm.uniforms.uHorizon) skyUniforms = mm.uniforms as { uHorizon: { value: THREE.Color } };
+        if (!skyUniforms && mm && mm.uniforms && mm.uniforms.uHorizon && mm.uniforms.uZenith && mm.uniforms.uCloudDark) skyUniforms = mm.uniforms as unknown as SkyUniforms;
       });
     }
     const night: number = scene.userData.night ?? 0;
@@ -664,6 +807,21 @@ export function buildScenery(_m: Materials): Scenery {
       tmpB.copy(haze).multiplyScalar(1 + night * 0.6);
       const amount = Math.min(0.95, a.df) * (1 - night) + a.nf * night;
       a.mat.color.copy(tmpA).lerp(tmpB, Math.min(0.95, amount));
+      a.mat.color.multiplyScalar(a.K); // 层间明度阶梯（近脊略暗于天空，远带贴近天空）
+    }
+    if (skyUniforms) {
+      skyU.uScHorizon.value.copy(skyUniforms.uHorizon.value);
+      skyU.uScZenith.value.copy(skyUniforms.uZenith.value);
+      skyU.uScCloudDark.value.copy(skyUniforms.uCloudDark.value);
+      const su = skyUniforms as unknown as Record<string, { value: unknown }>;
+      if (su.uCloudLit) skyU.uScCloudLit.value.copy(su.uCloudLit.value as THREE.Color);
+      if (su.uSunColor) skyU.uScSunColor.value.copy(su.uSunColor.value as THREE.Color);
+      if (su.uSunDir) skyU.uScSunDir.value.copy(su.uSunDir.value as THREE.Vector3);
+      if (su.uTime) skyU.uScTime.value = su.uTime.value as number;
+      if (su.uCover) skyU.uScCover.value = su.uCover.value as number;
+      if (su.uStars) skyU.uScStars.value = su.uStars.value as number;
+      if (su.uGlow) skyU.uScGlow.value = su.uGlow.value as number;
+      if (su.uRim) skyU.uScRim.value = su.uRim.value as number;
     }
     winMat.color.setHex(night > 0.5 ? 0xffb25e : 0x0d1118);
     glowMat.opacity = night * 0.6;
