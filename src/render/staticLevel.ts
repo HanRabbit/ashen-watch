@@ -249,9 +249,9 @@ export function buildStaticLevel(m: Materials): StaticLevel {
 
   // 地面分区（5.1）：主路 floorFlag 大石板，边缘 floorFlagWorn，井台/侧廊 floorCobble，墙脚 floorDirt 过渡带。
   b.box(m.gravel, -90, -70, 90, 110, -0.6, -0.04, 3);
-  b.box(v.floorFlag, -4.5, 0, 4.5, 29, -0.3, 0, 3.6);          // 中央主路（不规则大石板）
-  b.box(v.floorFlagWorn, -10.5, 0, -4.5, 29, -0.3, 0, 3);      // 西边缘旧石板
-  b.box(v.floorFlagWorn, 4.5, 0, 10.5, 29, -0.3, 0, 3);        // 东边缘旧石板
+  // 庭院地面单块 floorFlag：着色器内按世界 x + 噪声遮罩混合主路（monastery 不规则大石板）↔边缘（stone_pavers 旧石板），
+  // 过渡带 0.8–1.5 m 不规则边界 + 泥土点缀，消除直缝（5.1 第 4 条）。
+  b.box(v.floorFlag, -10.5, 0, 10.5, 29, -0.3, 0, 3.6);
   b.box(v.floorCobble, WELL.x - 2.3, WELL.z - 2.3, WELL.x + 2.3, WELL.z + 2.3, -0.3, 0.004, 1.6); // 井台一圈卵石
   b.box(v.floorCobble, 10.5, 1.5, 13, 17.5, -0.3, 0.004, 1.6); // 侧廊卵石
   // 墙脚泥土落叶过渡带（0.7 m，微微抬高避免 z-fight，落叶/草覆盖接缝）
