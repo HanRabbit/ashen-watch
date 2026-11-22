@@ -1,6 +1,6 @@
 // 后期管线（LGT-05…08）：从 view.ts 拆出，便于与 camera/landmarks 代理合并。
-// cinematic = SSR + GTAO + 光晕/雾内散射 + 泛光 + 输出 + LUT + 暗角颗粒 + 固定机位景深；
-// high = 无 SSR、无景深；low 不走 composer（view 直出）。
+// cinematic = SSR + GTAO + 光晕/雾内散射 + 泛光 + 输出 + LUT + 暗角颗粒 + 固定机位远景轻虚化；
+// high = 无 SSR；low 不走 composer（view 直出）。
 import * as THREE from 'three';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
@@ -10,15 +10,15 @@ import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { GTAOPass } from 'three/addons/postprocessing/GTAOPass.js';
 import { SSRPass } from 'three/addons/postprocessing/SSRPass.js';
 import { LUTPass } from 'three/addons/postprocessing/LUTPass.js';
-import { BokehPass } from 'three/addons/postprocessing/BokehPass.js';
 import type { Quality } from '../view';
 import { LightGlowShader, MAX_GLOW_LIGHTS } from './glow';
+import { FarSoftShader } from './farsoft';
 import { fillLUT, makeLUT, GradeParams, VignetteGrainShader } from './grade';
 
 export interface PostHooks {
   /** SSR 反射接收面（地面/积水） */
   ground(): THREE.Mesh[];
-  /** 透明大气物体：GTAO/景深预 pass 期间隐藏，避免假深度 */
+  /** 透明大气物体：GTAO 预 pass 期间隐藏，避免假深度 */
   atmo(): THREE.Object3D[];
   /** 参与屏幕空间光晕/散射的点光源 */
   lights(): THREE.PointLight[];
@@ -31,6 +31,8 @@ export interface PostRig {
   grade: GradeParams;
   /** 受击暗角强度 0..1（vfx.hurt） */
   hurt: number;
+  /** 高光滚降阈值/膝部（HDR 亮度，色调映射前；冷/暖分开） */
+  hiThresh: number; hiKneeCool: number; hiKneeWarm: number;
 }
 
 const DEFAULT_GRADE: GradeParams = { sat: 0.9, contrast: 1.05, tintS: 0x2a3640, tintH: 0xfff0d8 };
@@ -44,7 +46,7 @@ export class PostPipeline {
   private ssr: SSRPass | null = null;
   private glow!: ShaderPass;
   private lutPass!: LUTPass;
-  private dof!: BokehPass;
+  private farSoft!: ShaderPass;
   private quality: Quality = 'cinematic';
   private lastSig = '';
   private glowV = new THREE.Vector3();
@@ -70,10 +72,14 @@ export class PostPipeline {
     this.composer.setSize(w, h);
   }
 
-  /** 固定机位/标题才开景深；游戏越肩镜头保持锐利。 */
+  /** 固定机位/标题才开远景轻虚化；游戏越肩镜头保持锐利。focus 为构图焦点距离。 */
   setDof(on: boolean, focus: number): void {
-    this.dof.enabled = on;
-    if (on) (this.dof.uniforms as Record<string, THREE.IUniform>).focus.value = focus;
+    this.farSoft.enabled = on;
+    if (on) {
+      const u = this.farSoft.uniforms;
+      u.uStart.value = focus * 1.7;
+      u.uEnd.value = focus * 3.4;
+    }
   }
 
   applyRig(r: PostRig): void {
@@ -83,6 +89,9 @@ export class PostPipeline {
     const glu = this.glow.uniforms;
     glu.uStrength.value = r.glowStrength;
     glu.uScatter.value = r.scatter;
+    glu.uHiThresh.value = r.hiThresh;
+    glu.uHiKneeCool.value = r.hiKneeCool;
+    glu.uHiKneeWarm.value = r.hiKneeWarm;
     glu.uFog.value.set(r.fog[0], r.fog[1], r.fog[2]);
     if (this.ssr) this.ssr.opacity = r.ssrWet;
     const g = r.grade;
@@ -113,12 +122,19 @@ export class PostPipeline {
       // SSR 自带 beauty 渲染，放在链首替代 RenderPass；只让地面/积水接收反射
       this.ssr = new SSRPass({ renderer: this.renderer, scene: this.scene, camera: this.camera, width: size.x, height: size.y, selects: this.hooks.ground(), groundReflector: null });
       this.ssr.beautyRenderTarget.samples = 4;
-      this.ssr.opacity = 0.32;
-      this.ssr.maxDistance = 10;
-      this.ssr.thickness = 0.05;
+      this.ssr.opacity = 0.25;
+      this.ssr.maxDistance = 8;
+      this.ssr.thickness = 0.08;
       this.ssr.fresnel = true;
       this.ssr.distanceAttenuation = true;
       this.ssr.blur = true;
+      // 管线端能量钳制：反射采样亮度封顶，湿地倒影不被单点亮源拉成纯白
+      const sm = this.ssr.ssrMaterial;
+      sm.fragmentShader = sm.fragmentShader.replace(
+        'vec4 reflectColor=texture2D(tDiffuse,uv);',
+        'vec4 reflectColor=texture2D(tDiffuse,uv);\n{ float rl=dot(reflectColor.rgb,vec3(0.2126,0.7152,0.0722)); reflectColor.rgb*=min(1.0,2.2/max(rl,1e-4)); }',
+      );
+      sm.needsUpdate = true;
       this.composer.addPass(this.ssr);
     } else {
       this.composer.addPass(new RenderPass(this.scene, this.camera));
@@ -135,11 +151,10 @@ export class PostPipeline {
     this.composer.addPass(this.glow);
     this.bloom = new UnrealBloomPass(new THREE.Vector2(size.x, size.y), 0.3, 0.4, 1.0);
     this.composer.addPass(this.bloom);
-    // 景深：仅固定机位/标题启用（setDof），游戏镜头锐利
-    this.dof = new BokehPass(this.scene, this.camera, { focus: 12, aperture: 0.00025, maxblur: 0.0035 });
-    this.dof.enabled = false;
-    this.hideAtmoDuring(this.dof);
-    this.composer.addPass(this.dof);
+    // 远景轻虚化：仅固定机位/标题启用（setDof），近中景 factor=0 保持锐利
+    this.farSoft = new ShaderPass(FarSoftShader);
+    this.farSoft.enabled = false;
+    this.composer.addPass(this.farSoft);
     this.composer.addPass(new OutputPass());
     this.lutPass = new LUTPass({ lut: this.lut, intensity: 1 });
     this.composer.addPass(this.lutPass);
@@ -190,5 +205,10 @@ export class PostPipeline {
     const depth = (this.gtao as unknown as { depthTexture?: THREE.Texture }).depthTexture;
     u.tDepth.value = depth ?? null;
     u.uHasDepth.value = depth ? 1 : 0;
+    const fu = this.farSoft.uniforms;
+    fu.tDepth.value = depth ?? null;
+    fu.uHasDepth.value = depth ? 1 : 0;
+    fu.uNear.value = this.camera.near; fu.uFar.value = this.camera.far;
+    fu.uAspect.value = this.camera.aspect;
   }
 }
