@@ -14,6 +14,8 @@ import { GhostModels, PlayerModel } from './characters';
 import { clamp01, lerp, smooth } from './geom';
 import { glowTexture, makeMaterials, smokeTexture } from './materials';
 import { Props } from './props';
+import { buildLandmarks, hideLegacy } from './landmarks';
+import { buildScenery } from './scenery';
 import { buildStaticLevel, StaticLevel } from './staticLevel';
 
 export type Quality = 'high' | 'low';
@@ -186,6 +188,8 @@ export class SceneView {
     this.player = new PlayerModel(m, glowTexture());
     this.ghosts = new GhostModels();
     this.scene.add(this.level.group, this.props.group, this.player.group, this.ghosts.group);
+    const landmarks = buildLandmarks(m); hideLegacy(this.level.group);
+    this.scene.add(landmarks.group, buildScenery(m).group);
 
     // 天空穹顶：跟随镜头，渐变天 + 日/月盘 + 夜星
     this.sky = new THREE.Mesh(new THREE.SphereGeometry(250, 32, 16), this.skyMat);
