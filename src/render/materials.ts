@@ -523,8 +523,80 @@ export function leadedGlass(warm = false): { map: THREE.CanvasTexture; panes: TH
   return { map, panes };
 }
 
+/** 门房地毯（concept/02）：单幅织纹 + 边框图案 + 局部磨损污渍 + 两端流苏破边。返回 map（带 alpha）与织纹法线。 */
+export function rugTexture(): { map: THREE.CanvasTexture; normalMap: THREE.CanvasTexture } {
+  const W = 256, H = 384;
+  const mk = (): { c: HTMLCanvasElement; g: CanvasRenderingContext2D } => {
+    const c = document.createElement('canvas'); c.width = W; c.height = H;
+    return { c, g: c.getContext('2d')! };
+  };
+  const r = rng(401);
+  const col = mk(), ht = mk();
+  // 褪色酒红底（圣经 4.3 #5b1f24 去饱和）+ 织纹明暗
+  col.g.fillStyle = '#5e2a26'; col.g.fillRect(0, 0, W, H);
+  ht.g.fillStyle = '#808080'; ht.g.fillRect(0, 0, W, H);
+  // 织纹：经纬细线
+  for (let y = 0; y < H; y += 3) {
+    col.g.fillStyle = `rgba(0,0,0,${0.06 + (y % 6 === 0 ? 0.06 : 0)})`;
+    col.g.fillRect(0, y, W, 1);
+    ht.g.fillStyle = y % 6 === 0 ? '#6a6a6a' : '#909090';
+    ht.g.fillRect(0, y, W, 1);
+  }
+  for (let x = 0; x < W; x += 3) {
+    col.g.fillStyle = `rgba(255,240,220,${0.03 + (x % 6 === 0 ? 0.04 : 0)})`;
+    col.g.fillRect(x, 0, 1, H);
+    ht.g.fillStyle = x % 6 === 0 ? '#969696' : '#7a7a7a';
+    ht.g.fillRect(x, 0, 1, H);
+  }
+  // 边框：麻布色回纹边（圣经 4.3 #7a6a52）
+  const bw = 26;
+  col.g.fillStyle = '#6e5c44';
+  col.g.fillRect(0, 0, W, bw); col.g.fillRect(0, H - bw, W, bw);
+  col.g.fillRect(0, 0, bw, H); col.g.fillRect(W - bw, 0, bw, H);
+  col.g.strokeStyle = 'rgba(40,28,20,0.7)'; col.g.lineWidth = 2;
+  col.g.strokeRect(bw - 4, bw - 4, W - 2 * bw + 8, H - 2 * bw + 8);
+  // 边框菱形纹样
+  col.g.fillStyle = 'rgba(90,40,32,0.8)';
+  for (let x = bw; x < W - bw; x += 18) {
+    for (const yy of [bw / 2, H - bw / 2]) {
+      col.g.beginPath();
+      col.g.moveTo(x, yy - 6); col.g.lineTo(x + 7, yy); col.g.lineTo(x, yy + 6); col.g.lineTo(x - 7, yy);
+      col.g.closePath(); col.g.fill();
+    }
+  }
+  // 中央磨损露白茬 + 污渍（局部，不满铺）
+  for (let i = 0; i < 26; i++) {
+    const x = bw + r() * (W - 2 * bw), y = bw + r() * (H - 2 * bw), rad = 6 + r() * 22;
+    const grd = col.g.createRadialGradient(x, y, 1, x, y, rad);
+    const worn = r() < 0.5;
+    grd.addColorStop(0, worn ? 'rgba(150,120,90,0.28)' : 'rgba(30,20,16,0.3)');
+    grd.addColorStop(1, 'rgba(0,0,0,0)');
+    col.g.fillStyle = grd; col.g.fillRect(x - rad, y - rad, rad * 2, rad * 2);
+  }
+  // 两端流苏破边（alpha）：短边外留流苏须，边缘参差不齐
+  col.g.globalCompositeOperation = 'destination-out';
+  for (let x = 0; x < W; x += 2) {
+    const cutTop = 3 + r() * 7, cutBot = 3 + r() * 7;
+    col.g.clearRect(x, 0, 2, cutTop);
+    col.g.clearRect(x, H - cutBot, 2, cutBot);
+  }
+  col.g.globalCompositeOperation = 'source-over';
+  col.g.strokeStyle = 'rgba(110,92,68,0.9)'; col.g.lineWidth = 1;
+  for (let x = 2; x < W; x += 4) {
+    const fl = 5 + r() * 9;
+    col.g.beginPath(); col.g.moveTo(x, 2); col.g.lineTo(x + (r() - 0.5) * 3, 2 - fl); col.g.stroke();
+    col.g.beginPath(); col.g.moveTo(x, H - 2); col.g.lineTo(x + (r() - 0.5) * 3, H - 2 + fl); col.g.stroke();
+  }
+  const map = new THREE.CanvasTexture(col.c);
+  map.colorSpace = THREE.SRGBColorSpace;
+  map.wrapS = map.wrapT = THREE.ClampToEdgeWrapping;
+  map.anisotropy = 8;
+  const normalMap = normalFromHeight(ht.c, 1.4);
+  normalMap.wrapS = normalMap.wrapT = THREE.ClampToEdgeWrapping;
+  return { map, normalMap };
+}
+
 // —— 共享石材着色器（石墙 / 石地 / 瓦 / 碎石共用，onBeforeCompile 注入）——
-// 世界坐标宏观噪声打破平铺重复；墙脚潮湿发黑偏绿苔、墙顶向上面生苔与竖向雨渍、白灰缝压暗；
 // 庭院石板用扫描单元图做每块差异/倒角/泥缝，低洼石板 + 洼地中心生成不规则积水（镜面反射）；
 // 视差遮挡贴图（POM，8–24 步）用 disp 高度图，低画质经 setMaterialsQuality 关闭。
 
@@ -562,6 +634,8 @@ export interface AwUniforms {
   uAwHasBlend: { value: number };
   uAwBlendHalf: { value: number };
   uAwBlendBand: { value: number };
+  /** 抹灰剥落露石（礼拜堂室内），1 启用。 */
+  uAwPeel: { value: number };
 }
 
 /** 庭院积水洼地（模拟坐标 x,z,r），与 vfx.ts PUDDLES 完全一致；着色器里 z 取负转到世界坐标。 */
@@ -604,6 +678,7 @@ export function awUniforms(floor: number, wet: number, desat: number, tint: [num
     uAwHasBlend: { value: 0 },
     uAwBlendHalf: { value: 4.5 },
     uAwBlendBand: { value: 1.2 },
+    uAwPeel: { value: 0 },
   };
 }
 
@@ -631,7 +706,7 @@ const AW_FRAG_PREFIX = /* glsl */`
 varying vec3 vAwWorldPos;
 varying vec3 vAwWorldNormal;
 uniform float uAwSteps, uAwFloor, uAwWet, uAwDesat, uAwHeightScale, uAwHasDisp, uAwHasCells, uAwGrid, uAwPuddleAmt;
-uniform float uAwHasBlend, uAwBlendHalf, uAwBlendBand;
+uniform float uAwHasBlend, uAwBlendHalf, uAwBlendBand, uAwPeel;
 uniform vec2 uAwStreakBand;
 uniform vec4 uAwWear[3];
 uniform vec4 uAwPuddles[4];
@@ -701,6 +776,10 @@ const AW_MAP_BLOCK = /* glsl */`
   mat3 awTBN = mat3(T * invmax, B * invmax, awN);
   awTBNg = awTBN;
   awUv = awPom(vMapUv, awV * awTBN);
+  if (uAwFloor < 0.5) {
+    // 打破等距砌缝"灯芯绒"节奏（5.1 反重复）：按墙面横向低频噪声扰动层高
+    awUv.y += (awFbm(vec2((vAwWorldPos.x + vAwWorldPos.z) * 0.6, 3.0)) - 0.5) * 0.05;
+  }
   awMacro = awFbm(awW * 0.16 + 3.7);
   awMacro2 = awFbm(awW * 0.45 + 11.3);
   vec2 awWallUv = vec2(vAwWorldPos.x + vAwWorldPos.z, vAwWorldPos.y);
@@ -742,7 +821,7 @@ const AW_MAP_BLOCK = /* glsl */`
     awPuddle = clamp(awPuddle, 0.0, 1.0);
     awWet = clamp(uAwWet * 0.45 + awPuddle, 0.0, 1.0);
     // 过渡带内 monastery 单元特征渐隐，让位给边缘旧石板（避免两套缝叠加）
-    awJGeo *= 1.0 - awBlend;
+    awJGeo *= 1.0 - awBlend * 0.5;
     awSlabHash = mix(awSlabHash, 0.5, awBlend);
     awPuddle *= 1.0 - awBlend * 0.7;
     awStoneA = mix(awStoneA, 1.0, awBlend);
@@ -779,7 +858,13 @@ if (uAwFloor < 0.5) {
   float awMn = min(sampledDiffuseColor.r, min(sampledDiffuseColor.g, sampledDiffuseColor.b));
   float awSat0 = (awMx - awMn) / max(awMx, 0.001);
   float awMortar = smoothstep(0.30, 0.50, awLum0) * (1.0 - smoothstep(0.10, 0.30, awSat0));
+  // 随机让部分砌缝变淡/消失，打破等厚横层节奏
+  awMortar *= 0.4 + 0.6 * smoothstep(0.3, 0.7, awFbm(vec2((vAwWorldPos.x + vAwWorldPos.z) * 0.9, vAwWorldPos.y * 0.5) + 7.0));
   sampledDiffuseColor.rgb = mix(sampledDiffuseColor.rgb, vec3(0.05, 0.055, 0.062) * (0.7 + 0.6 * awMacro), awMortar * 0.95);
+  if (uAwPeel > 0.5) {
+    float awPeel = smoothstep(0.56, 0.74, awFbm(vec2(vAwWorldPos.x + vAwWorldPos.z, vAwWorldPos.y) * 1.4 + 2.0));
+    sampledDiffuseColor.rgb = mix(sampledDiffuseColor.rgb, vec3(0.10, 0.11, 0.12) * (0.7 + 0.6 * awMacro), awPeel * 0.85);
+  }
 }
 diffuseColor *= sampledDiffuseColor;
 diffuseColor.rgb *= 1.0 - 0.62 * awJGeo;
@@ -814,6 +899,12 @@ diffuseColor.rgb *= 1.0 - 0.62 * awJGeo;
   diffuseColor.rgb = mix(diffuseColor.rgb, vec3(dot(diffuseColor.rgb, vec3(0.3333))) * 1.22, awPolish * 0.5);
   // 积水：深色冷水 + 微弱冷天光
   diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.018, 0.026, 0.040), awPuddle * 0.82);
+  // 末端泥缝压暗：缝明显暗于石板顶面（泥 #2b2620），混合带外同样生效
+  diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.030, 0.026, 0.020) * (0.7 + 0.5 * awMacro2), awJGeo * 0.9);
+  if (uAwHasBlend > 0.5 && awBlend > 0.01) {
+    float awBJ = smoothstep(0.30, 0.5, dot(texture2D(uAwBlendAlbedo, vMapUv).rgb, vec3(0.3333)));
+    diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.035, 0.032, 0.026), awBlend * awBJ * 0.7);
+  }
 }
 `;
 

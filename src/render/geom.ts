@@ -124,6 +124,16 @@ export function cyl(mat: THREE.Material, rTop: number, rBot: number, h: number, 
 
 export const lerp = (a: number, b: number, t: number): number => a + (b - a) * t;
 export const clamp01 = (t: number): number => Math.max(0, Math.min(1, t));
+
+/** 木拱肋：跨宽 w、矢高 rise、截面 thick 的 curved 方料肋（本地 XY 平面，沿 x 跨、y 起拱）。 */
+export function archRib(w: number, rise: number, thick: number): THREE.BufferGeometry {
+  const curve = new THREE.QuadraticBezierCurve3(
+    new THREE.Vector3(-w / 2, 0, 0),
+    new THREE.Vector3(0, rise * 1.7, 0),
+    new THREE.Vector3(w / 2, 0, 0),
+  );
+  return new THREE.TubeGeometry(curve, 18, thick / 2, 6, false);
+}
 export const smooth = (t: number): number => { const c = clamp01(t); return c * c * (3 - 2 * c); };
 
 /** 门洞上方的拱形过梁：宽 w，洞口起拱 s、拱顶 p，向上填到 H。底边不含洞口部分。 */

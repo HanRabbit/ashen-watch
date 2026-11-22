@@ -45,7 +45,7 @@ const cache = new WeakMap<Materials, Variants>();
 
 interface StoneOpts {
   floor: number; wet: number; desat: number; tint: [number, number, number];
-  hs: number; ns: number; rough: number; band?: [number, number]; grid?: number; puddle?: number;
+  hs: number; ns: number; rough: number; band?: [number, number]; grid?: number; puddle?: number; peel?: number;
 }
 
 /** 石材族：挂共享石材着色器 + 加载扫描贴图（去饱和/冷灰由 desat+tint 控制）。 */
@@ -59,6 +59,7 @@ function stoneMat(name: string, o: StoneOpts, pending: Promise<void>[]): THREE.M
   const u = awUniforms(o.floor, o.wet, o.desat, o.tint, o.hs, o.band);
   if (o.grid) u.uAwGrid.value = o.grid;
   if (o.puddle) u.uAwPuddleAmt.value = o.puddle;
+  if (o.peel) u.uAwPeel.value = o.peel;
   stoneShader(mat, u);
   enhance(mat, name, o.ns, pending);
   return mat;
@@ -84,7 +85,7 @@ export function variants(m: Materials): Variants {
   const wallAshlar = stoneMat('medieval_blocks_03', { floor: 0, wet: 0.3, desat: 0.72, tint: [0.80, 0.84, 0.92], hs: 0.02, ns: 1.0, rough: 0.85, band: [2.2, 4.15] }, pending);
   const wallTrim = stoneMat('granite_wall', { floor: 0, wet: 0.28, desat: 0.6, tint: [0.82, 0.86, 0.94], hs: 0.02, ns: 1.1, rough: 0.8, band: [2.2, 4.15] }, pending);
   const wallRough = stoneMat('rustic_stone_wall_02', { floor: 0, wet: 0.35, desat: 0.55, tint: [0.70, 0.74, 0.82], hs: 0.03, ns: 1.2, rough: 0.9, band: [0.5, 3.0] }, pending);
-  const wallPlaster = stoneMat('grey_plaster', { floor: 0, wet: 0.2, desat: 0.5, tint: [0.60, 0.63, 0.68], hs: 0.01, ns: 0.5, rough: 0.9 }, pending);
+  const wallPlaster = stoneMat('grey_plaster', { floor: 0, wet: 0.2, desat: 0.6, tint: [0.46, 0.49, 0.55], hs: 0.01, ns: 0.5, rough: 0.9, peel: 1 }, pending);
 
   // —— 地面族 ——
   const floorFlag = m.flag; // 主路：monastery_stone_floor 不规则大石板（含单元图积水）
