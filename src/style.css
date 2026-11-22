@@ -24,8 +24,6 @@ body {
 }
 [hidden] { display: none !important; }
 #game { position: fixed; inset: 0; width: 100%; height: 100%; display: block; outline: none; }
-/* 标题页把实际渲染压成月夜基调（礼拜堂剪影 + 冷灰），仅标题/确认页生效，校准页不压暗。 */
-body.ui-title #game { filter: brightness(0.38) saturate(0.7) contrast(1.05); }
 
 .fx { position: fixed; inset: 0; pointer-events: none; opacity: 0; transition: opacity 0.25s; }
 #fx-threat { background: radial-gradient(ellipse at center, transparent 45%, rgba(0, 0, 0, 0.8) 100%); }
@@ -102,7 +100,7 @@ body.ui-title #game { filter: brightness(0.38) saturate(0.7) contrast(1.05); }
 
 /* 浮层与面板：双线铁框（外细线 + 内发丝线），顶部琥珀细规，标题衬线。 */
 #overlay { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; background: rgba(6, 7, 9, 0.72); }
-#overlay.title { justify-content: flex-start; padding-left: 7vw; background: radial-gradient(ellipse at 64% 42%, rgba(8, 9, 12, 0.16) 0%, rgba(7, 9, 14, 0.7) 80%), linear-gradient(rgba(159, 192, 221, 0.06), rgba(159, 192, 221, 0.06)); }
+#overlay.title { justify-content: flex-start; padding-left: 7vw; background: radial-gradient(ellipse at 64% 42%, rgba(8, 9, 12, 0.05) 0%, rgba(7, 9, 14, 0.5) 82%); }
 #overlay.light { background: rgba(6, 7, 9, 0.35); align-items: flex-end; padding-bottom: 5rem; }
 .panel {
   position: relative; width: 44rem; max-width: 94vw; max-height: 92vh; overflow: auto; padding: 2rem 2.4rem;
@@ -186,13 +184,13 @@ input[type="range"]:focus-visible { outline: 0.15rem solid var(--amber); outline
 .boot-mark h1 { margin: 0.8rem 0 0.2rem; font-size: 2.6rem; font-weight: 600; letter-spacing: 0.4em; text-indent: 0.4em; }
 .boot-sub { margin: 0 0 1.6rem; color: var(--dim); font-size: 1rem; letter-spacing: 0.34em; text-indent: 0.34em; }
 .boot-line { position: relative; width: 16rem; height: 1px; margin: 0 auto; background: var(--line); overflow: hidden; }
-.boot-line i { position: absolute; top: 0; left: 0; width: 34%; height: 100%; background: var(--amber); animation: bootsweep 1.5s ease-in-out infinite; }
-@keyframes bootsweep { 0% { transform: translateX(-110%); } 100% { transform: translateX(310%); } }
+.boot-line i { position: absolute; top: 0; left: 0; width: 0; height: 100%; background: var(--amber); transition: width 0.25s ease-out; }
 .boot-note { margin: 1rem 0 0; color: var(--dim); font-size: 1rem; letter-spacing: 0.12em; }
+.boot-pct { color: var(--amber); font-variant-numeric: tabular-nums; }
 
 @media (prefers-reduced-motion: reduce) {
   .embers i { animation: none; opacity: 0; }
-  .boot-line i { animation: none; width: 100%; opacity: 0.5; }
+  .boot-line i { transition: none; }
 }
 
 #debug { position: fixed; right: 0.5rem; top: 0.5rem; padding: 0.3rem 0.6rem; font: 12px/1.4 monospace; color: var(--dim); background: rgba(11, 13, 16, 0.72); border: 1px solid var(--line-faint); pointer-events: none; white-space: pre; }

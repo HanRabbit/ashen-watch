@@ -10,9 +10,23 @@ const W = Number(process.env.AW_W) || 1920;
 const suffix = W === 1920 ? '' : `-${W}`;
 
 const { browser, page, errors } = await launch({ channel, headless });
+// 加载页：错开节流外部贴图/模型，让真实百分比爬升，抓中段（而非 0% 或 100%）。
+let req = 0;
+let throttling = true;
+const slow = async (r) => {
+  if (throttling) await sleep(150 + (req++ % 12) * 220);
+  try { await r.continue(); } catch { /* 请求已被处理 */ }
+};
+await page.route('**/textures/**', slow);
+await page.route('**/models/**', slow);
 await page.goto(`${BASE}?preset=dev`, { waitUntil: 'domcontentloaded' });
-// 加载页：DOM 就绪、模块尚未跑完时抓拍纯 HTML/CSS 的加载态
-if (!filter || 'ui-boot'.includes(filter)) { await shot(page, `ui-boot${suffix}.png`); console.log('shot', 'ui-boot' + suffix); }
+if (!filter || 'ui-boot'.includes(filter)) {
+  await waitFor(page, () => window.__awLoad && window.__awLoad.total > 0);
+  await sleep(1100);
+  await shot(page, `ui-boot${suffix}.png`);
+  console.log('shot', 'ui-boot' + suffix, await page.evaluate(() => window.__awLoad));
+}
+throttling = false;
 await waitFor(page, () => window.__awProbe?.state().perf.calls > 0);
 await page.evaluate(() => window.__awTexReady);
 await sleep(600);
