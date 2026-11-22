@@ -295,6 +295,7 @@ export class Props {
   private lampArm = new THREE.Group();
   private lampStub: THREE.Mesh;
   private lampFlame: THREE.Group;
+  private lampGlass: THREE.MeshStandardMaterial;
   private lampGround: THREE.Mesh;
   private braziers: { id: BrazierId; flame: THREE.Group; coals: THREE.Mesh; ground: THREE.Mesh; embers: Embers }[] = [];
   private pickLantern: THREE.Group;
@@ -372,33 +373,53 @@ export class Props {
     fallen.rotation.set(0, HALF_PI, 0.12);
     g.add(fallen);
 
-    // 庭院壁灯（PRP-02）
+    // 庭院壁灯（PRP-02）：卷草锻铁挂臂 + 悬挂六角铁灯笼（玻璃 + 顶盖），对标概念图
     const lamp = put(new THREE.Group(), LAMP_POS.x - 0.18, LAMP_POS.y, LAMP_POS.z);
-    const tri = new THREE.Shape();
-    tri.moveTo(-0.26, 0.3); tri.lineTo(0.26, 0.3); tri.lineTo(0, -0.42); tri.lineTo(-0.26, 0.3);
-    const plate = mesh(new THREE.ExtrudeGeometry(tri, { depth: 0.03, bevelEnabled: false }), m.iron);
-    plate.rotation.y = HALF_PI;
-    lamp.add(plate);
-    for (const [ry, rz] of [[-0.18, 0.22], [0.18, 0.22], [0, -0.3]]) {
-      const rivet = mesh(new THREE.SphereGeometry(0.02, 5, 4), m.iron); rivet.position.set(0.04, ry, rz); lamp.add(rivet);
+    const mount = boxMesh(m.iron, 0.05, 0.36, 0.14, 1); mount.position.set(0.03, 0, 0);
+    lamp.add(mount);
+    for (const [ry, rz] of [[-0.14, 0.05], [0.14, 0.05], [-0.14, -0.05], [0.14, -0.05]]) {
+      const rivet = mesh(new THREE.SphereGeometry(0.016, 5, 4), m.iron); rivet.position.set(0.06, ry, rz); lamp.add(rivet);
     }
     this.lampStub = boxMesh(m.iron, 0.2, 0.05, 0.05, 1); this.lampStub.position.set(0.1, -0.12, 0); this.lampStub.rotation.z = -0.7;
-    const arm = boxMesh(m.iron, 0.5, 0.045, 0.045, 1); arm.position.set(0.28, -0.05, 0);
-    const curl = mesh(new THREE.TorusGeometry(0.08, 0.02, 5, 10, Math.PI), m.iron); curl.position.set(0.5, 0.02, 0); curl.rotation.z = -HALF_PI;
-    const cup = cyl(m.iron, 0.13, 0.09, 0.09, 8); cup.position.set(0.55, 0.14, 0);
-    const oilCup = cyl(m.glass, 0.09, 0.09, 0.06, 8); oilCup.position.set(0.55, 0.2, 0);
-    const chimney = mesh(new THREE.CylinderGeometry(0.07, 0.09, 0.22, 8, 1, true), m.glass, false); chimney.position.set(0.55, 0.33, 0);
-    this.lampArm.add(arm, curl, cup, oilCup, chimney);
-    for (let i = 0; i < 5; i++) {
-      const prong = boxMesh(m.iron, 0.025, 0.1, 0.025, 1);
-      prong.position.set(0.55 + Math.cos((i * Math.PI * 2) / 5) * 0.12, 0.22, Math.sin((i * Math.PI * 2) / 5) * 0.12);
-      this.lampArm.add(prong);
+    // 主挂臂：微拱的锻铁管
+    const armCurve = new THREE.CatmullRomCurve3([
+      new THREE.Vector3(0.05, 0.1, 0), new THREE.Vector3(0.22, 0.17, 0),
+      new THREE.Vector3(0.42, 0.18, 0), new THREE.Vector3(0.55, 0.13, 0),
+    ]);
+    const arm = mesh(new THREE.TubeGeometry(armCurve, 12, 0.018, 6), m.iron);
+    // 卷草纹：臂下大卷 + 贴墙小卷 + 端部吊环
+    const curl = mesh(new THREE.TorusGeometry(0.13, 0.014, 5, 14, Math.PI * 1.25), m.iron);
+    curl.position.set(0.28, 0.02, 0); curl.rotation.z = -0.5;
+    const curl2 = mesh(new THREE.TorusGeometry(0.06, 0.012, 5, 10, Math.PI * 1.5), m.iron);
+    curl2.position.set(0.12, -0.08, 0); curl2.rotation.z = 2.2;
+    const curl3 = mesh(new THREE.TorusGeometry(0.05, 0.012, 5, 10, Math.PI * 1.4), m.iron);
+    curl3.position.set(0.47, 0.06, 0); curl3.rotation.z = -1.2;
+    const hangRing = mesh(new THREE.TorusGeometry(0.03, 0.009, 5, 10), m.iron); hangRing.position.set(0.55, 0.1, 0);
+    this.lampArm.add(arm, curl, curl2, curl3, hangRing);
+    // 六角灯笼：顶盖 + 六棱玻璃 + 立柱框 + 底托
+    const lx = 0.55, ly = -0.14;
+    this.lampGlass = new THREE.MeshStandardMaterial({
+      color: 0x2a1c0c, emissive: 0xffa640, emissiveIntensity: 0, roughness: 0.25,
+      transparent: true, opacity: 0.55, side: THREE.DoubleSide,
+    });
+    const cap = mesh(new THREE.ConeGeometry(0.14, 0.1, 6), m.iron); cap.position.set(lx, ly + 0.16, 0);
+    const capRim = mesh(new THREE.CylinderGeometry(0.15, 0.16, 0.022, 6), m.iron); capRim.position.set(lx, ly + 0.11, 0);
+    const vent = cyl(m.iron, 0.025, 0.04, 0.035, 6); vent.position.set(lx, ly + 0.22, 0);
+    const glassBody = mesh(new THREE.CylinderGeometry(0.105, 0.105, 0.2, 6, 1, true), this.lampGlass, false); glassBody.position.set(lx, ly, 0);
+    const baseRim = mesh(new THREE.CylinderGeometry(0.16, 0.13, 0.025, 6), m.iron); baseRim.position.set(lx, ly - 0.11, 0);
+    const finial = mesh(new THREE.SphereGeometry(0.022, 6, 5), m.iron); finial.position.set(lx, ly - 0.14, 0);
+    this.lampArm.add(cap, capRim, vent, glassBody, baseRim, finial);
+    for (let i = 0; i < 6; i++) {
+      const a = (i * Math.PI * 2) / 6 + Math.PI / 6;
+      const post = boxMesh(m.iron, 0.014, 0.21, 0.014, 1);
+      post.position.set(lx + Math.cos(a) * 0.105, ly, Math.sin(a) * 0.105);
+      this.lampArm.add(post);
     }
-    this.lampFlame = flame(tex, 0.2); this.lampFlame.position.set(0.55, 0.23, 0);
+    this.lampFlame = flame(tex, 0.16); this.lampFlame.position.set(lx, ly - 0.09, 0);
     this.lampArm.add(this.lampFlame);
     lamp.add(this.lampStub, this.lampArm);
     g.add(lamp);
-    put(this.lampLight, LAMP_POS.x + 1.4, LAMP_POS.y + 0.5, LAMP_POS.z);
+    put(this.lampLight, LAMP_POS.x + 0.37, LAMP_POS.y - 0.14, LAMP_POS.z);
     g.add(this.lampLight);
     const zn = WALL_LAMP.zone;
     this.lampGround = new THREE.Mesh(
@@ -412,7 +433,7 @@ export class Props {
     put(this.lampDebugRing, zn.x, 0.06, zn.z);
     this.lampDebugRing.visible = false;
     g.add(this.lampGround, this.lampDebugRing);
-    this.lampEmbers = new Embers(LAMP_POS.x + 0.37, LAMP_POS.y + 0.3, LAMP_POS.z, 10, 0.7, 0xffb060, 0.06);
+    this.lampEmbers = new Embers(LAMP_POS.x + 0.37, LAMP_POS.y + 0.06, LAMP_POS.z, 10, 0.7, 0xffb060, 0.06);
     g.add(this.lampEmbers.points);
 
     // 火盆
@@ -582,6 +603,7 @@ export class Props {
     this.lampStub.visible = !w.repairs.lamp;
     this.lampFlame.visible = lit;
     const fade = lit ? Math.min(1, w.lampBurn / 12) : 0;
+    this.lampGlass.emissiveIntensity = lit ? 1.8 * fade * flick : 0;
     this.lampLight.intensity = 45 * fade * flick;
     this.lampGround.visible = lit;
     (this.lampGround.material as THREE.MeshBasicMaterial).opacity = 0.38 * fade * flick;
