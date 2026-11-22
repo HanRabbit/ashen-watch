@@ -7,14 +7,14 @@ import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { PHASE } from '../config';
-import { cameraClearT } from '../sim/collision';
-import { groundY, regionAt } from '../sim/level';
 import { World } from '../sim/state';
+import { CameraRig } from './camera';
 import { GhostModels, PlayerModel } from './characters';
 import { clamp01, lerp, smooth } from './geom';
 import { glowTexture, makeMaterials, smokeTexture } from './materials';
 import { Props } from './props';
 import { buildStaticLevel, StaticLevel } from './staticLevel';
+import { Vfx } from './vfx';
 
 export type Quality = 'high' | 'low';
 
@@ -110,12 +110,12 @@ const GradeShader = {
   uniforms: {
     tDiffuse: { value: null as THREE.Texture | null },
     uVig: { value: 0.5 }, uSat: { value: 1 }, uContrast: { value: 1 }, uGrain: { value: 0.03 }, uTime: { value: 0 },
-    uTintS: { value: new THREE.Color() }, uTintH: { value: new THREE.Color() },
+    uTintS: { value: new THREE.Color() }, uTintH: { value: new THREE.Color() }, uHurt: { value: 0 },
   },
   vertexShader: /* glsl */`varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
   fragmentShader: /* glsl */`
     uniform sampler2D tDiffuse; uniform float uVig, uSat, uContrast, uGrain, uTime;
-    uniform vec3 uTintS, uTintH; varying vec2 vUv;
+    uniform vec3 uTintS, uTintH; uniform float uHurt; varying vec2 vUv;
     float hash(vec2 p) { return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
     void main() {
       vec3 c = texture2D(tDiffuse, vUv).rgb;
@@ -126,13 +126,11 @@ const GradeShader = {
       c += uTintH * clamp(l, 0.0, 1.0) * 0.4;
       float d = distance(vUv, vec2(0.5));
       c *= 1.0 - uVig * smoothstep(0.32, 0.85, d);
+      c = mix(c, vec3(0.45, 0.04, 0.05), uHurt * smoothstep(0.25, 0.75, d) * 0.8);
       c += (hash(vUv * vec2(1920.0, 1080.0) + fract(uTime) * 13.0) - 0.5) * uGrain;
       gl_FragColor = vec4(max(c, 0.0), 1.0);
     }`,
 };
-
-const CAM = { dist: 3.4, shoulder: 0.78, pivotY: 1.62, minDist: 0.35 };
-const FAN = { n: 12, step: (3 * Math.PI) / 180 };
 
 export interface RenderPose { x: number; z: number; ghosts: { x: number; z: number }[] }
 
@@ -155,8 +153,8 @@ export class SceneView {
   private composer: EffectComposer;
   private bloom: UnrealBloomPass;
   private grade: ShaderPass;
-  private camDist = CAM.dist;
-  private camShoulder = CAM.shoulder;
+  private camRig: CameraRig;
+  private vfx: Vfx;
   private ca = new THREE.Color(); private cb = new THREE.Color();
   private mist: THREE.Sprite[] = [];
   private mistMat: THREE.SpriteMaterial;
@@ -167,7 +165,8 @@ export class SceneView {
   private rig: Rig = { ...RIGS.morning };
   private dawnT = 0;
   brightness = 1;
-  fixedCam: { pos: [number, number, number]; look: [number, number, number] } | null = null;
+  get fixedCam(): { pos: [number, number, number]; look: [number, number, number] } | null { return this.camRig.fixedCam; }
+  set fixedCam(v: { pos: [number, number, number]; look: [number, number, number] } | null) { this.camRig.fixedCam = v; }
 
   constructor(canvas: HTMLCanvasElement) {
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
@@ -264,6 +263,9 @@ export class SceneView {
     this.composer.addPass(this.grade);
     this.composer.addPass(new OutputPass());
 
+    this.camRig = new CameraRig(this.camera);
+    this.vfx = new Vfx();
+    this.scene.add(this.vfx.group);
     this.resize();
     window.addEventListener('resize', () => this.resize());
   }
@@ -278,6 +280,7 @@ export class SceneView {
     this.sun.shadow.map?.dispose();
     this.sun.shadow.map = null;
     this.dust.visible = high;
+    this.vfx.setQuality(q);
     this.props.setQuality(q);
     this.resize();
   }
@@ -336,6 +339,7 @@ export class SceneView {
     const gu = this.grade.uniforms;
     gu.uVig.value = r.vignette; gu.uSat.value = r.sat; gu.uContrast.value = r.contrast; gu.uTime.value = time;
     gu.uTintS.value.setHex(r.tintS); gu.uTintH.value.setHex(r.tintH);
+    gu.uHurt.value = this.vfx.hurt;
 
     this.level.windowMat.emissiveIntensity = r.window;
     this.level.hearthWindowMat.emissiveIntensity = w.hearth.lit ? 1.5 : 0.03;
@@ -348,66 +352,15 @@ export class SceneView {
     (this.dust.material as THREE.PointsMaterial).opacity = 0.08 + 0.12 * dayness;
   }
 
-  private sweep(ax: number, az: number, ay: number, dir: number, len: number, by: number, doors: World['doors']): [number, number] {
-    const cast = (off: number): number =>
-      cameraClearT(ax, az, ay, ax + Math.sin(dir + off) * len, az + Math.cos(dir + off) * len, by, doors);
-    const span = FAN.n * FAN.step;
-    const hard = cast(0);
-    let soft = hard;
-    for (const side of [-1, 1]) {
-      let tPrev = hard, oPrev = 0;
-      for (let k = 1; k <= FAN.n; k++) {
-        const o = k * FAN.step, t = cast(o * side);
-        if (Math.abs(t - tPrev) > 0.06) {
-          let lo = oPrev, hi = o, tLo = tPrev, tHi = t;
-          for (let i = 0; i < 5; i++) {
-            const mid = (lo + hi) / 2, tm = cast(mid * side);
-            if (Math.abs(tm - tLo) < Math.abs(tm - tHi)) { lo = mid; tLo = tm; } else { hi = mid; tHi = tm; }
-          }
-          soft = Math.min(soft, tLo + lo / span, tHi + hi / span);
-        }
-        soft = Math.min(soft, t + o / span);
-        tPrev = t; oPrev = o;
-      }
-    }
-    return [hard, soft];
-  }
-
-  private updateCamera(w: World, p: { x: number; z: number }, yaw: number, pitch: number, dt: number): void {
-    if (this.fixedCam) {
-      const f = this.fixedCam;
-      this.camera.position.set(f.pos[0], f.pos[1], -f.pos[2]);
-      this.camera.lookAt(f.look[0], f.look[1], -f.look[2]);
-      return;
-    }
-    const sy = Math.sin(yaw), cy = Math.cos(yaw), cp = Math.cos(pitch), sp = Math.sin(pitch);
-    const py = groundY(p.x, p.z) + CAM.pivotY;
-    const reach = CAM.shoulder + 0.3;
-    const side = this.sweep(p.x, p.z, py, yaw + Math.PI / 2, reach, py, w.doors);
-    const shHard = Math.max(0, Math.min(CAM.shoulder, side[0] * reach - 0.3));
-    const shWant = Math.max(0, Math.min(CAM.shoulder, side[1] * reach - 0.3));
-    this.camShoulder = Math.min(shHard, shWant < this.camShoulder ? shWant : lerp(this.camShoulder, shWant, Math.min(1, dt * 6)));
-    const sh = this.camShoulder;
-    const ax = p.x + cy * sh, az = p.z - sy * sh;
-    const back = this.sweep(ax, az, py, yaw + Math.PI, cp * CAM.dist, py + sp * CAM.dist, w.doors);
-    let hard = Math.max(CAM.minDist, back[0] * CAM.dist - 0.25);
-    const top = regionAt(p.x, p.z) === 'gatehouse' ? 3.25 : regionAt(p.x, p.z) === 'chapel' ? 6.5 : regionAt(p.x, p.z) === 'porch' ? 3.3 : 60;
-    if (sp > 0.01) hard = Math.min(hard, Math.max(CAM.minDist, (top - py) / sp));
-    if (sp < -0.01) hard = Math.min(hard, Math.max(CAM.minDist, (py - 0.25 - groundY(p.x, p.z)) / -sp));
-    const want = Math.min(hard, Math.max(CAM.minDist, back[1] * CAM.dist - 0.25));
-    this.camDist = Math.min(hard, want < this.camDist ? want : lerp(this.camDist, want, Math.min(1, dt * 5)));
-    const d = this.camDist;
-    this.camera.position.set(ax - sy * cp * d, py + sp * d, -(az - cy * cp * d));
-    this.camera.lookAt(ax + sy * cp * 6, py - sp * 6, -(az + cy * cp * 6));
-    this.player.group.visible = d > 0.85;
-  }
-
   update(w: World, pose: RenderPose, yaw: number, pitch: number, dt: number, time: number): void {
     this.applyLighting(w, pose, dt, time);
     this.props.update(w, dt, time);
     this.player.update(w, pose, yaw, dt, time);
     this.ghosts.update(w, pose.ghosts, dt, time);
-    this.updateCamera(w, pose, yaw, pitch, dt);
+    this.vfx.update(w, pose, dt, time);
+    if (this.vfx.consumeKick()) this.camRig.kick(1);
+    const camD = this.camRig.update(w, pose, yaw, pitch, dt);
+    this.player.group.visible = camD > 0.85;
     this.mist.forEach((s, i) => { s.position.x += Math.sin(time * 0.13 + i * 1.7) * dt * 0.12; });
     if (this.dust.visible) {
       const pos = this.dust.geometry.attributes.position as THREE.BufferAttribute;
