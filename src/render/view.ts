@@ -14,96 +14,63 @@ import { GhostModels, PlayerModel } from './characters';
 import { clamp01, lerp, smooth } from './geom';
 import { glowTexture, makeMaterials, smokeTexture } from './materials';
 import { Props } from './props';
+import { applySky, makeSkyMaterial, SkyState } from './sky';
 import { buildStaticLevel, StaticLevel } from './staticLevel';
 
 export type Quality = 'cinematic' | 'high' | 'low';
 
-interface Rig {
+interface Rig extends SkyState {
   fog: number; fogNear: number; fogFar: number;
+  fogDistMax: number; fogHeightDensity: number; fogHeightFalloff: number; fogHeightBase: number;
   hemiSky: number; hemiGround: number; hemi: number;
-  sun: number; sunI: number; sunDir: [number, number, number];
+  sunI: number; shadowI: number;
   exposure: number; window: number;
-  zenith: number; horizon: number; ground: number;
-  discSize: number; discI: number; glow: number; stars: number;
-  envI: number; bloom: number; vignette: number; sat: number; contrast: number;
-  tintS: number; tintH: number;
+  envI: number; bloom: number; vignette: number; grain: number; sat: number; contrast: number;
+  tintS: number; tintH: number; glowStrength: number;
 }
 
 const RIGS: Record<'morning' | 'day' | 'dusk' | 'night', Rig> = {
   morning: {
-    fog: 0x9aa2a8, fogNear: 24, fogFar: 115, hemiSky: 0xcdd5db, hemiGround: 0x575049, hemi: 2.0,
-    sun: 0xffe2c0, sunI: 2.6, sunDir: [-0.75, 0.5, -0.35], exposure: 1.0, window: 0.9,
-    zenith: 0x8fa0b2, horizon: 0xc4cacd, ground: 0x4a4640, discSize: 0.0, discI: 0, glow: 0.18, stars: 0,
-    envI: 0.8, bloom: 0.2, vignette: 0.55, sat: 0.93, contrast: 1.04, tintS: 0x14202c, tintH: 0xffe8c8,
+    fog: 0x9aa2a8, fogNear: 26, fogFar: 120, fogDistMax: 0.85, fogHeightDensity: 0.016, fogHeightFalloff: 0.1, fogHeightBase: 0.5,
+    hemiSky: 0xcdd5db, hemiGround: 0x575049, hemi: 2.1,
+    sun: 0xffe2c0, sunI: 2.2, shadowI: 0.45, sunDir: [-0.75, 0.5, -0.35], exposure: 1.0, window: 0.9,
+    zenith: 0x8fa0b2, horizon: 0xc4cacd, ground: 0x4a4640,
+    cloudLit: 0xe6e9ec, cloudDark: 0x9aa3ac, cover: 0.8, rim: 0.25,
+    discSize: 0.0, discI: 0, glow: 0.18, stars: 0,
+    envI: 0.85, bloom: 0.2, vignette: 0.5, grain: 0.02, sat: 0.92, contrast: 1.04, tintS: 0x14202c, tintH: 0xffe8c8, glowStrength: 0.12,
   },
   day: {
-    fog: 0x97a0a8, fogNear: 30, fogFar: 135, hemiSky: 0xc8d2da, hemiGround: 0x5c564e, hemi: 2.4,
-    sun: 0xeef2f5, sunI: 3.0, sunDir: [-0.3, 0.85, -0.42], exposure: 1.0, window: 1.0,
-    zenith: 0x7f93a6, horizon: 0xbcc5cb, ground: 0x504c46, discSize: 0.0, discI: 0, glow: 0.22, stars: 0,
-    envI: 0.9, bloom: 0.15, vignette: 0.52, sat: 0.96, contrast: 1.05, tintS: 0x14202c, tintH: 0xfff0d8,
+    fog: 0x9aa4ac, fogNear: 34, fogFar: 140, fogDistMax: 0.9, fogHeightDensity: 0.02, fogHeightFalloff: 0.085, fogHeightBase: 0.5,
+    hemiSky: 0xc8d2da, hemiGround: 0x5c564e, hemi: 2.5,
+    sun: 0xeef2f5, sunI: 2.0, shadowI: 0.35, sunDir: [-0.3, 0.85, -0.42], exposure: 1.0, window: 1.0,
+    zenith: 0x7f93a6, horizon: 0xbcc5cb, ground: 0x504c46,
+    cloudLit: 0xeef1f3, cloudDark: 0x98a2ab, cover: 0.88, rim: 0.18,
+    discSize: 0.0, discI: 0, glow: 0.2, stars: 0,
+    envI: 0.95, bloom: 0.14, vignette: 0.5, grain: 0.018, sat: 0.9, contrast: 1.05, tintS: 0x16222c, tintH: 0xfff0d8, glowStrength: 0.05,
   },
   dusk: {
-    fog: 0x5a5560, fogNear: 18, fogFar: 92, hemiSky: 0x8a92a6, hemiGround: 0x3b332d, hemi: 1.0,
-    sun: 0xe09a62, sunI: 1.7, sunDir: [0.8, 0.2, 0.3], exposure: 1.0, window: 0.45,
-    zenith: 0x39445a, horizon: 0x9a7260, ground: 0x332c28, discSize: 0.035, discI: 2.6, glow: 0.7, stars: 0.18,
-    envI: 0.5, bloom: 0.25, vignette: 0.65, sat: 0.9, contrast: 1.06, tintS: 0x182030, tintH: 0xffb070,
+    fog: 0x5a5560, fogNear: 20, fogFar: 100, fogDistMax: 0.85, fogHeightDensity: 0.02, fogHeightFalloff: 0.09, fogHeightBase: 0.5,
+    hemiSky: 0x8a92a6, hemiGround: 0x3b332d, hemi: 1.1,
+    sun: 0xe09a62, sunI: 1.6, shadowI: 0.5, sunDir: [0.8, 0.2, 0.3], exposure: 1.0, window: 0.45,
+    zenith: 0x39445a, horizon: 0x9a7260, ground: 0x332c28,
+    cloudLit: 0xb08a78, cloudDark: 0x4a4452, cover: 0.75, rim: 0.5,
+    discSize: 0.035, discI: 2.6, glow: 0.7, stars: 0.18,
+    envI: 0.55, bloom: 0.25, vignette: 0.62, grain: 0.022, sat: 0.9, contrast: 1.06, tintS: 0x182030, tintH: 0xffb070, glowStrength: 0.3,
   },
   night: {
-    fog: 0x0c111a, fogNear: 10, fogFar: 52, hemiSky: 0x4a5c78, hemiGround: 0x161a21, hemi: 0.85,
-    sun: 0x8ba2c6, sunI: 0.7, sunDir: [-0.5, 0.7, -0.45], exposure: 1.05, window: 0.07,
-    zenith: 0x070b14, horizon: 0x161e2c, ground: 0x0a0d12, discSize: 0.022, discI: 3.2, glow: 0.3, stars: 1,
-    envI: 0.3, bloom: 0.3, vignette: 0.85, sat: 0.86, contrast: 1.07, tintS: 0x1a3040, tintH: 0xff9a50,
+    // 月光从画面右上方来（与天空月盘同向），冷蓝 #7f9ccf；暗部保留约 20–30% 可读亮度。
+    fog: 0x101826, fogNear: 20, fogFar: 90, fogDistMax: 0.8, fogHeightDensity: 0.022, fogHeightFalloff: 0.08, fogHeightBase: 0.5,
+    hemiSky: 0x51648a, hemiGround: 0x1a2029, hemi: 0.6,
+    sun: 0x7f9ccf, sunI: 1.15, shadowI: 0.5, sunDir: [0.62, 0.72, 0.05], exposure: 1.12, window: 0.07,
+    zenith: 0x0a1322, horizon: 0x1d2b42, ground: 0x0a0e15,
+    cloudLit: 0x46587a, cloudDark: 0x131c2e, cover: 0.72, rim: 0.85,
+    discSize: 0.026, discI: 5.5, glow: 0.55, stars: 1,
+    envI: 0.55, bloom: 0.32, vignette: 0.8, grain: 0.025, sat: 0.88, contrast: 1.06, tintS: 0x16283c, tintH: 0xff9a50, glowStrength: 0.55,
   },
 };
 
-const COLOR_KEYS = ['fog', 'hemiSky', 'hemiGround', 'sun', 'zenith', 'horizon', 'ground', 'tintS', 'tintH'] as const;
-const NUM_KEYS = ['fogNear', 'fogFar', 'hemi', 'sunI', 'exposure', 'window', 'discSize', 'discI', 'glow', 'stars', 'envI', 'bloom', 'vignette', 'sat', 'contrast'] as const;
-
-const SKY_VERT = /* glsl */`
-varying vec3 vDir;
-void main() {
-  vDir = normalize(position);
-  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-}`;
-
-const SKY_FRAG = /* glsl */`
-uniform vec3 uZenith, uHorizon, uGround, uSunDir, uSunColor;
-uniform float uDiscSize, uDiscI, uGlow, uStars, uTime;
-varying vec3 vDir;
-float hash21(vec2 p) { p = fract(p * vec2(123.34, 456.21)); p += dot(p, p + 45.32); return fract(p.x * p.y); }
-void main() {
-  vec3 d = normalize(vDir);
-  float h = d.y;
-  vec3 col = mix(uHorizon, uZenith, pow(clamp(h, 0.0, 1.0), 0.55));
-  col = mix(col, uGround, smoothstep(0.0, -0.25, h));
-  float sun = clamp(dot(d, normalize(uSunDir)), 0.0, 1.0);
-  float ang = acos(clamp(dot(d, normalize(uSunDir)), -1.0, 1.0));
-  float disc = smoothstep(uDiscSize, uDiscSize * 0.82, ang);
-  col += uSunColor * (disc * uDiscI + pow(sun, 90.0) * uGlow + pow(sun, 8.0) * uGlow * 0.25);
-  if (uStars > 0.001 && h > 0.0) {
-    vec2 uv = vec2(atan(d.z, d.x) * 3.0, asin(clamp(h, -1.0, 1.0)) * 6.0);
-    vec2 cell = floor(uv * 24.0);
-    vec2 f = fract(uv * 24.0) - 0.5;
-    float rnd = hash21(cell);
-    float star = step(0.965, rnd) * smoothstep(0.12, 0.0, length(f));
-    float tw = 0.6 + 0.4 * sin(uTime * 2.0 + rnd * 40.0);
-    col += vec3(0.8, 0.85, 1.0) * star * tw * uStars * smoothstep(0.0, 0.25, h);
-  }
-  gl_FragColor = vec4(col, 1.0);
-  #include <tonemapping_fragment>
-  #include <colorspace_fragment>
-}`;
-
-function makeSkyMaterial(): THREE.ShaderMaterial {
-  return new THREE.ShaderMaterial({
-    vertexShader: SKY_VERT, fragmentShader: SKY_FRAG, side: THREE.BackSide, depthWrite: false, fog: false,
-    uniforms: {
-      uZenith: { value: new THREE.Color() }, uHorizon: { value: new THREE.Color() }, uGround: { value: new THREE.Color() },
-      uSunDir: { value: new THREE.Vector3(0, 1, 0) }, uSunColor: { value: new THREE.Color() },
-      uDiscSize: { value: 0 }, uDiscI: { value: 0 }, uGlow: { value: 0 }, uStars: { value: 0 }, uTime: { value: 0 },
-    },
-  });
-}
+const COLOR_KEYS = ['fog', 'hemiSky', 'hemiGround', 'sun', 'zenith', 'horizon', 'ground', 'cloudLit', 'cloudDark', 'tintS', 'tintH'] as const;
+const NUM_KEYS = ['fogNear', 'fogFar', 'fogDistMax', 'fogHeightDensity', 'fogHeightFalloff', 'fogHeightBase', 'hemi', 'sunI', 'shadowI', 'exposure', 'window', 'discSize', 'discI', 'glow', 'stars', 'cover', 'rim', 'envI', 'bloom', 'vignette', 'grain', 'sat', 'contrast', 'glowStrength'] as const;
 
 // 调色 pass（在线性 HDR 空间，OutputPass 之前）：饱和、对比、暗部/亮部分色、暗角、细颗粒。
 const GradeShader = {
@@ -207,10 +174,7 @@ export class SceneView {
     const envSky = new THREE.Mesh(new THREE.SphereGeometry(50, 24, 12), makeSkyMaterial());
     envScene.add(envSky);
     const bake = (r: Rig): THREE.Texture => {
-      const u = (envSky.material as THREE.ShaderMaterial).uniforms;
-      u.uZenith.value.setHex(r.zenith); u.uHorizon.value.setHex(r.horizon); u.uGround.value.setHex(r.ground);
-      u.uSunDir.value.set(...r.sunDir); u.uSunColor.value.setHex(r.sun);
-      u.uDiscSize.value = r.discSize; u.uDiscI.value = r.discI; u.uGlow.value = r.glow; u.uStars.value = 0;
+      applySky(envSky.material as THREE.ShaderMaterial, { ...r, stars: 0 }, 0);
       return pmrem.fromScene(envScene, 0.04, 0.1, 100).texture;
     };
     this.envDay = bake(RIGS.day);
@@ -323,12 +287,10 @@ export class SceneView {
     this.sun.position.set(p.x + r.sunDir[0] * 45, r.sunDir[1] * 45, -p.z + r.sunDir[2] * 45);
     this.renderer.toneMappingExposure = r.exposure * this.brightness;
 
-    // 天空与环境光
-    const u = this.skyMat.uniforms;
-    u.uZenith.value.setHex(r.zenith); u.uHorizon.value.setHex(r.horizon); u.uGround.value.setHex(r.ground);
-    u.uSunDir.value.set(...r.sunDir); u.uSunColor.value.setHex(r.sun);
-    u.uDiscSize.value = r.discSize; u.uDiscI.value = r.discI; u.uGlow.value = r.glow; u.uStars.value = r.stars; u.uTime.value = time;
+    // 天空与环境光（同一着色器烘 IBL，见构造函数）
+    applySky(this.skyMat, r, time);
     this.sky.position.copy(this.camera.position);
+    this.sun.shadow.intensity = r.shadowI;
     const nightish = r.stars > 0.5;
     this.scene.environment = nightish ? this.envNight : this.envDay;
     this.scene.environmentIntensity = r.envI;
