@@ -13,6 +13,8 @@ import { applySky, makeSkyMaterial, SkyState } from './sky';
 import { FogController, installHeightFog } from './post/fog';
 import { PostPipeline } from './post/pipeline';
 import { installSoftShadows } from './post/shadows';
+import { buildLandmarks, hideLegacy } from './landmarks';
+import { buildScenery } from './scenery';
 import { buildStaticLevel, StaticLevel } from './staticLevel';
 
 installHeightFog();
@@ -137,6 +139,8 @@ export class SceneView {
     this.player = new PlayerModel(m, glowTexture());
     this.ghosts = new GhostModels();
     this.scene.add(this.level.group, this.props.group, this.player.group, this.ghosts.group);
+    const landmarks = buildLandmarks(m); hideLegacy(this.level.group);
+    this.scene.add(landmarks.group, buildScenery(m).group);
 
     // 天空穹顶：跟随镜头，渐变天 + 日/月盘 + 夜星
     this.sky = new THREE.Mesh(new THREE.SphereGeometry(250, 32, 16), this.skyMat);
@@ -271,6 +275,8 @@ export class SceneView {
     const r = this.rig;
     (this.scene.background as THREE.Color).setHex(r.fog);
     this.fog.color.setHex(r.fog); this.fog.near = r.fogNear; this.fog.far = r.fogFar;
+    // 共享昼夜信号：landmarks/scenery 的 onBeforeRender 读取（0 = 白天，1 = 深夜）
+    this.scene.userData.night = clamp01(r.stars);
     this.fogCtl.update({ heightDensity: r.fogHeightDensity, heightFalloff: r.fogHeightFalloff, heightBase: r.fogHeightBase, distMax: r.fogDistMax });
     this.hemi.color.setHex(r.hemiSky); this.hemi.groundColor.setHex(r.hemiGround); this.hemi.intensity = r.hemi;
     this.sun.color.setHex(r.sun); this.sun.intensity = r.sunI;
