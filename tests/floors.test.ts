@@ -1,8 +1,7 @@
 // 三层新增验收：跨层导航、楼板阻断视线、楼梯高度连续、存档往返楼层、修复组合撤退路线、跨层噪声。
 import { describe, expect, it } from 'vitest';
-import { FIXED_DT, GHOST } from '../src/config';
-import { hasLineOfSight, solidBoxes, cylsAt, circleBlocked } from '../src/sim/collision';
-import { DoorId, NODES, STAIRS, supportY, ceilingY, regionAt3 } from '../src/sim/level';
+import { hasLineOfSight } from '../src/sim/collision';
+import { DoorId, supportY, ceilingY, regionAt3 } from '../src/sim/level';
 import { findNodePath, findPath, reachableFrom } from '../src/sim/nav';
 import { newGhost, newWorld } from '../src/sim/state';
 import { Driver, STAND } from './driver';

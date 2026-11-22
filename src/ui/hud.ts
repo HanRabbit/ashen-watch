@@ -18,6 +18,11 @@ const PHASE_NAME: Record<string, string> = {
   tutorial: '清晨', day: '白天', dusk: '黄昏', night: '夜间', dawn: '晨曦', ended: '晨曦', failed: '夜间',
 };
 
+// 时段图标（装饰，不改变文字含义）：阴天圆盘 / 月牙 / 地平线半日。
+const PHASE_ICON: Record<string, string> = {
+  tutorial: 'dawn', day: 'day', dusk: 'dawn', night: 'night', dawn: 'dawn', ended: 'dawn', failed: 'night',
+};
+
 const DIRS = ['前方', '右前', '右侧', '右后', '后方', '左后', '左侧', '左前'];
 
 export function goalText(w: World): string {
@@ -88,20 +93,17 @@ export class Hud {
     if (w.phase === 'day') phase += ` · 距黄昏 ${fmtTime(PHASE.dayLength - w.clock)}`;
     else if (w.phase === 'dusk') phase += ` · 距入夜 ${fmtTime(PHASE.duskLength - w.clock)}`;
     else if (w.phase === 'night') phase += ` · 距晨曦 ${fmtTime(PHASE.nightLength - w.clock)}`;
+    const icon = PHASE_ICON[w.phase] ?? 'day';
     // map: 楼层提示（UI-04）+ 楼梯去向
-    const fl = w.player.floor;
-    let floorTxt = ` · ${fl}`;
-    for (const st of STAIRS) {
-      for (const nid of [st.a, st.b]) {
-        const n = node(nid);
-        if (n.floor === fl && Math.hypot(n.x - w.player.x, n.z - w.player.z) < 2.2 && Math.abs(n.y - w.player.y) < 1.2) {
-          const other = nid === st.a ? st.b : st.a;
-          const on = node(other);
-          floorTxt += `（楼梯→${on.floor}）`;
-        }
+    let floorTxt = ` · ${w.player.floor}`;
+    for (const st of STAIRS) for (const nid of [st.a, st.b]) {
+      const n = node(nid);
+      if (n.floor === w.player.floor && Math.hypot(n.x - w.player.x, n.z - w.player.z) < 2.2 && Math.abs(n.y - w.player.y) < 1.2) {
+        const on = node(nid === st.a ? st.b : st.a);
+        floorTxt += `（楼梯→${on.floor}）`;
       }
     }
-    this.set('phase', this.phase, phase + floorTxt);
+    this.set('phase', this.phase, `<svg class="ph-ic ${icon}" aria-hidden="true"><use href="#i-phase-${icon}"/></svg>${phase}${floorTxt}`);
     this.set('goal', this.goal, goalText(w));
 
     // 状态条
@@ -125,8 +127,8 @@ export class Hud {
       + slot('iron', '铁件', `${inv.iron}`, inv.iron ? '' : 'empty')
       + slot('oil', '灯油', `${inv.oil}`, inv.oil ? '' : 'empty')
       + slot('meal', '热食', inv.meal ? `${inv.meal} <span class="key">${mouse ? '工具栏' : keyName(b.eat)}</span>` : '0', inv.meal ? '' : 'empty')
-      + slot('lantern', '提灯', !inv.hasLantern ? '无' : lan.on ? '点亮' : '熄灭', inv.hasLantern ? '' : 'empty')
-      + slot('clapper', '钟舌', w.quest.installed ? '已装' : inv.hasClapper ? '持有' : '未取', `task ${inv.hasClapper || w.quest.installed ? '' : 'empty'}`));
+      + slot('lantern', '提灯', !inv.hasLantern ? '无' : lan.on ? '点亮' : '熄灭', !inv.hasLantern ? 'empty' : lan.on ? 'lit' : '')
+      + slot('clapper', '钟舌', w.quest.installed ? '已装' : inv.hasClapper ? '持有' : '未取', `task ${inv.hasClapper || w.quest.installed ? 'held' : 'empty'}`));
 
     // 交互提示
     if (target) {
