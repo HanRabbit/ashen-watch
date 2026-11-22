@@ -66,8 +66,8 @@ void main() {
     cloudDensity(cuv + vec2(0.0, 0.22)) - cloudDensity(cuv - vec2(0.0, 0.22)));
   vec3 cn = normalize(vec3(-grad.x, 0.55, -grad.y));
   float lambert = clamp(dot(cn, sunDir), 0.0, 1.0);
-  vec3 cloudCol = mix(uCloudDark, uCloudLit, 0.18 + 0.82 * lambert);
-  cloudCol *= mix(1.0, 0.72, smoothstep(0.55, 0.95, dens)); // 厚云更沉
+  vec3 cloudCol = mix(uCloudDark, uCloudLit, 0.12 + 0.75 * lambert);
+  cloudCol *= mix(1.0, 0.62, smoothstep(0.5, 0.95, dens)); // 厚云更沉
   // 日/月方向的银边：薄云边缘被照亮
   float towards = pow(clamp(dot(d, sunDir), 0.0, 1.0), 5.0);
   float edge = clamp(1.0 - cover, 0.0, 1.0);

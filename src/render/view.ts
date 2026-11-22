@@ -39,7 +39,7 @@ interface Rig extends SkyState {
 
 const RIGS: Record<'morning' | 'day' | 'dusk' | 'night', Rig> = {
   morning: {
-    fog: 0x9aa2a8, fogNear: 26, fogFar: 120, fogDistMax: 0.85, fogHeightDensity: 0.016, fogHeightFalloff: 0.1, fogHeightBase: 0.5,
+    fog: 0x9aa2a8, fogNear: 26, fogFar: 120, fogDistMax: 0.85, fogHeightDensity: 0.01, fogHeightFalloff: 0.12, fogHeightBase: 0.0,
     hemiSky: 0xcdd5db, hemiGround: 0x575049, hemi: 2.1,
     sun: 0xffe2c0, sunI: 2.2, shadowI: 0.45, sunDir: [-0.75, 0.5, -0.35], exposure: 1.0, window: 0.9,
     zenith: 0x8fa0b2, horizon: 0xc4cacd, ground: 0x4a4640,
@@ -48,16 +48,16 @@ const RIGS: Record<'morning' | 'day' | 'dusk' | 'night', Rig> = {
     envI: 0.85, bloom: 0.2, vignette: 0.5, grain: 0.02, sat: 0.92, contrast: 1.04, tintS: 0x14202c, tintH: 0xffe8c8, glowStrength: 0.12,
   },
   day: {
-    fog: 0x9aa4ac, fogNear: 30, fogFar: 120, fogDistMax: 0.95, fogHeightDensity: 0.028, fogHeightFalloff: 0.085, fogHeightBase: 0.5,
-    hemiSky: 0xc8d2da, hemiGround: 0x5c564e, hemi: 1.9,
-    sun: 0xeef2f5, sunI: 2.4, shadowI: 0.35, sunDir: [-0.3, 0.85, -0.42], exposure: 0.95, window: 1.0,
+    fog: 0x9aa4ac, fogNear: 26, fogFar: 95, fogDistMax: 0.95, fogHeightDensity: 0.01, fogHeightFalloff: 0.12, fogHeightBase: 0.0,
+    hemiSky: 0xc8d2da, hemiGround: 0x5c564e, hemi: 1.7,
+    sun: 0xeef2f5, sunI: 2.4, shadowI: 0.35, sunDir: [-0.3, 0.85, -0.42], exposure: 0.82, window: 1.0,
     zenith: 0x7f93a6, horizon: 0xbcc5cb, ground: 0x504c46,
-    cloudLit: 0xf0f3f5, cloudDark: 0x87919c, cover: 0.9, rim: 0.18,
+    cloudLit: 0xf0f3f5, cloudDark: 0x6f7a86, cover: 0.78, rim: 0.18,
     discSize: 0.0, discI: 0, glow: 0.2, stars: 0,
-    envI: 0.75, bloom: 0.14, vignette: 0.5, grain: 0.018, sat: 0.9, contrast: 1.05, tintS: 0x16222c, tintH: 0xfff0d8, glowStrength: 0.05,
+    envI: 0.75, bloom: 0.14, vignette: 0.45, grain: 0.018, sat: 0.86, contrast: 1.1, tintS: 0x2a3640, tintH: 0xfff0d8, glowStrength: 0.05,
   },
   dusk: {
-    fog: 0x5a5560, fogNear: 20, fogFar: 100, fogDistMax: 0.85, fogHeightDensity: 0.02, fogHeightFalloff: 0.09, fogHeightBase: 0.5,
+    fog: 0x5a5560, fogNear: 20, fogFar: 100, fogDistMax: 0.85, fogHeightDensity: 0.012, fogHeightFalloff: 0.1, fogHeightBase: 0.0,
     hemiSky: 0x8a92a6, hemiGround: 0x3b332d, hemi: 1.1,
     sun: 0xe09a62, sunI: 1.6, shadowI: 0.5, sunDir: [0.8, 0.2, 0.3], exposure: 1.0, window: 0.45,
     zenith: 0x39445a, horizon: 0x9a7260, ground: 0x332c28,
@@ -67,13 +67,13 @@ const RIGS: Record<'morning' | 'day' | 'dusk' | 'night', Rig> = {
   },
   night: {
     // 月光从画面右上方来（与天空月盘同向），冷蓝 #7f9ccf；暗部保留约 20–30% 可读亮度。
-    fog: 0x101826, fogNear: 20, fogFar: 90, fogDistMax: 0.8, fogHeightDensity: 0.022, fogHeightFalloff: 0.08, fogHeightBase: 0.5,
-    hemiSky: 0x5a6d92, hemiGround: 0x202631, hemi: 1.5,
-    sun: 0x7f9ccf, sunI: 1.4, shadowI: 0.5, sunDir: [0.72, 0.42, -0.35], exposure: 1.15, window: 0.07,
+    fog: 0x101826, fogNear: 20, fogFar: 90, fogDistMax: 0.8, fogHeightDensity: 0.012, fogHeightFalloff: 0.1, fogHeightBase: 0.0,
+    hemiSky: 0x7d90b4, hemiGround: 0x2a3140, hemi: 3.0,
+    sun: 0x7f9ccf, sunI: 1.1, shadowI: 0.5, sunDir: [0.72, 0.42, -0.35], exposure: 1.15, window: 0.07,
     zenith: 0x0a1322, horizon: 0x1d2b42, ground: 0x0a0e15,
-    cloudLit: 0x46587a, cloudDark: 0x131c2e, cover: 0.82, rim: 0.85,
+    cloudLit: 0x51648c, cloudDark: 0x0e1626, cover: 0.78, rim: 0.85,
     discSize: 0.026, discI: 5.5, glow: 0.55, stars: 1,
-    envI: 1.0, bloom: 0.32, vignette: 0.8, grain: 0.025, sat: 0.88, contrast: 1.06, tintS: 0x16283c, tintH: 0xff9a50, glowStrength: 0.55,
+    envI: 1.2, bloom: 0.32, vignette: 0.62, grain: 0.025, sat: 0.88, contrast: 1.08, tintS: 0x24364c, tintH: 0xff9a50, glowStrength: 0.45,
   },
 };
 
@@ -292,6 +292,7 @@ export class SceneView {
     const gu = this.grade.uniforms;
     gu.uVig.value = r.vignette; gu.uGrain.value = r.grain; gu.uTime.value = time;
     this.glow.uniforms.uStrength.value = r.glowStrength;
+    if (this.ssr) this.ssr.opacity = lerp(0.16, 0.5, clamp01(r.stars));
     // LUT 随 rig _blend_  crossfade：参数变化时重填 32³ 查找表
     const sig = `${r.sat.toFixed(3)}|${r.contrast.toFixed(3)}|${r.tintS}|${r.tintH}`;
     if (sig !== this.lastGradeSig) {
@@ -407,7 +408,7 @@ export class SceneView {
       // SSR 自带 beauty 渲染，放在链首替代 RenderPass；只让地面/积水接收反射
       this.ssr = new SSRPass({ renderer: this.renderer, scene: this.scene, camera: this.camera, width: size.x, height: size.y, selects: this.groundMeshes(), groundReflector: null });
       this.ssr.beautyRenderTarget.samples = 4;
-      this.ssr.opacity = 0.55;
+      this.ssr.opacity = 0.32;
       this.ssr.maxDistance = 10;
       this.ssr.thickness = 0.05;
       this.ssr.fresnel = true;

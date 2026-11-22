@@ -62,13 +62,20 @@ export function installHeightFog(): void {
   gl_FragColor.rgb = mix( gl_FragColor.rgb, fogColor, fogFactor );
 #endif`;
 
-  // 额外 uniform 并入内置材质的 fog uniform 组；渲染器只刷新 fogColor/Near/Far，
-  // 其余由 FogController 每帧通过 renderer.properties 写入（见下）。
+  // 额外 uniform 并入 fog uniform 组。注意 ShaderLib 在 three 模块加载时就已经 merge 过
+  // UniformsLib.fog，只改 UniformsLib 不会生效：必须同时补进每个内置着色器的 uniforms。
+  const extra: Record<string, THREE.IUniform> = {
+    fogHeightDensity: { value: 0 },
+    fogHeightFalloff: { value: 0.1 },
+    fogHeightBase: { value: 0 },
+    fogDistMax: { value: 1 },
+  };
   const lib = THREE.UniformsLib.fog as unknown as Record<string, THREE.IUniform>;
-  lib.fogHeightDensity = { value: 0 };
-  lib.fogHeightFalloff = { value: 0.1 };
-  lib.fogHeightBase = { value: 0 };
-  lib.fogDistMax = { value: 1 };
+  Object.assign(lib, extra);
+  for (const shader of Object.values(THREE.ShaderLib)) {
+    const u = shader.uniforms as Record<string, THREE.IUniform> | undefined;
+    if (u && u.fogColor) Object.assign(u, extra);
+  }
 }
 
 /** 每帧把高度雾参数写进场景里所有已编译材质的 uniform。 */

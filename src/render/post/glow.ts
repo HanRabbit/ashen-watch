@@ -40,7 +40,7 @@ export const LightGlowShader = {
         vec2 dv = (vUv - L.xy) * vec2(uAspect, 1.0);
         float r2 = dot(dv, dv);
         // 宽晕 + 亮核：雾中 in-scatter 的两段衰减
-        float halo = exp(-r2 * 26.0) * 0.55 + exp(-r2 * 210.0) * 0.85;
+        float halo = exp(-r2 * 40.0) * 0.4 + exp(-r2 * 240.0) * 0.8;
         float att = clamp(7.0 / L.z, 0.12, 1.6);
         float occ = 1.0;
         if (uHasDepth > 0.5) {

@@ -44,7 +44,7 @@ export function fillLUT(tex: THREE.Data3DTexture, p: GradeParams): void {
         let cg = (l + (G - l) * p.sat - 0.5) * p.contrast + 0.5;
         let cb = (l + (B - l) * p.sat - 0.5) * p.contrast + 0.5;
         // 分色：暗部乘向冷调（压暗并着色），亮部加一点暖
-        const sw = (1 - l) * (1 - l) * 0.85;
+        const sw = (1 - l) * (1 - l) * 0.45;
         const hw = l * l * 0.16;
         cr = cr * (1 - sw + sw * sr * 1.7) + hr * hw;
         cg = cg * (1 - sw + sw * sg * 1.7) + hg * hw;
