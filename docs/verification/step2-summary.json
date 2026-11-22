@@ -1,0 +1,79 @@
+{
+  "date": "2026-11-22",
+  "unitTestsPassed": 108,
+  "browserChecksPassed": 134,
+  "scenarios": [
+    {
+      "scenario": "step2-mouse",
+      "browser": "chrome",
+      "checks": 24,
+      "preset": "release",
+      "query": "http://127.0.0.1:4181/",
+      "hp": 100,
+      "retries": 0,
+      "damageEvents": 0,
+      "finishedAt": "2026-11-22T07:22:25.078Z",
+      "report": "browser-step2-mouse-chrome.json"
+    },
+    {
+      "scenario": "step2-none",
+      "browser": "chrome",
+      "checks": 19,
+      "preset": "release",
+      "query": "http://127.0.0.1:4181/",
+      "hp": 100,
+      "retries": 0,
+      "damageEvents": 0,
+      "finishedAt": "2026-11-22T07:24:48.631Z",
+      "report": "browser-step2-none-chrome.json"
+    },
+    {
+      "scenario": "step2-lamp-bolt",
+      "browser": "chrome",
+      "checks": 22,
+      "preset": "release",
+      "query": "http://127.0.0.1:4181/",
+      "hp": 100,
+      "retries": 0,
+      "damageEvents": 0,
+      "finishedAt": "2026-11-22T07:32:18.126Z",
+      "report": "browser-step2-lamp-bolt-chrome.json"
+    },
+    {
+      "scenario": "step2-gate-bolt",
+      "browser": "chrome",
+      "checks": 25,
+      "preset": "release",
+      "query": "http://127.0.0.1:4181/",
+      "hp": 100,
+      "retries": 0,
+      "damageEvents": 0,
+      "finishedAt": "2026-11-22T07:37:13.820Z",
+      "report": "browser-step2-gate-bolt-chrome.json"
+    },
+    {
+      "scenario": "step2-lamp-gate",
+      "browser": "chrome",
+      "checks": 23,
+      "preset": "release",
+      "query": "http://127.0.0.1:4181/",
+      "hp": 100,
+      "retries": 0,
+      "damageEvents": 0,
+      "finishedAt": "2026-11-22T07:39:33.493Z",
+      "report": "browser-step2-lamp-gate-chrome.json"
+    },
+    {
+      "scenario": "step2-late",
+      "browser": "msedge",
+      "checks": 21,
+      "preset": "dev",
+      "query": "http://127.0.0.1:4181/",
+      "hp": 100,
+      "retries": 0,
+      "damageEvents": 0,
+      "finishedAt": "2026-11-22T07:25:09.950Z",
+      "report": "browser-step2-late-msedge.json"
+    }
+  ]
+}

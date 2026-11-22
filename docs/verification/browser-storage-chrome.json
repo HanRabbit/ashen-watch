@@ -1,0 +1,102 @@
+{
+  "scenario": "storage",
+  "channel": "chrome",
+  "headless": true,
+  "base": "http://localhost:4173/",
+  "finishedAt": "2026-11-20T16:19:34.717Z",
+  "wallSecs": 37,
+  "failed": 0,
+  "consoleErrors": [],
+  "checks": [
+    {
+      "label": "没有快照时「继续」不可用",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "label": "到达黄昏后写入存档",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "label": "第 1 次失败界面提供「重试当晚」和「重开当天」",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "label": "第 1 次重试：回到黄昏，重试计数 1",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "label": "第 2 次失败界面提供「重试当晚」和「重开当天」",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "label": "第 2 次重试：回到黄昏，重试计数 2",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "label": "两次重试恢复出同一黄昏状态",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "label": "三次入夜时两鬼起点与巡游状态一致",
+      "ok": true,
+      "detail": "[[\"grey\",-6,26.2,3.141592653589793,\"patrol\",0],[\"wraith\",11.75,12.4,3.141592653589793,\"patrol\",0]]"
+    },
+    {
+      "label": "刷新后标题「继续」可用并显示重试次数",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "label": "「继续」从黄昏起点恢复，不增加重试计数",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "label": "损坏的存档：说明原因，「继续」不可用",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "label": "版本不兼容的存档：说明原因，「继续」不可用",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "label": "无效存档下可以直接开始新游戏",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "label": "禁用存储：标题说明进度不会保留",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "label": "禁用存储：黄昏快照保留在内存中",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "label": "禁用存储：本次会话仍能重试当晚",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "label": "禁用存储：控制台无报错",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "label": "存档场景控制台无报错",
+      "ok": true,
+      "detail": ""
+    }
+  ]
+}

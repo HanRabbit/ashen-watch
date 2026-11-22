@@ -1,0 +1,224 @@
+{
+  "scenario": "step2-mouse",
+  "channel": "chrome",
+  "headless": true,
+  "base": "http://127.0.0.1:4181/",
+  "finishedAt": "2026-11-22T07:22:25.078Z",
+  "wallSecs": 147,
+  "failed": 0,
+  "consoleErrors": [],
+  "checks": [
+    {
+      "label": "标题界面用鼠标切到纯鼠标模式",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "label": "点击「开始」后捕获鼠标，这次点击不移动角色",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "label": "教学结束后进入白天",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "label": "工具栏「提灯」可熄灭提灯",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "label": "打开门房门",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "label": "修复壁灯：扣 2 木 1 铁，恰好一次",
+      "ok": true,
+      "detail": "木 2→0，铁 2→1"
+    },
+    {
+      "label": "全图共拾得 4 木 4 铁 3 油",
+      "ok": true,
+      "detail": "现有 木 2 铁 3 油 3"
+    },
+    {
+      "label": "修复栅门：扣 1 木 2 铁，恰好一次",
+      "ok": true,
+      "detail": "木 2→1，铁 3→1"
+    },
+    {
+      "label": "修好后再交互只是开关栅门，不再扣料",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "label": "第三项（bolt）材料不足：确认按钮不可点，不扣料",
+      "ok": true,
+      "detail": "材料不足：木料缺 1、铁件缺 1"
+    },
+    {
+      "label": "炉火旁做出一份热食",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "label": "补油两次后第三次因将满被拒，不扣库存",
+      "ok": true,
+      "detail": "提灯 257 秒，库存 1 份"
+    },
+    {
+      "label": "白天在床铺休息，直接到黄昏并存档",
+      "ok": true,
+      "detail": "白天第 46 秒休息"
+    },
+    {
+      "label": "黄昏起点自动存档",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "label": "黄昏在壁炉旁等待，直接入夜",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "label": "右键长按举灯，松开后放下且不触发交互",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "label": "入夜后可投油点亮壁灯",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "label": "入夜后从祭台匣取出钟舌",
+      "ok": true,
+      "detail": "取回时段 night"
+    },
+    {
+      "label": "晨曦到达，角色存活",
+      "ok": true,
+      "detail": "生命 100，快进前的提示：需在炉火旁安全停留 10 秒（已 0 秒）；"
+    },
+    {
+      "label": "晨曦后两只鬼消散",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "label": "晨曦时装上钟舌",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "label": "再次交互敲响晨钟",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "label": "结算界面展示用时、修复、重试与钟舌取回时段",
+      "ok": true,
+      "detail": "用时2:16 ｜ 修复庭院壁灯、侧廊栅门 ｜ 首夜重试0 次 ｜ 钟舌取回夜间，并在晨曦前带回了门房"
+    },
+    {
+      "label": "全程控制台无报错",
+      "ok": true,
+      "detail": ""
+    }
+  ],
+  "gpu": "ANGLE (Intel, Intel(R) UHD Graphics (0x0000A78B) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+  "preset": "release",
+  "viewport": {
+    "width": 1920,
+    "height": 1080
+  },
+  "damageEvents": [],
+  "settlement": "用时2:16 ｜ 修复庭院壁灯、侧廊栅门 ｜ 首夜重试0 次 ｜ 钟舌取回夜间，并在晨曦前带回了门房",
+  "result": {
+    "hp": 100,
+    "playedMin": 2.3,
+    "repairs": {
+      "lamp": true,
+      "gate": true,
+      "bolt": false
+    },
+    "retries": 0,
+    "deaths": [],
+    "unexpectedPauses": 0,
+    "lockRetries": 0
+  },
+  "nightPerf": {
+    "summary": {
+      "frames": 2322,
+      "avgFps": 31.8,
+      "avgMs": 31.42,
+      "worstP95Ms": 55.8,
+      "maxMs": 100,
+      "over20ms": 1892,
+      "over25ms": 1073,
+      "slowWhere": [
+        [
+          "night (0, -4)",
+          428
+        ],
+        [
+          "night (-8, 12)",
+          102
+        ],
+        [
+          "night (0, 0)",
+          98
+        ],
+        [
+          "night (-4, 8)",
+          64
+        ],
+        [
+          "night (12, 8)",
+          49
+        ],
+        [
+          "night (-4, 12)",
+          47
+        ],
+        [
+          "night (-4, 4)",
+          43
+        ],
+        [
+          "night (0, 4)",
+          40
+        ]
+      ]
+    },
+    "segments": [
+      {
+        "tag": "去程：门房→祭台",
+        "frames": 1267,
+        "avgMs": 29.29,
+        "p95Ms": 48.7,
+        "maxMs": 100,
+        "over20ms": 974
+      },
+      {
+        "tag": "回程：祭台→门房",
+        "frames": 354,
+        "avgMs": 34.42,
+        "p95Ms": 55.8,
+        "maxMs": 76.6,
+        "over20ms": 309
+      },
+      {
+        "tag": "守夜：门房",
+        "frames": 701,
+        "avgMs": 33.77,
+        "p95Ms": 55.6,
+        "maxMs": 97.1,
+        "over20ms": 609
+      }
+    ]
+  }
+}

@@ -1,0 +1,209 @@
+{
+  "scenario": "step2-late",
+  "channel": "msedge",
+  "headless": true,
+  "base": "http://127.0.0.1:4181/",
+  "finishedAt": "2026-11-22T07:25:09.950Z",
+  "wallSecs": 278,
+  "failed": 0,
+  "consoleErrors": [],
+  "checks": [
+    {
+      "label": "点击「开始」后捕获鼠标，这次点击不移动角色",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "label": "教学结束后进入白天",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "label": "F 键可熄灭提灯",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "label": "打开门房门",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "label": "修复确认界面取消后材料不变",
+      "ok": true,
+      "detail": "木 2，铁 2"
+    },
+    {
+      "label": "全图共拾得 4 木 4 铁 3 油",
+      "ok": true,
+      "detail": "现有 木 4 铁 4 油 3"
+    },
+    {
+      "label": "炉火旁做出一份热食",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "label": "补油两次后第三次因将满被拒，不扣库存",
+      "ok": true,
+      "detail": "提灯 257 秒，库存 1 份"
+    },
+    {
+      "label": "白天在床铺休息，直接到黄昏并存档",
+      "ok": true,
+      "detail": "白天第 47 秒休息"
+    },
+    {
+      "label": "黄昏起点自动存档",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "label": "黄昏在壁炉旁等待，直接入夜",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "label": "不修复且未取钟舌，也能正常等到晨曦",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "label": "投 1 份油点亮祭台火盆",
+      "ok": true,
+      "detail": "余 180 秒"
+    },
+    {
+      "label": "晨曦后从祭台匣补取钟舌",
+      "ok": true,
+      "detail": "取回时段 dawn"
+    },
+    {
+      "label": "晨曦到达，角色存活",
+      "ok": true,
+      "detail": "生命 100，快进前的提示：无"
+    },
+    {
+      "label": "晨曦后两只鬼消散",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "label": "晨曦时装上钟舌",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "label": "再次交互敲响晨钟",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "label": "结算界面展示用时、修复、重试与钟舌取回时段",
+      "ok": true,
+      "detail": "用时8:44 ｜ 修复没有修复任何设施 ｜ 首夜重试0 次 ｜ 钟舌取回晨曦"
+    },
+    {
+      "label": "修复状态与选择方案一致",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "label": "全程控制台无报错",
+      "ok": true,
+      "detail": ""
+    }
+  ],
+  "gpu": "ANGLE (Intel, Intel(R) UHD Graphics (0x0000A78B) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+  "preset": "dev",
+  "viewport": {
+    "width": 1920,
+    "height": 1080
+  },
+  "damageEvents": [],
+  "settlement": "用时8:44 ｜ 修复没有修复任何设施 ｜ 首夜重试0 次 ｜ 钟舌取回晨曦",
+  "result": {
+    "hp": 100,
+    "playedMin": 8.7,
+    "repairs": {
+      "lamp": false,
+      "gate": false,
+      "bolt": false
+    },
+    "retries": 0,
+    "deaths": [],
+    "unexpectedPauses": 0,
+    "lockRetries": 0
+  },
+  "nightPerf": {
+    "summary": {
+      "frames": 1339,
+      "avgFps": 33.9,
+      "avgMs": 29.52,
+      "worstP95Ms": 87.1,
+      "maxMs": 100,
+      "over20ms": 946,
+      "over25ms": 780,
+      "slowWhere": [
+        [
+          "dawn (16, 28)",
+          59
+        ],
+        [
+          "dawn (16, 16)",
+          58
+        ],
+        [
+          "dawn (12, 28)",
+          57
+        ],
+        [
+          "dawn (16, 24)",
+          54
+        ],
+        [
+          "dawn (16, 20)",
+          54
+        ],
+        [
+          "dawn (0, 4)",
+          50
+        ],
+        [
+          "dawn (4, 8)",
+          50
+        ],
+        [
+          "dawn (20, 24)",
+          47
+        ]
+      ]
+    },
+    "segments": [
+      {
+        "tag": "去程：门房→祭台",
+        "frames": 628,
+        "avgMs": 29.59,
+        "p95Ms": 55.7,
+        "maxMs": 100,
+        "over20ms": 498
+      },
+      {
+        "tag": "回程：祭台→门房",
+        "frames": 545,
+        "avgMs": 32.99,
+        "p95Ms": 87.1,
+        "maxMs": 100,
+        "over20ms": 409
+      },
+      {
+        "tag": "守夜：门房",
+        "frames": 166,
+        "avgMs": 17.87,
+        "p95Ms": 75.4,
+        "maxMs": 100,
+        "over20ms": 39
+      }
+    ]
+  }
+}

@@ -1,0 +1,52 @@
+{
+  "scenario": "tab",
+  "channel": "chrome",
+  "headless": true,
+  "base": "http://localhost:4173/",
+  "finishedAt": "2026-11-20T16:18:56.251Z",
+  "wallSecs": 14,
+  "failed": 0,
+  "consoleErrors": [],
+  "checks": [
+    {
+      "label": "按住 W 时角色在移动、白天时钟在走",
+      "ok": true,
+      "detail": "时钟 1.07 秒"
+    },
+    {
+      "label": "切走后鼠标捕获释放并进入暂停界面",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "label": "离开期间世界计时暂停",
+      "ok": true,
+      "detail": "时钟停在 1.33 秒"
+    },
+    {
+      "label": "离开期间角色不动",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "label": "回到游戏后时钟恢复",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "label": "回来后 W 仍按着也不移动，须重新按下",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "label": "重新按下 W 后恢复移动",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "label": "全程控制台无报错",
+      "ok": true,
+      "detail": ""
+    }
+  ]
+}

@@ -1,0 +1,171 @@
+{
+  "label": "after",
+  "channel": "chrome",
+  "headless": false,
+  "finishedAt": "2026-11-20T01:51:40.634Z",
+  "gpu": "ANGLE (Intel, Intel(R) UHD Graphics (0x0000A78B) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+  "walk": {
+    "frames": 399,
+    "fps": 79.9,
+    "simPosition": {
+      "mean": 1.8,
+      "sd": 1.2,
+      "min": 0,
+      "max": 4.48,
+      "stalled": 100
+    },
+    "rendered": {
+      "mean": 1.8,
+      "sd": 0,
+      "min": 1.8,
+      "max": 1.8,
+      "stalled": 0
+    }
+  },
+  "spins": [
+    {
+      "spot": "门房中央",
+      "degPerSec": 90,
+      "frames": 547,
+      "fps": 68.3,
+      "hitches": 0,
+      "distPerDeg": 0.105,
+      "sidePerDeg": 0,
+      "maxDr": 0.13,
+      "maxDl": 0,
+      "jumps": 0
+    },
+    {
+      "spot": "门房中央",
+      "degPerSec": 240,
+      "frames": 202,
+      "fps": 67.1,
+      "hitches": 0,
+      "distPerDeg": 0.104,
+      "sidePerDeg": 0,
+      "maxDr": 0.34,
+      "maxDl": 0,
+      "jumps": 0
+    },
+    {
+      "spot": "门房门外 1 m",
+      "degPerSec": 90,
+      "frames": 516,
+      "fps": 64.4,
+      "hitches": 1,
+      "distPerDeg": 0.27,
+      "sidePerDeg": 0,
+      "maxDr": 0.22,
+      "maxDl": 0,
+      "jumps": 0
+    },
+    {
+      "spot": "门房门外 1 m",
+      "degPerSec": 240,
+      "frames": 197,
+      "fps": 65.4,
+      "hitches": 0,
+      "distPerDeg": 0.099,
+      "sidePerDeg": 0,
+      "maxDr": 0.35,
+      "maxDl": 0,
+      "jumps": 0
+    },
+    {
+      "spot": "门房门内 1 m",
+      "degPerSec": 90,
+      "frames": 534,
+      "fps": 66.6,
+      "hitches": 1,
+      "distPerDeg": 0.115,
+      "sidePerDeg": 0,
+      "maxDr": 0.18,
+      "maxDl": 0,
+      "jumps": 0
+    },
+    {
+      "spot": "门房门内 1 m",
+      "degPerSec": 240,
+      "frames": 200,
+      "fps": 66.4,
+      "hitches": 0,
+      "distPerDeg": 0.093,
+      "sidePerDeg": 0,
+      "maxDr": 0.38,
+      "maxDl": 0,
+      "jumps": 0
+    },
+    {
+      "spot": "礼拜堂正门内",
+      "degPerSec": 90,
+      "frames": 487,
+      "fps": 60.7,
+      "hitches": 0,
+      "distPerDeg": 0.108,
+      "sidePerDeg": 0,
+      "maxDr": 0.18,
+      "maxDl": 0,
+      "jumps": 0
+    },
+    {
+      "spot": "礼拜堂正门内",
+      "degPerSec": 240,
+      "frames": 180,
+      "fps": 59.8,
+      "hitches": 0,
+      "distPerDeg": 0.095,
+      "sidePerDeg": 0,
+      "maxDr": 0.48,
+      "maxDl": 0,
+      "jumps": 0
+    },
+    {
+      "spot": "侧廊中段",
+      "degPerSec": 90,
+      "frames": 537,
+      "fps": 67,
+      "hitches": 0,
+      "distPerDeg": 0.104,
+      "sidePerDeg": 0,
+      "maxDr": 0.18,
+      "maxDl": 0,
+      "jumps": 0
+    },
+    {
+      "spot": "侧廊中段",
+      "degPerSec": 240,
+      "frames": 200,
+      "fps": 66.3,
+      "hitches": 0,
+      "distPerDeg": 0.047,
+      "sidePerDeg": 0,
+      "maxDr": 0.64,
+      "maxDl": 0,
+      "jumps": 1
+    },
+    {
+      "spot": "庭院空地",
+      "degPerSec": 90,
+      "frames": 612,
+      "fps": 76.4,
+      "hitches": 0,
+      "distPerDeg": 0.003,
+      "sidePerDeg": 0,
+      "maxDr": 0,
+      "maxDl": 0,
+      "jumps": 0
+    },
+    {
+      "spot": "庭院空地",
+      "degPerSec": 240,
+      "frames": 229,
+      "fps": 76.1,
+      "hitches": 0,
+      "distPerDeg": 0,
+      "sidePerDeg": 0,
+      "maxDr": 0,
+      "maxDl": 0,
+      "jumps": 0
+    }
+  ]
+}

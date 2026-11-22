@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>灰烬守夜</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 32 32%27%3E%3Crect width=%2732%27 height=%2732%27 fill=%27%231b1e22%27/%3E%3Ccircle cx=%2716%27 cy=%2718%27 r=%277%27 fill=%27%23f0a84a%27/%3E%3C/svg%3E" />
+  <link rel="stylesheet" href="./src/style.css" />
+</head>
+<body>
+  <!-- 物品图标（UI-02）：32 px 下靠轮廓区分 -->
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <symbol id="i-wood" viewBox="0 0 32 32"><g fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><rect x="4" y="7" width="24" height="6" rx="3"/><rect x="4" y="19" width="24" height="6" rx="3"/><path d="M9 13v6M23 13v6"/></g></symbol>
+    <symbol id="i-iron" viewBox="0 0 32 32"><g fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M6 10h20l-3 6H9z"/><path d="M12 16v8M20 16v8M9 24h14"/></g></symbol>
+    <symbol id="i-oil" viewBox="0 0 32 32"><g fill="none" stroke="currentColor" stroke-width="2.4" stroke-linejoin="round"><path d="M13 4h6v5l5 6v10a3 3 0 0 1-3 3H11a3 3 0 0 1-3-3V15l5-6z"/><path d="M8 19h16" stroke-linecap="round"/></g></symbol>
+    <symbol id="i-meal" viewBox="0 0 32 32"><g fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M4 17h24a12 9 0 0 1-24 0z"/><path d="M11 12c-2-3 2-4 0-7M17 12c-2-3 2-4 0-7M23 12c-2-3 2-4 0-7"/></g></symbol>
+    <symbol id="i-lantern" viewBox="0 0 32 32"><g fill="none" stroke="currentColor" stroke-width="2.4" stroke-linejoin="round"><circle cx="16" cy="5" r="3"/><path d="M9 12l7-4 7 4z"/><rect x="10" y="12" width="12" height="13"/><path d="M8 27h16" stroke-linecap="round"/><path d="M16 22c-3-3 0-4 0-7 2 3 3 4 0 7z" fill="currentColor"/></g></symbol>
+    <symbol id="i-clapper" viewBox="0 0 32 32"><g fill="none" stroke="currentColor" stroke-width="2.4"><circle cx="16" cy="5" r="3"/><path d="M16 8v10"/><circle cx="16" cy="23" r="5.5" fill="currentColor"/></g></symbol>
+  </svg>
+
+  <canvas id="game" tabindex="-1"></canvas>
+
+  <div id="fx-threat" class="fx"></div>
+  <div id="fx-cold" class="fx"></div>
+  <div id="fx-hurt" class="fx"></div>
+
+  <div id="hud" hidden>
+    <div class="hud-tl">
+      <div id="hud-phase" class="chip"></div>
+      <div id="hud-goal" class="goal"></div>
+    </div>
+    <div id="hud-toasts" class="toasts" aria-live="polite"></div>
+    <div id="crosshair"></div>
+    <div id="hud-prompt" class="prompt" hidden></div>
+    <div id="hud-subs" class="subs" aria-live="assertive"></div>
+    <div class="hud-bl">
+      <div class="bar" id="bar-hp"><span class="bar-name">生命</span><div class="bar-track"><i></i></div><span class="bar-val"></span></div>
+      <div class="bar" id="bar-cold"><span class="bar-name">寒意</span><div class="bar-track"><i></i></div><span class="bar-val"></span></div>
+      <div class="bar" id="bar-oil"><span class="bar-name">灯油</span><div class="bar-track"><i></i></div><span class="bar-val"></span></div>
+    </div>
+    <div class="hud-br" id="hud-inv"></div>
+    <div id="hud-mousehint" class="mousehint" hidden></div>
+  </div>
+
+  <div id="overlay" hidden></div>
+  <div id="debug" hidden></div>
+
+  <script type="module" src="./src/main.ts"></script>
+</body>
+</html>

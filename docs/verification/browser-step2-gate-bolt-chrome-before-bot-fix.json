@@ -1,0 +1,143 @@
+{
+  "scenario": "step2-gate-bolt",
+  "channel": "chrome",
+  "headless": true,
+  "base": "http://127.0.0.1:4181/",
+  "finishedAt": "2026-11-22T07:34:17.584Z",
+  "wallSecs": 119,
+  "failed": 1,
+  "consoleErrors": [],
+  "checks": [
+    {
+      "label": "点击「开始」后捕获鼠标，这次点击不移动角色",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "label": "教学结束后进入白天",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "label": "F 键可熄灭提灯",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "label": "打开门房门",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "label": "修复确认界面取消后材料不变",
+      "ok": true,
+      "detail": "木 2，铁 2"
+    },
+    {
+      "label": "全图共拾得 4 木 4 铁 3 油",
+      "ok": true,
+      "detail": "现有 木 4 铁 4 油 3"
+    },
+    {
+      "label": "修复栅门：扣 1 木 2 铁，恰好一次",
+      "ok": true,
+      "detail": "木 4→3，铁 4→2"
+    },
+    {
+      "label": "修好后再交互只是开关栅门，不再扣料",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "label": "修复门闩：扣 2 木 2 铁，恰好一次",
+      "ok": true,
+      "detail": "木 3→1，铁 2→0"
+    },
+    {
+      "label": "第三项（lamp）材料不足：确认按钮不可点，不扣料",
+      "ok": true,
+      "detail": "材料不足：木料缺 1、铁件缺 1"
+    },
+    {
+      "label": "炉火旁做出一份热食",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "label": "补油两次后第三次因将满被拒，不扣库存",
+      "ok": true,
+      "detail": "提灯 257 秒，库存 1 份"
+    },
+    {
+      "label": "白天在床铺休息，直接到黄昏并存档",
+      "ok": true,
+      "detail": "白天第 61 秒休息"
+    },
+    {
+      "label": "黄昏起点自动存档",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "label": "黄昏在壁炉旁等待，直接入夜",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "label": "投 1 份油点亮祭台火盆",
+      "ok": true,
+      "detail": "余 180 秒"
+    },
+    {
+      "label": "入夜后从祭台匣取出钟舌",
+      "ok": true,
+      "detail": "取回时段 night"
+    },
+    {
+      "label": "关门后从门房内加闩",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "label": "场景跑完",
+      "ok": false,
+      "detail": "Cannot read properties of undefined (reading 'x')"
+    }
+  ],
+  "gpu": "ANGLE (Intel, Intel(R) UHD Graphics (0x0000A78B) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+  "preset": "release",
+  "viewport": {
+    "width": 1920,
+    "height": 1080
+  },
+  "damageEvents": [],
+  "stateAtError": {
+    "screen": null,
+    "phase": "night",
+    "player": {
+      "x": -1.2969800707557817,
+      "z": -4.45939740483077,
+      "yaw": 6.235300000000001,
+      "pitch": 0.09930000000000005,
+      "hp": 100,
+      "cold": 18.299999999998782,
+      "moving": false,
+      "sprinting": false
+    },
+    "target": null,
+    "ghosts": [
+      {
+        "kind": "grey",
+        "mode": "investigate",
+        "x": 14.9,
+        "z": 15.3
+      },
+      {
+        "kind": "wraith",
+        "mode": "patrol",
+        "x": 16.7,
+        "z": 19.6
+      }
+    ]
+  }
+}

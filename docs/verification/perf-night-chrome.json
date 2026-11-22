@@ -1,0 +1,100 @@
+{
+  "channel": "chrome",
+  "headless": true,
+  "finishedAt": "2026-11-21T06:46:35.889Z",
+  "gpu": "ANGLE (Intel, Intel(R) UHD Graphics (0x0000A78B) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+  "viewport": {
+    "width": 1920,
+    "height": 1080
+  },
+  "canvas": {
+    "width": 1920,
+    "height": 1080
+  },
+  "summary": {
+    "frames": 4839,
+    "avgFps": 59.7,
+    "avgMs": 16.76,
+    "worstP95Ms": 27.7,
+    "maxMs": 100,
+    "over20ms": 2001,
+    "over25ms": 60
+  },
+  "slowWhere": [
+    {
+      "at": "(0, 0)",
+      "count": 44,
+      "worstMs": 100
+    },
+    {
+      "at": "(8, 24)",
+      "count": 6,
+      "worstMs": 28
+    },
+    {
+      "at": "(16, 24)",
+      "count": 5,
+      "worstMs": 76
+    },
+    {
+      "at": "(16, 20)",
+      "count": 3,
+      "worstMs": 28
+    },
+    {
+      "at": "(4, 8)",
+      "count": 1,
+      "worstMs": 28
+    },
+    {
+      "at": "(4, 12)",
+      "count": 1,
+      "worstMs": 35
+    }
+  ],
+  "segments": [
+    {
+      "tag": "去程：门房→祭台（主路）",
+      "arrived": true,
+      "pauses": 0,
+      "secs": 32.1,
+      "frames": 2056,
+      "avgMs": 15.44,
+      "fps": 64.8,
+      "p95Ms": 20.9,
+      "maxMs": 100,
+      "over20ms": 494,
+      "calls": 162,
+      "triangles": 15946
+    },
+    {
+      "tag": "回程：祭台→门房（主路）",
+      "arrived": true,
+      "pauses": 0,
+      "secs": 34.3,
+      "frames": 2060,
+      "avgMs": 16.67,
+      "fps": 60,
+      "p95Ms": 21,
+      "maxMs": 28.1,
+      "over20ms": 831,
+      "calls": 157,
+      "triangles": 15600
+    },
+    {
+      "tag": "守夜：门房炉火旁",
+      "arrived": true,
+      "pauses": 0,
+      "secs": 15,
+      "frames": 723,
+      "avgMs": 20.78,
+      "fps": 48.1,
+      "p95Ms": 27.7,
+      "maxMs": 28.1,
+      "over20ms": 676,
+      "calls": 156,
+      "triangles": 15564
+    }
+  ],
+  "consoleErrors": []
+}

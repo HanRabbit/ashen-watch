@@ -1,0 +1,26 @@
+{
+  "name": "ashen-watch",
+  "private": true,
+  "version": "1.0.0",
+  "description": "《灰烬守夜》浏览器垂直切片（Three.js）",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "verify:browser": "node tools/browser-verify.mjs",
+    "verify:step2": "node tools/browser-verify.mjs chrome --headless step2"
+  },
+  "dependencies": {
+    "three": "^0.187.0"
+  },
+  "devDependencies": {
+    "@types/three": "^0.187.0",
+    "playwright-core": "^1.65.1",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.8",
+    "vitest": "^5.1.1"
+  }
+}

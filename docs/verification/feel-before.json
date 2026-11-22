@@ -1,0 +1,137 @@
+{
+  "label": "before",
+  "channel": "chrome",
+  "headless": false,
+  "finishedAt": "2026-11-19T15:25:29.647Z",
+  "gpu": "ANGLE (Intel, Intel(R) UHD Graphics (0x0000A78B) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+  "walk": {
+    "frames": 390,
+    "fps": 78,
+    "meanSpeed": 2.049,
+    "speedSd": 1.902,
+    "minSpeed": 0,
+    "maxSpeed": 16.45
+  },
+  "spins": [
+    {
+      "spot": "门房中央",
+      "degPerSec": 90,
+      "frames": 541,
+      "fps": 67.5,
+      "maxDr": 0.78,
+      "maxDl": 0.14,
+      "snaps": 2,
+      "snapSum": 1.55
+    },
+    {
+      "spot": "门房中央",
+      "degPerSec": 240,
+      "frames": 195,
+      "fps": 64.7,
+      "maxDr": 0.81,
+      "maxDl": 0.2,
+      "snaps": 2,
+      "snapSum": 1.57
+    },
+    {
+      "spot": "门房门外 1 m",
+      "degPerSec": 90,
+      "frames": 495,
+      "fps": 61.7,
+      "maxDr": 1.78,
+      "maxDl": 0.68,
+      "snaps": 7,
+      "snapSum": 5.35
+    },
+    {
+      "spot": "门房门外 1 m",
+      "degPerSec": 240,
+      "frames": 198,
+      "fps": 65.7,
+      "maxDr": 1.22,
+      "maxDl": 0.18,
+      "snaps": 6,
+      "snapSum": 3.56
+    },
+    {
+      "spot": "门房门内 1 m",
+      "degPerSec": 90,
+      "frames": 533,
+      "fps": 66.5,
+      "maxDr": 1.77,
+      "maxDl": 0.5,
+      "snaps": 5,
+      "snapSum": 4.52
+    },
+    {
+      "spot": "门房门内 1 m",
+      "degPerSec": 240,
+      "frames": 197,
+      "fps": 65.3,
+      "maxDr": 1.15,
+      "maxDl": 0.15,
+      "snaps": 4,
+      "snapSum": 2.94
+    },
+    {
+      "spot": "礼拜堂正门内",
+      "degPerSec": 90,
+      "frames": 483,
+      "fps": 60.3,
+      "maxDr": 1.65,
+      "maxDl": 0.07,
+      "snaps": 2,
+      "snapSum": 3.1
+    },
+    {
+      "spot": "礼拜堂正门内",
+      "degPerSec": 240,
+      "frames": 181,
+      "fps": 60,
+      "maxDr": 1.05,
+      "maxDl": 0.24,
+      "snaps": 5,
+      "snapSum": 2.96
+    },
+    {
+      "spot": "侧廊中段",
+      "degPerSec": 90,
+      "frames": 541,
+      "fps": 67.5,
+      "maxDr": 0.28,
+      "maxDl": 0.17,
+      "snaps": 1,
+      "snapSum": 0.28
+    },
+    {
+      "spot": "侧廊中段",
+      "degPerSec": 240,
+      "frames": 203,
+      "fps": 67.2,
+      "maxDr": 0.21,
+      "maxDl": 0.07,
+      "snaps": 0,
+      "snapSum": 0
+    },
+    {
+      "spot": "庭院空地",
+      "degPerSec": 90,
+      "frames": 612,
+      "fps": 76.4,
+      "maxDr": 0.1,
+      "maxDl": 0.11,
+      "snaps": 0,
+      "snapSum": 0
+    },
+    {
+      "spot": "庭院空地",
+      "degPerSec": 240,
+      "frames": 220,
+      "fps": 72.9,
+      "maxDr": 0,
+      "maxDl": 0.18,
+      "snaps": 0,
+      "snapSum": 0
+    }
+  ]
+}
