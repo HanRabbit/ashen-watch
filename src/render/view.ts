@@ -1,14 +1,6 @@
 // 场景视图：渲染器、天空穹顶、图像照明、四套照明（LGT-01，晨曦复用清晨）、后期与越肩镜头。
 // 模拟状态只读，网格是它的视图。画质分高/低两档：高档含泛光与调色后期、软阴影、扬尘；低档直出以保帧率。
 import * as THREE from 'three';
-import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
-import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
-import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
-import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
-import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
-import { GTAOPass } from 'three/addons/postprocessing/GTAOPass.js';
-import { SSRPass } from 'three/addons/postprocessing/SSRPass.js';
-import { LUTPass } from 'three/addons/postprocessing/LUTPass.js';
 import { PHASE } from '../config';
 import { cameraClearT } from '../sim/collision';
 import { groundY, regionAt } from '../sim/level';
@@ -19,11 +11,12 @@ import { glowTexture, makeMaterials, smokeTexture } from './materials';
 import { Props } from './props';
 import { applySky, makeSkyMaterial, SkyState } from './sky';
 import { FogController, installHeightFog } from './post/fog';
-import { LightGlowShader, MAX_GLOW_LIGHTS } from './post/glow';
-import { fillLUT, makeLUT, VignetteGrainShader } from './post/grade';
+import { PostPipeline } from './post/pipeline';
+import { installSoftShadows } from './post/shadows';
 import { buildStaticLevel, StaticLevel } from './staticLevel';
 
 installHeightFog();
+installSoftShadows();
 
 export type Quality = 'cinematic' | 'high' | 'low';
 
@@ -31,7 +24,7 @@ interface Rig extends SkyState {
   fog: number; fogNear: number; fogFar: number;
   fogDistMax: number; fogHeightDensity: number; fogHeightFalloff: number; fogHeightBase: number;
   hemiSky: number; hemiGround: number; hemi: number;
-  sunI: number; shadowI: number;
+  sunI: number; shadowI: number; shadowRadius: number; rimI: number; scatter: number;
   exposure: number; window: number;
   envI: number; bloom: number; vignette: number; grain: number; sat: number; contrast: number;
   tintS: number; tintH: number; glowStrength: number;
@@ -41,7 +34,7 @@ const RIGS: Record<'morning' | 'day' | 'dusk' | 'night', Rig> = {
   morning: {
     fog: 0x9aa2a8, fogNear: 26, fogFar: 120, fogDistMax: 0.85, fogHeightDensity: 0.01, fogHeightFalloff: 0.12, fogHeightBase: 0.0,
     hemiSky: 0xcdd5db, hemiGround: 0x575049, hemi: 2.1,
-    sun: 0xffe2c0, sunI: 2.2, shadowI: 0.45, sunDir: [-0.75, 0.5, -0.35], exposure: 1.0, window: 0.9,
+    sun: 0xffe2c0, sunI: 2.2, shadowI: 0.45, shadowRadius: 5, rimI: 0.25, scatter: 0.12, sunDir: [-0.75, 0.5, -0.35], exposure: 1.0, window: 0.9,
     zenith: 0x8fa0b2, horizon: 0xc4cacd, ground: 0x4a4640,
     cloudLit: 0xe6e9ec, cloudDark: 0x9aa3ac, cover: 0.8, rim: 0.25,
     discSize: 0.0, discI: 0, glow: 0.18, stars: 0,
@@ -49,8 +42,8 @@ const RIGS: Record<'morning' | 'day' | 'dusk' | 'night', Rig> = {
   },
   day: {
     fog: 0x9aa4ac, fogNear: 26, fogFar: 95, fogDistMax: 0.95, fogHeightDensity: 0.01, fogHeightFalloff: 0.12, fogHeightBase: 0.0,
-    hemiSky: 0xc8d2da, hemiGround: 0x5c564e, hemi: 1.7,
-    sun: 0xeef2f5, sunI: 2.4, shadowI: 0.35, sunDir: [-0.3, 0.85, -0.42], exposure: 0.82, window: 1.0,
+    hemiSky: 0xc8d2da, hemiGround: 0x5c564e, hemi: 1.9,
+    sun: 0xeef2f5, sunI: 1.7, shadowI: 0.25, shadowRadius: 7, rimI: 0.3, scatter: 0.03, sunDir: [-0.3, 0.85, -0.42], exposure: 0.82, window: 1.0,
     zenith: 0x7f93a6, horizon: 0xbcc5cb, ground: 0x504c46,
     cloudLit: 0xf0f3f5, cloudDark: 0x6f7a86, cover: 0.78, rim: 0.18,
     discSize: 0.0, discI: 0, glow: 0.2, stars: 0,
@@ -59,7 +52,7 @@ const RIGS: Record<'morning' | 'day' | 'dusk' | 'night', Rig> = {
   dusk: {
     fog: 0x5a5560, fogNear: 20, fogFar: 100, fogDistMax: 0.85, fogHeightDensity: 0.012, fogHeightFalloff: 0.1, fogHeightBase: 0.0,
     hemiSky: 0x8a92a6, hemiGround: 0x3b332d, hemi: 1.1,
-    sun: 0xe09a62, sunI: 1.6, shadowI: 0.5, sunDir: [0.8, 0.2, 0.3], exposure: 1.0, window: 0.45,
+    sun: 0xe09a62, sunI: 1.6, shadowI: 0.5, shadowRadius: 4, rimI: 0.35, scatter: 0.25, sunDir: [0.8, 0.2, 0.3], exposure: 1.0, window: 0.45,
     zenith: 0x39445a, horizon: 0x9a7260, ground: 0x332c28,
     cloudLit: 0xb08a78, cloudDark: 0x4a4452, cover: 0.75, rim: 0.5,
     discSize: 0.035, discI: 2.6, glow: 0.7, stars: 0.18,
@@ -69,16 +62,16 @@ const RIGS: Record<'morning' | 'day' | 'dusk' | 'night', Rig> = {
     // 月光从画面右上方来（与天空月盘同向），冷蓝 #7f9ccf；暗部保留约 20–30% 可读亮度。
     fog: 0x101826, fogNear: 20, fogFar: 90, fogDistMax: 0.8, fogHeightDensity: 0.012, fogHeightFalloff: 0.1, fogHeightBase: 0.0,
     hemiSky: 0x7d90b4, hemiGround: 0x2a3140, hemi: 3.0,
-    sun: 0x7f9ccf, sunI: 1.1, shadowI: 0.5, sunDir: [0.72, 0.42, -0.35], exposure: 1.15, window: 0.07,
+    sun: 0x7f9ccf, sunI: 1.1, shadowI: 0.5, shadowRadius: 3, rimI: 0.45, scatter: 0.5, sunDir: [0.72, 0.42, -0.35], exposure: 1.15, window: 0.07,
     zenith: 0x0a1322, horizon: 0x1d2b42, ground: 0x0a0e15,
     cloudLit: 0x51648c, cloudDark: 0x0e1626, cover: 0.78, rim: 0.85,
     discSize: 0.026, discI: 5.5, glow: 0.55, stars: 1,
-    envI: 1.2, bloom: 0.32, vignette: 0.62, grain: 0.025, sat: 0.88, contrast: 1.08, tintS: 0x24364c, tintH: 0xff9a50, glowStrength: 0.45,
+    envI: 1.2, bloom: 0.32, vignette: 0.62, grain: 0.025, sat: 0.88, contrast: 1.08, tintS: 0x24364c, tintH: 0xffb25e, glowStrength: 0.45,
   },
 };
 
 const COLOR_KEYS = ['fog', 'hemiSky', 'hemiGround', 'sun', 'zenith', 'horizon', 'ground', 'cloudLit', 'cloudDark', 'tintS', 'tintH'] as const;
-const NUM_KEYS = ['fogNear', 'fogFar', 'fogDistMax', 'fogHeightDensity', 'fogHeightFalloff', 'fogHeightBase', 'hemi', 'sunI', 'shadowI', 'exposure', 'window', 'discSize', 'discI', 'glow', 'stars', 'cover', 'rim', 'envI', 'bloom', 'vignette', 'grain', 'sat', 'contrast', 'glowStrength'] as const;
+const NUM_KEYS = ['fogNear', 'fogFar', 'fogDistMax', 'fogHeightDensity', 'fogHeightFalloff', 'fogHeightBase', 'hemi', 'sunI', 'shadowI', 'shadowRadius', 'rimI', 'scatter', 'exposure', 'window', 'discSize', 'discI', 'glow', 'stars', 'cover', 'rim', 'envI', 'bloom', 'vignette', 'grain', 'sat', 'contrast', 'glowStrength'] as const;
 
 const CAM = { dist: 3.4, shoulder: 0.78, pivotY: 1.62, minDist: 0.35 };
 const FAN = { n: 12, step: (3 * Math.PI) / 180 };
@@ -103,17 +96,14 @@ export class SceneView {
   private envDay: THREE.Texture;
   private envNight: THREE.Texture;
   private mats: ReturnType<typeof makeMaterials>;
-  private composer!: EffectComposer;
-  private bloom!: UnrealBloomPass;
-  private grade!: ShaderPass;
-  private gtao!: GTAOPass;
-  private ssr: SSRPass | null = null;
-  private glow!: ShaderPass;
-  private lutPass!: LUTPass;
-  private lut = makeLUT(32);
-  private lastGradeSig = '';
-  private glowV = new THREE.Vector3();
+  private post: PostPipeline;
   private atmo: THREE.Object3D[] = [];
+  private rim = new THREE.DirectionalLight(0xffffff, 0);
+  private camFwd = new THREE.Vector3();
+  private tmpV = new THREE.Vector3();
+  private time = 0;
+  /** 景深开关：仅固定机位/标题生效，游戏越肩镜头保持锐利。 */
+  cinematicDof = true;
   private camDist = CAM.dist;
   private camShoulder = CAM.shoulder;
   private ca = new THREE.Color(); private cb = new THREE.Color();
@@ -132,7 +122,7 @@ export class SceneView {
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
     this.renderer.setPixelRatio(window.devicePixelRatio); // 默认 cinematic：满像素比
     this.renderer.shadowMap.enabled = true;
-    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    this.renderer.shadowMap.type = THREE.VSMShadowMap; // PCSS-like 可变半影（post/shadows.ts）
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     // 后期含多个渲染 pass：关闭自动重置，在每帧开头手动重置，探针统计才是整帧的绘制调用。
     this.renderer.info.autoReset = false;
@@ -160,7 +150,10 @@ export class SceneView {
     sc.near = 1; sc.far = 90; sc.left = -24; sc.right = 24; sc.top = 24; sc.bottom = -24;
     this.sun.shadow.bias = -0.0006;
     this.sun.shadow.normalBias = 0.05;
-    this.scene.add(this.hemi, this.sun, this.sun.target);
+    this.sun.shadow.radius = 4;
+    this.sun.shadow.blurSamples = 8;
+    this.rim.castShadow = false;
+    this.scene.add(this.hemi, this.sun, this.sun.target, this.rim, this.rim.target);
 
     // 图像照明：用同一天空着色器烘两张环境图（昼/夜），给 PBR 材质提供柔和环境光与金属反射。
     const pmrem = new THREE.PMREMGenerator(this.renderer);
@@ -213,9 +206,16 @@ export class SceneView {
       this.shafts.push(shaft); this.scene.add(shaft);
     }
 
-    // 后期管线按画质档重建（见 buildPipeline）
-    fillLUT(this.lut, { sat: RIGS.day.sat, contrast: RIGS.day.contrast, tintS: RIGS.day.tintS, tintH: RIGS.day.tintH });
-    this.buildPipeline();
+    // 后期管线拆在 post/pipeline.ts（便于与 camera/landmarks 代理合并）
+    this.scene.traverse((o) => {
+      const mat = (o as THREE.Mesh).material as THREE.Material | undefined;
+      if (mat && mat.transparent) this.atmo.push(o);
+    });
+    this.post = new PostPipeline(this.renderer, this.scene, this.camera, {
+      ground: () => this.groundMeshes(),
+      atmo: () => this.atmo,
+      lights: () => [this.props.lampLight, this.player.lanternLight, this.props.brazierLight, this.props.hearthLight, this.props.windowLight],
+    });
 
     this.resize();
     window.addEventListener('resize', () => this.resize());
@@ -227,14 +227,14 @@ export class SceneView {
     const heavy = q !== 'low';
     // cinematic 用满设备像素比；high 保留 1.5 上限；low 直出 1x。
     this.renderer.setPixelRatio(q === 'cinematic' ? window.devicePixelRatio : q === 'high' ? Math.min(window.devicePixelRatio, 1.5) : 1);
-    this.renderer.shadowMap.type = heavy ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap;
+    this.renderer.shadowMap.type = heavy ? THREE.VSMShadowMap : THREE.PCFShadowMap;
     this.sun.shadow.mapSize.set(heavy ? 2048 : 1024, heavy ? 2048 : 1024);
     this.sun.shadow.map?.dispose();
     this.sun.shadow.map = null;
     this.dust.visible = heavy;
     // props 内部以 'high' 判定重特效：cinematic 同样按高档传入。
     this.props.setQuality(q === 'cinematic' ? 'high' : q);
-    this.buildPipeline();
+    this.post.setQuality(q);
     this.resize();
   }
 
@@ -243,8 +243,7 @@ export class SceneView {
     this.camera.aspect = w / Math.max(1, h);
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(w, h);
-    this.composer.setPixelRatio(this.renderer.getPixelRatio());
-    this.composer.setSize(w, h);
+    this.post.resize(w, h, this.renderer.getPixelRatio());
   }
 
   private blend(a: Rig, b: Rig, t: number): void {
@@ -287,18 +286,24 @@ export class SceneView {
     this.scene.environment = nightish ? this.envNight : this.envDay;
     this.scene.environmentIntensity = r.envI;
 
-    // 后期参数
-    this.bloom.strength = r.bloom;
-    const gu = this.grade.uniforms;
-    gu.uVig.value = r.vignette; gu.uGrain.value = r.grain; gu.uTime.value = time;
-    this.glow.uniforms.uStrength.value = r.glowStrength;
-    if (this.ssr) this.ssr.opacity = lerp(0.16, 0.5, clamp01(r.stars));
-    // LUT 随 rig _blend_  crossfade：参数变化时重填 32³ 查找表
-    const sig = `${r.sat.toFixed(3)}|${r.contrast.toFixed(3)}|${r.tintS}|${r.tintH}`;
-    if (sig !== this.lastGradeSig) {
-      this.lastGradeSig = sig;
-      fillLUT(this.lut, { sat: r.sat, contrast: r.contrast, tintS: r.tintS, tintH: r.tintH });
-    }
+    // 后期参数（LUT 随 rig blend 交叉淡入，管线内部按需重填）
+    this.post.applyRig({
+      bloom: r.bloom, vignette: r.vignette, grain: r.grain,
+      glowStrength: r.glowStrength, scatter: r.scatter,
+      ssrWet: lerp(0.16, 0.5, clamp01(r.stars)),
+      fog: [r.fogHeightDensity, r.fogHeightFalloff, r.fogHeightBase],
+      grade: { sat: r.sat, contrast: r.contrast, tintS: r.tintS, tintH: r.tintH },
+    });
+    this.sun.shadow.radius = r.shadowRadius;
+    // 轮廓光：从镜头后方偏月侧打来的弱背光，让守夜人/鬼的剪影从暗墙上分离
+    this.rim.color.setHex(r.sun).lerp(this.ca.setHex(0xffffff), 0.35);
+    this.rim.intensity = r.rimI;
+    this.camera.getWorldDirection(this.camFwd);
+    this.camFwd.multiplyScalar(0.85).add(this.tmpV.set(r.sunDir[0], r.sunDir[1], r.sunDir[2]).multiplyScalar(0.35));
+    this.camFwd.y += 0.3;
+    this.camFwd.normalize();
+    this.rim.target.position.set(p.x, 0, -p.z);
+    this.rim.position.set(p.x + this.camFwd.x * 40, this.camFwd.y * 40, -p.z + this.camFwd.z * 40);
 
     this.level.windowMat.emissiveIntensity = r.window;
     this.level.hearthWindowMat.emissiveIntensity = w.hearth.lit ? 1.5 : 0.03;
@@ -366,11 +371,18 @@ export class SceneView {
   }
 
   update(w: World, pose: RenderPose, yaw: number, pitch: number, dt: number, time: number): void {
+    this.time = time;
     this.applyLighting(w, pose, dt, time);
     this.props.update(w, dt, time);
     this.player.update(w, pose, yaw, dt, time);
     this.ghosts.update(w, pose.ghosts, dt, time);
     this.updateCamera(w, pose, yaw, pitch, dt);
+    // 景深只服务固定机位/标题构图；游戏镜头锐利
+    if (this.fixedCam && this.cinematicDof && this.quality !== 'low') {
+      const f = this.fixedCam;
+      const focus = Math.hypot(f.pos[0] - f.look[0], f.pos[1] - f.look[1], f.pos[2] - f.look[2]);
+      this.post.setDof(true, focus);
+    } else this.post.setDof(false, 0);
     this.mist.forEach((s, i) => { s.position.x += Math.sin(time * 0.13 + i * 1.7) * dt * 0.12; });
     if (this.dust.visible) {
       const pos = this.dust.geometry.attributes.position as THREE.BufferAttribute;
@@ -389,65 +401,7 @@ export class SceneView {
   render(): void {
     this.renderer.info.reset();
     if (this.quality === 'low') { this.renderer.render(this.scene, this.camera); return; }
-    this.updateGlowLights();
-    this.composer.render();
-  }
-
-  /** 按当前画质档重建后期：cinematic = SSR + 全特效；high = 无 SSR；low 不走 composer。 */
-  private buildPipeline(): void {
-    if (this.composer) {
-      for (const pass of this.composer.passes) (pass as { dispose?: () => void }).dispose?.();
-      this.composer.dispose();
-    }
-    const size = this.renderer.getDrawingBufferSize(new THREE.Vector2());
-    // MSAA + HalfFloat：HDR 泛光与调色不失真，边缘抗锯齿
-    const rt = new THREE.WebGLRenderTarget(size.x, size.y, { type: THREE.HalfFloatType, samples: 4 });
-    this.composer = new EffectComposer(this.renderer, rt);
-    this.ssr = null;
-    if (this.quality === 'cinematic') {
-      // SSR 自带 beauty 渲染，放在链首替代 RenderPass；只让地面/积水接收反射
-      this.ssr = new SSRPass({ renderer: this.renderer, scene: this.scene, camera: this.camera, width: size.x, height: size.y, selects: this.groundMeshes(), groundReflector: null });
-      this.ssr.beautyRenderTarget.samples = 4;
-      this.ssr.opacity = 0.32;
-      this.ssr.maxDistance = 10;
-      this.ssr.thickness = 0.05;
-      this.ssr.fresnel = true;
-      this.ssr.distanceAttenuation = true;
-      this.ssr.blur = true;
-      this.composer.addPass(this.ssr);
-    } else {
-      this.composer.addPass(new RenderPass(this.scene, this.camera));
-    }
-    // GTAO：墙脚/门洞/陈设底部接触阴影
-    this.gtao = new GTAOPass(this.scene, this.camera, size.x, size.y);
-    this.gtao.output = GTAOPass.OUTPUT.Default;
-    this.gtao.blendIntensity = 0.9;
-    this.gtao.updateGtaoMaterial({ radius: 0.5, distanceExponent: 1, thickness: 1, scale: 1, samples: 16, distanceFallOff: 1, screenSpaceRadius: false });
-    this.gtao.updatePdMaterial({ lumaPhi: 10, depthPhi: 2, normalPhi: 3, radius: 4, rings: 2, samples: 8 });
-    // GTAO 的法线/深度预_pass 用 override 材质，透明雾团/扬尘/火舌会写成实体深度造成假遮蔽：
-    // 预 pass 期间隐藏它们（beauty 里仍可见）。
-    this.atmo = [];
-    this.scene.traverse((o) => {
-      const mat = (o as THREE.Mesh).material as THREE.Material | undefined;
-      if (mat && mat.transparent) this.atmo.push(o);
-    });
-    const gtaoRender = this.gtao.render.bind(this.gtao);
-    this.gtao.render = (renderer, wb, rb, dt, mask) => {
-      const hidden: THREE.Object3D[] = [];
-      for (const o of this.atmo) if (o.visible) { o.visible = false; hidden.push(o); }
-      gtaoRender(renderer, wb, rb, dt, mask);
-      for (const o of hidden) o.visible = true;
-    };
-    this.composer.addPass(this.gtao);
-    this.glow = new ShaderPass(LightGlowShader);
-    this.composer.addPass(this.glow);
-    this.bloom = new UnrealBloomPass(new THREE.Vector2(size.x, size.y), 0.3, 0.4, 1.0);
-    this.composer.addPass(this.bloom);
-    this.composer.addPass(new OutputPass());
-    this.lutPass = new LUTPass({ lut: this.lut, intensity: 1 });
-    this.composer.addPass(this.lutPass);
-    this.grade = new ShaderPass(VignetteGrainShader);
-    this.composer.addPass(this.grade);
+    this.post.render(this.time);
   }
 
   /** SSR 反射接收面：石板地/碎石/木地板 + 低粗糙度积水。 */
@@ -463,36 +417,6 @@ export class SceneView {
     return out;
   }
 
-  /** 把点光源投影到屏幕，供光晕 pass 做深度遮挡散射。 */
-  private updateGlowLights(): void {
-    const u = this.glow.uniforms;
-    this.camera.updateMatrixWorld();
-    this.camera.matrixWorldInverse.copy(this.camera.matrixWorld).invert();
-    const lights = [this.props.lampLight, this.player.lanternLight, this.props.brazierLight, this.props.hearthLight, this.props.windowLight];
-    let n = 0;
-    for (const L of lights) {
-      if (n >= MAX_GLOW_LIGHTS) break;
-      if (L.intensity <= 0.05) continue;
-      const v = this.glowV;
-      L.getWorldPosition(v);
-      v.applyMatrix4(this.camera.matrixWorldInverse);
-      const depth = -v.z;
-      if (depth < 0.2) continue;
-      v.applyMatrix4(this.camera.projectionMatrix);
-      const x = v.x * 0.5 + 0.5, y = v.y * 0.5 + 0.5;
-      if (x < -0.3 || x > 1.3 || y < -0.3 || y > 1.3) continue;
-      (u.uLights.value as THREE.Vector4[])[n].set(x, y, depth, Math.min(1, L.intensity / 45));
-      (u.uLightCols.value as THREE.Color[])[n].copy(L.color);
-      n++;
-    }
-    for (let i = n; i < MAX_GLOW_LIGHTS; i++) (u.uLights.value as THREE.Vector4[])[i].w = 0;
-    u.uCount.value = n;
-    u.uNear.value = this.camera.near; u.uFar.value = this.camera.far;
-    u.uAspect.value = this.camera.aspect;
-    const depth = (this.gtao as unknown as { depthTexture?: THREE.Texture }).depthTexture;
-    u.tDepth.value = depth ?? null;
-    u.uHasDepth.value = depth ? 1 : 0;
-  }
 }
 
 /** 光柱贴图：沿长度与宽度软衰减的亮带。 */
