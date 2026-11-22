@@ -16,7 +16,7 @@ import { glowTexture, makeMaterials, smokeTexture } from './materials';
 import { Props } from './props';
 import { buildStaticLevel, StaticLevel } from './staticLevel';
 
-export type Quality = 'high' | 'low';
+export type Quality = 'cinematic' | 'high' | 'low';
 
 interface Rig {
   fog: number; fogNear: number; fogFar: number;
@@ -143,7 +143,7 @@ export class SceneView {
   readonly props: Props;
   readonly player: PlayerModel;
   readonly ghosts: GhostModels;
-  quality: Quality = 'high';
+  quality: Quality = 'cinematic';
   private level: StaticLevel;
   private hemi = new THREE.HemisphereLight(0xffffff, 0x444444, 1);
   private sun = new THREE.DirectionalLight(0xffffff, 1);
@@ -171,7 +171,7 @@ export class SceneView {
 
   constructor(canvas: HTMLCanvasElement) {
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
+    this.renderer.setPixelRatio(window.devicePixelRatio); // 默认 cinematic：满像素比
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -271,14 +271,16 @@ export class SceneView {
   setQuality(q: Quality): void {
     if (this.quality === q) return;
     this.quality = q;
-    const high = q === 'high';
-    this.renderer.setPixelRatio(high ? Math.min(window.devicePixelRatio, 1.5) : 1);
-    this.renderer.shadowMap.type = high ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap;
-    this.sun.shadow.mapSize.set(high ? 2048 : 1024, high ? 2048 : 1024);
+    const heavy = q !== 'low';
+    // cinematic 用满设备像素比；high 保留 1.5 上限；low 直出 1x。
+    this.renderer.setPixelRatio(q === 'cinematic' ? window.devicePixelRatio : q === 'high' ? Math.min(window.devicePixelRatio, 1.5) : 1);
+    this.renderer.shadowMap.type = heavy ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap;
+    this.sun.shadow.mapSize.set(heavy ? 2048 : 1024, heavy ? 2048 : 1024);
     this.sun.shadow.map?.dispose();
     this.sun.shadow.map = null;
-    this.dust.visible = high;
-    this.props.setQuality(q);
+    this.dust.visible = heavy;
+    // props 内部以 'high' 判定重特效：cinematic 同样按高档传入。
+    this.props.setQuality(q === 'cinematic' ? 'high' : q);
     this.resize();
   }
 
@@ -425,7 +427,7 @@ export class SceneView {
 
   render(): void {
     this.renderer.info.reset();
-    if (this.quality === 'high') this.composer.render();
+    if (this.quality !== 'low') this.composer.render();
     else this.renderer.render(this.scene, this.camera);
   }
 }
