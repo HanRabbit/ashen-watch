@@ -21,6 +21,15 @@ const params = new URLSearchParams(location.search);
 const settings = loadSettings();
 const canvas = document.getElementById('game') as HTMLCanvasElement;
 
+// 加载进度（UI-04）：外部贴图与 glTF 都经由 THREE.DefaultLoadingManager 计数。
+// 这里只消费 three 的公共 onProgress/onLoad 回调，向加载页暴露真实百分比；不改 materials.ts。
+interface LoadState { loaded: number; total: number; done: boolean }
+const loadState: LoadState = { loaded: 0, total: 0, done: false };
+(window as unknown as { __awLoad?: LoadState }).__awLoad = loadState;
+const emitLoad = (): void => { window.dispatchEvent(new CustomEvent('aw-load', { detail: loadState })); };
+THREE.DefaultLoadingManager.onProgress = (_url, loaded, total) => { loadState.loaded = loaded; loadState.total = total; emitLoad(); };
+THREE.DefaultLoadingManager.onLoad = () => { loadState.done = true; emitLoad(); };
+
 function browserStorage(): StorageLike | null {
   try {
     return window.localStorage;
@@ -41,6 +50,22 @@ const audio = new GameAudio();
 const hud = new Hud(settings);
 
 const TITLE_CAM = { pos: [-7.5, 5.2, 2.5] as [number, number, number], look: [11, 4.2, 22] as [number, number, number] };
+
+/** 标题/继续界面把背景摆成真实月夜：月光冷调 + 礼拜堂剪影 + 壁灯/火盆暖光（圣经第 11 节）。
+ *  只修改用于展示的当前 world；新游戏/继续/重试都会整体替换 world 对象，故不影响玩法开局与存档。
+ *  模拟在标题模式不推进，不会触发入夜事件或生成鬼。 */
+function applyTitleScene(): void {
+  const w = session.world;
+  w.phase = 'night';
+  w.clock = 0;
+  w.repairs.lamp = true;
+  w.lampBurn = 250;
+  w.braziers.chapel = 150;
+  w.braziers.side = 150;
+  w.hearth.lit = true;
+  w.hearth.burn = 300;
+  w.ghosts.length = 0;
+}
 let mode: 'title' | 'playing' = 'title';
 let lockFailed = false;
 let pending: Action[] = [];
@@ -132,6 +157,7 @@ const screens = new Screens({
     input.releaseLock();
     hud.show(false);
     view.fixedCam = TITLE_CAM;
+    applyTitleScene();
     screens.replace('title');
   },
   retryNight: () => {
@@ -273,6 +299,7 @@ view.renderer.setAnimationLoop((now: number) => {
 
 applySettings();
 view.fixedCam = TITLE_CAM;
+applyTitleScene();
 screens.replace('title');
 
 // 只读探针（?probe=1）：供自动化验收读取状态与帧时间，不改变任何玩法参数。
@@ -296,6 +323,8 @@ function probe(): Record<string, unknown> {
 const w = window as unknown as Record<string, unknown>;
 // 外部贴图加载完成（含离线回退）后兑现，截图工具据此等待，避免拍到兜底贴图。
 w.__awTexReady = texturesReady;
+// 贴图链兑现是加载完成的权威信号（含失败回退），据此把加载页推到 100%。
+void texturesReady.then(() => { loadState.done = true; emitLoad(); });
 if (params.get('probe') === '1' || preset.debug) {
   const gl = view.renderer.getContext();
   const ext = gl.getExtension('WEBGL_debug_renderer_info');
