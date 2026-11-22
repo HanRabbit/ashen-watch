@@ -10,7 +10,7 @@ const filter = process.argv.slice(3).find((a) => !a.startsWith('--')) ?? '';
 const REF_CAM = { pos: [-7.5, 1.7, 16.5], look: [19, 4.6, 16.5] };
 const CASTLE_CAM = { pos: [58, 46, -18], look: [120, 72, -70] };
 const PANO_CAM = { pos: [-30, 70, 70], look: [60, 45, -50] };
-const GATE_CAM = { pos: [10, 22, 22], look: [40, 28, 60] };
+const GATE_CAM = { pos: [18, 32, 28], look: [40, 26, 60] };
 
 const stage = (page, spec) => page.evaluate((s) => {
   const d = window.__awDev;

@@ -397,7 +397,7 @@ export function buildScenery(_m: Materials): Scenery {
   const a1 = new THREE.BoxGeometry(3, 5.5, 3.6); a1.translate(cx, cy + 0.5, cz - 16); archParts.push(a1);
   const gx = 40, gzSim = 60, gy = 16, gz = -gzSim;
   const a2 = new THREE.BoxGeometry(2.8, 5, 3.4); a2.translate(gx, gy + 2.5, gz); archParts.push(a2);
-  const a3 = new THREE.BoxGeometry(2.6, 3.6, 0.12); a3.translate(gx, gy + 3, gz - 1.75); archParts.push(a3);
+  const a3 = new THREE.BoxGeometry(2.6, 3.6, 0.12); a3.translate(gx, gy + 3, gz + 1.75); archParts.push(a3);
   const archGeo = mergeGeometries(archParts.map((g) => g.toNonIndexed()), false)!;
   for (const g of archParts) g.dispose();
   group.add(new THREE.Mesh(archGeo, archDark));
@@ -405,7 +405,7 @@ export function buildScenery(_m: Materials): Scenery {
   const glowMat = new THREE.MeshBasicMaterial({ color: 0xffb25e, fog: false, transparent: true, opacity: 0, side: THREE.DoubleSide });
   const glowParts: THREE.BufferGeometry[] = [];
   const g1 = new THREE.PlaneGeometry(2.6, 4.4); g1.translate(cx, cy + 0.2, cz - 17.9); glowParts.push(g1);
-  const g2 = new THREE.PlaneGeometry(2.4, 4); g2.translate(gx, gy + 2.2, gz - 1.8); glowParts.push(g2);
+  const g2 = new THREE.PlaneGeometry(2.4, 4); g2.translate(gx, gy + 2.2, gz + 1.8); glowParts.push(g2);
   const glowGeo = mergeGeometries(glowParts.map((g) => g.toNonIndexed()), false)!;
   for (const g of glowParts) g.dispose();
   group.add(new THREE.Mesh(glowGeo, glowMat));
@@ -420,6 +420,8 @@ export function buildScenery(_m: Materials): Scenery {
     [cx + 14, cy + 10, cz - 12, -1.2, 0.8],
     [cx - 17, cy + 8, cz + 8, -1.4, 0.5],
     [cx - 4, cy + 12, cz - 17.6, 0, 0.65],
+    [gx - 3.6, gy + 12, gz + 2.6, 0, 0.7],
+    [gx + 3.6, gy + 14, gz + 2.6, 0, 0.5],
   ];
   const winInst = new THREE.InstancedMesh(new THREE.PlaneGeometry(0.8, 1.5), winMat, winSpots.length);
   winSpots.forEach(([x, y, z, rot, b], i) => {
@@ -592,7 +594,7 @@ export function buildScenery(_m: Materials): Scenery {
 
   // ——— 每帧大气驱动 ———
   const tmpA = new THREE.Color(), tmpB = new THREE.Color();
-  castle.onBeforeRender = (_r, scene) => {
+  ground.onBeforeRender = (_r, scene) => {
     const fog = scene.fog as THREE.Fog | null;
     if (!fog) return;
     const night: number = scene.userData.night ?? 0;
