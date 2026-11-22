@@ -3,10 +3,10 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { PROPS, RAISED_Y, WALLS, WELL } from '../sim/level';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { archHeader, archLeaf, Batch, gable } from './geom';
+import { archHeader, archLeaf, archRib, Batch, gable } from './geom';
 import { buildFurniture } from './furniture';
 import { variants } from './materialVariants';
-import { grassTexture, ivyLeafTexture, leadedGlass, leafTexture, Materials, mossTexture, rustTexture, scaleUV, smokeTexture, tiledBox, trackPending } from './materials';
+import { grassTexture, ivyLeafTexture, leadedGlass, leafTexture, Materials, mossTexture, rugTexture, rustTexture, scaleUV, smokeTexture, tiledBox, trackPending } from './materials';
 
 const R = RAISED_Y;
 const HALF_PI = Math.PI / 2;
@@ -222,12 +222,12 @@ export function buildStaticLevel(m: Materials): StaticLevel {
     }
   }
 
-  // 门房内墙：下半 wallRubble + 上半 wallPlaster（5.1），贴在内墙面
+  // 门房内墙：全部石墙（concept/02，圣经 v2.8）——下半 wallRubble + 上半 wallAshlar，不用抹灰
   {
     const gh = (x0: number, z0: number, x1: number, z1: number): void => {
       b.box(v.wallRubble, x0, z0, x1, z1, 0.05, 1.5, 3.2);
-      b.box(v.wallPlaster, x0, z0, x1, z1, 1.5, 3.5, 2.6);
-      b.box(v.wallTrim, x0, z0, x1, z1, 1.46, 1.54, 2.2); // 腰线
+      b.box(v.wallAshlar, x0, z0, x1, z1, 1.5, 3.5, 2.6);
+      b.box(v.wallTrim, x0, z0, x1, z1, 1.46, 1.54, 2.2); // 石腰线
     };
     gh(-3.0, -8.0, -2.94, 0.0);   // 西内墙
     gh(2.94, -8.0, 3.0, 0.0);     // 东内墙
@@ -259,9 +259,18 @@ export function buildStaticLevel(m: Materials): StaticLevel {
   b.box(v.floorDirt, 9.3, 0.5, 10, 28.5, -0.3, 0.006, 2);
   b.box(v.floorDirt, -10, 0.5, 10, 1.2, -0.3, 0.006, 2);
   b.box(v.floorDirt, -10, 27.8, 10, 28.5, -0.3, 0.006, 2);
-  // 门房室内石板（concept/02）+ 中央地毯
+  // 门房室内石板（concept/02）+ 中央织纹地毯（单幅图案 + 流苏破边 + 磨损污渍）
   b.box(v.floorInterior, -3.5, -8.5, 3.5, 0, -0.3, 0.005, 2);
-  b.box(v.clothLinen, -1.3, -6.2, 1.3, -2.6, 0.006, 0.02, 1.4);
+  {
+    const rug = rugTexture();
+    const rugMat = new THREE.MeshPhysicalMaterial({
+      map: rug.map, normalMap: rug.normalMap, normalScale: new THREE.Vector2(0.8, 0.8),
+      color: 0xffffff, roughness: 0.95, metalness: 0,
+      sheen: 0.5, sheenRoughness: 0.7, sheenColor: new THREE.Color(0x6a4a3a),
+      alphaTest: 0.4, side: THREE.DoubleSide,
+    });
+    b.geo(rugMat, new THREE.PlaneGeometry(2.6, 3.6), 0, 0.02, -4.4, 0, -HALF_PI, 0);
+  }
   b.box(v.floorFlag, 13, 7.5, 25, 25.5, -0.3, R, 3.6);
   b.box(v.floorFlag, 10, 25.5, 25, 29, -0.3, R, 3.6);
   // 矮台阶（三级，每级 0.15 m）：外廊尖拱前、礼拜堂侧门前（wallTrim）
@@ -278,6 +287,7 @@ export function buildStaticLevel(m: Materials): StaticLevel {
   b.geo(v.woodBeam, gable(7.4, 1.7, 0.4), 0, 3.9, 0.25);
   for (const z of [-6.6, -4.1, -1.6]) {
     b.box(v.woodBeam, -3.2, z - 0.16, 3.2, z + 0.16, 3.22, 3.6, 1); // 粗壮方料横梁
+    b.geo(v.woodBeam, archRib(6.0, 0.72, 0.2), 0, 2.5, z); // 木拱肋（concept/02）
     // 两端斜撑托架（梁下 45° 撑木）
     for (const sx of [-1, 1]) {
       const geo = tiledBox(0.16, 0.9, 0.16, 1);
@@ -417,14 +427,17 @@ export function buildStaticLevel(m: Materials): StaticLevel {
     qTmp.setFromEuler(eTmp);
     ivyQuat.push(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), yaw).multiply(qTmp));
     ivyScale.push(scale);
-    const c = ivyPalette[ivyR() < 0.1 ? 4 : ivyR() < 0.16 ? 5 : Math.floor(ivyR() * 4)];
-    ivyCol.push(c.clone().multiplyScalar(0.85 + ivyR() * 0.5));
+    // 降饱和：以红褐/酒红为主（圣经 4.2），橙黄少量；亮度克制避免艳红
+    const c = ivyPalette[ivyR() < 0.05 ? 4 : ivyR() < 0.1 ? 5 : Math.floor(ivyR() * 4)];
+    ivyCol.push(c.clone().multiplyScalar(0.7 + ivyR() * 0.3));
   };
   for (const pa of patches) {
     const yaw = Math.atan2(pa.nx, pa.nz);
-    const roots = Math.max(3, Math.round((pa.u1 - pa.u0) / 1.0)); // 更多主茎，成片攀爬
+    const roots = Math.max(3, Math.round((pa.u1 - pa.u0) / 1.0));
     for (let s = 0; s < roots; s++) {
-      const uRoot = pa.u0 + ((s + 0.5) * (pa.u1 - pa.u0)) / roots + (ivyR() - 0.5) * 0.5;
+      // 主簇间距随机化（非等距）：有的墙面光秃、有的成片
+      const uRoot = pa.u0 + ivyR() * (pa.u1 - pa.u0);
+      const vigor = 0.35 + ivyR() * 0.65; // 每株长势不一
       const phase = ivyR() * 6.28, amp = 0.18 + ivyR() * 0.3;
       const top = pa.top * (0.82 + ivyR() * 0.22);
       // 主茎从墙脚攀爬
@@ -433,21 +446,21 @@ export function buildStaticLevel(m: Materials): StaticLevel {
         const u = uRoot + Math.sin(y * 1.3 + phase) * amp * (0.4 + t) + (ivyR() - 0.5) * 0.08;
         const px = pa.bx + pa.tx * u, pz = pa.bz + pa.tz * u;
         decal.geo(bark, new THREE.BoxGeometry(0.02, 0.15, 0.02), px + pa.nx * 0.025, y, pz + pa.nz * 0.025, yaw, (ivyR() - 0.5) * 0.25, (ivyR() - 0.5) * 0.25);
-        // 上密下疏 + 顶端破碎：密度随高度上升，顶梢 ragged
-        const densEff = pa.dens * (0.55 + 0.45 * t) * (t > 0.9 ? 0.55 : 1);
+        // 上密下疏 + 顶端破碎 + 每株长势不一：密度随高度上升，顶梢 ragged
+        const densEff = pa.dens * vigor * (0.55 + 0.45 * t) * (t > 0.9 ? 0.55 : 1);
         if (ivyR() > densEff) continue; // 裸茎节点（gaps）
         const n = 5 + Math.floor(ivyR() * 6);
-        const rad = 0.18 + ivyR() * 0.22;
+        const rad = 0.14 + ivyR() * 0.16;
         for (let l = 0; l < n; l++) {
           const du = (ivyR() - 0.5) * rad * 2, dv = (ivyR() - 0.5) * rad * 1.6;
-          pushLeaf(px + pa.tx * du, y + dv, pz + pa.tz * du, yaw, pa.nx, pa.nz, 0.22 + ivyR() * 0.14);
+          pushLeaf(px + pa.tx * du, y + dv, pz + pa.tz * du, yaw, pa.nx, pa.nz, 0.12 + ivyR() * 0.08); // 叶片缩小到 ~1/2
         }
         // 偶有分枝向外探出再缀叶
         if (ivyR() < 0.28) {
           const bu = u + (ivyR() - 0.5) * 0.6, by = y + 0.1 + ivyR() * 0.2;
           const bpx = pa.bx + pa.tx * bu, bpz = pa.bz + pa.tz * bu;
           decal.geo(bark, new THREE.BoxGeometry(0.015, 0.3, 0.015), bpx + pa.nx * 0.1, by, bpz + pa.nz * 0.1, yaw, 0.6, 0);
-          for (let l = 0; l < 6; l++) pushLeaf(bpx + pa.tx * (ivyR() - 0.5) * 0.34, by + (ivyR() - 0.5) * 0.3, bpz + pa.tz * (ivyR() - 0.5) * 0.34, yaw, pa.nx, pa.nz, 0.22 + ivyR() * 0.13);
+          for (let l = 0; l < 6; l++) pushLeaf(bpx + pa.tx * (ivyR() - 0.5) * 0.34, by + (ivyR() - 0.5) * 0.3, bpz + pa.tz * (ivyR() - 0.5) * 0.34, yaw, pa.nx, pa.nz, 0.12 + ivyR() * 0.07);
         }
       }
     }
