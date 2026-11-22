@@ -62,7 +62,7 @@ function speckle(g: CanvasRenderingContext2D, r: () => number, n: number, size: 
 interface Surface { map: THREE.CanvasTexture; normalMap: THREE.CanvasTexture; roughnessMap?: THREE.CanvasTexture }
 
 /** 砌块：颜色与高度同步绘制，灰缝凹陷、块面微凸。 */
-function blocks(base: [number, number, number], rows: number, cols: number, seed: number, mortar = 0.5): Surface {
+export function blocks(base: [number, number, number], rows: number, cols: number, seed: number, mortar = 0.5): Surface {
   const S = 256;
   const col = canvas(S), ht = canvas(S), ro = canvas(S);
   const r = rng(seed);
@@ -683,6 +683,10 @@ const AW_MAP_BLOCK = /* glsl */`
     awPolish = max(awPolish, smoothstep(z.z, z.z * 0.35, distance(vAwWorldPos.xz, z.xy)) * z.w);
   }
   awPolish *= awUp * (0.6 + 0.4 * awMacro2);
+  // 动线磨亮（5.2）：庭院主路中线 + 门房门槛前后 1 m（只降 roughness，不改色相）
+  float awPath = (1.0 - smoothstep(0.6, 1.7, abs(vAwWorldPos.x))) * (1.0 - smoothstep(0.05, 0.2, vAwWorldPos.y));
+  float awThreshold = smoothstep(1.3, 0.3, distance(vAwWorldPos.xz, vec2(0.0, -0.5)));
+  awPolish = max(awPolish, max(awPath * 0.5, awThreshold * 0.6) * uAwFloor * awUp);
   awMoss = clamp(awBase * 0.8 + awTopMoss * 0.9 + awStreak * 0.35, 0.0, 1.0);
   awPuddle = 0.0; awStoneA = 1.0; awEdge = 1.0;
   float awH = awHeight(awUv);
@@ -695,8 +699,8 @@ const AW_MAP_BLOCK = /* glsl */`
     float awCrumble = (awFbm(vMapUv * 55.0 + 2.0) - 0.5) * 0.16;
     awJGeo = 1.0 - smoothstep(0.0, 0.16, awEdge + awCrumble);
     // 低洼石板 + 世界噪声 → 不规则积水（克制覆盖，避免成片像雪）；再叠加与溅水判定一致的洼地中心
-    float awLowStone = smoothstep(0.82, 0.76, awCell.b);
-    awPuddle = awStoneA * awLowStone * smoothstep(0.58, 0.72, awFbm(awW * 0.55 + 4.0));
+    float awLowStone = smoothstep(0.80, 0.74, awCell.b);
+    awPuddle = awStoneA * awLowStone * smoothstep(0.66, 0.78, awFbm(awW * 0.55 + 4.0));
     for (int i = 0; i < 4; i++) {
       vec4 p = uAwPuddles[i];
       awPuddle = max(awPuddle, smoothstep(p.z, p.z * 0.35, distance(awW, p.xy)) * p.w * awStoneA);
@@ -733,7 +737,7 @@ if (uAwFloor < 0.5) {
   float awMn = min(sampledDiffuseColor.r, min(sampledDiffuseColor.g, sampledDiffuseColor.b));
   float awSat0 = (awMx - awMn) / max(awMx, 0.001);
   float awMortar = smoothstep(0.30, 0.50, awLum0) * (1.0 - smoothstep(0.10, 0.30, awSat0));
-  sampledDiffuseColor.rgb = mix(sampledDiffuseColor.rgb, vec3(0.075, 0.082, 0.092) * (0.7 + 0.6 * awMacro), awMortar * 0.9);
+  sampledDiffuseColor.rgb = mix(sampledDiffuseColor.rgb, vec3(0.05, 0.055, 0.062) * (0.7 + 0.6 * awMacro), awMortar * 0.95);
 }
 diffuseColor *= sampledDiffuseColor;
 diffuseColor.rgb *= 1.0 - 0.62 * awJGeo;
@@ -772,7 +776,9 @@ roughnessFactor *= 1.0 - 0.22 * awWet * uAwFloor * (1.0 - awPuddle);
 roughnessFactor = mix(roughnessFactor, 0.34, awPolish);
 roughnessFactor = mix(roughnessFactor, 0.92, awJGeo * 0.55);
 roughnessFactor = mix(roughnessFactor, 0.85, awMoss * 0.4);
+roughnessFactor = clamp(roughnessFactor + (awSlabHash - 0.5) * 0.12, 0.0, 1.0); // 每块石板 roughness ±0.06
 roughnessFactor = mix(roughnessFactor, 0.05, awPuddle);
+roughnessFactor = max(roughnessFactor, awJGeo * 0.55); // 石缝/灰浆不得镜面
 `;
 
 const AW_NORMAL_BLOCK = /* glsl */`
@@ -904,7 +910,7 @@ export function makeMaterials(): Materials {
   const m: Materials = {
     stone: std(stoneS, { color: 0xffffff, roughness: 0.96, normalScale: new THREE.Vector2(1, 1) }),
     stoneDark: std(stoneDarkS, { color: 0xffffff, roughness: 0.97, normalScale: new THREE.Vector2(1, 1) }),
-    flag: std(flagS, { color: 0xffffff, roughness: 0.82, normalScale: new THREE.Vector2(1.2, 1.2) }),
+    flag: std(flagS, { color: 0xffffff, roughness: 0.82, normalScale: new THREE.Vector2(1.5, 1.5) }),
     wood: std(woodS, { color: 0x9a8262, roughness: 0.82, normalScale: new THREE.Vector2(0.7, 0.7) }),
     woodFloor: std(woodFloorS, { color: 0x6b5a48, roughness: 0.8, normalScale: new THREE.Vector2(0.6, 0.6) }),
     iron: std(ironS, { color: 0x2a2b2e, roughness: 0.62, metalness: 1.0, normalScale: new THREE.Vector2(0.8, 0.8) }),
@@ -942,7 +948,7 @@ export function makeMaterials(): Materials {
   // 共享石材着色器：墙（floor=0）与地（floor=1）。冷灰调、去饱和、宏观噪声、潮湿与 POM。
   stoneShader(m.stone, awUniforms(0, 0.3, 0.5, [0.88, 0.92, 1.0], 0.025, [2.2, 4.15]));
   stoneShader(m.stoneDark, awUniforms(0, 0.3, 0.55, [0.74, 0.78, 0.86], 0.025, [4.4, 6.85]));
-  stoneShader(m.flag, awUniforms(1, 0.85, 0.6, [0.80, 0.84, 0.92], 0.02));
+  stoneShader(m.flag, awUniforms(1, 0.85, 0.6, [1.08, 1.12, 1.20], 0.045));
   stoneShader(m.roof, awUniforms(0, 0.25, 0.2, [0.3, 0.32, 0.34], 0.02));
   stoneShader(m.gravel, awUniforms(1, 0.4, 0.15, [0.82, 0.82, 0.82], 0.03));
 
@@ -967,7 +973,7 @@ export function makeMaterials(): Materials {
   // 外部 CC0 贴图增强（石、木、瓦、碎石），2K：颜色/法线/粗糙度/AO/高度。
   enhance(m.stone, 'castle_wall_varriation', 1.0, pending);
   enhance(m.stoneDark, 'castle_wall_varriation', 1.0, pending);
-  loadFlagstone(m.flag, 1.2, pending);
+  loadFlagstone(m.flag, 1.5, pending);
   enhance(m.wood, 'medieval_wood', 0.8, pending);
   enhance(m.woodFloor, 'brown_planks_05', 0.7, pending);
   enhance(m.roof, 'roof_slates_02', 0.9, pending);
