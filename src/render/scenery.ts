@@ -33,11 +33,23 @@ function bakeForm(geo: THREE.BufferGeometry, y0: number, span: number, contrast 
   for (let i = 0; i < pos.count; i++) {
     const top = clamp01(nor.getY(i));
     const west = clamp01(-nor.getX(i));
-    let raw = 0.62 + 0.26 * top + 0.12 * west;
-    raw *= 0.86 + 0.2 * clamp01((pos.getY(i) - y0) / span);
-    // 远景大气简化：压低形体对比，整体贴近材质色（雾感）
-    const form = 1 - contrast * (1 - Math.max(0.5, Math.min(1.05, raw)));
+    let raw = 0.5 + 0.4 * top + 0.25 * west;
+    raw *= 0.8 + 0.3 * clamp01((pos.getY(i) - y0) / span);
+    // contrast=1 恢复强形体明暗（城堡/山崖/松林要读出形体）；小值=远景雾感压平
+    const form = 1 - contrast * (1 - Math.max(0.15, Math.min(1.2, raw)));
     cols[i * 3] = cols[i * 3 + 1] = cols[i * 3 + 2] = form;
+  }
+  geo.setAttribute('color', new THREE.BufferAttribute(cols, 3));
+}
+
+/** 屋面/锥顶：整体压暗 + 轻微受光变化（深色锥顶是认出城堡的关键）。 */
+function bakeFlat(geo: THREE.BufferGeometry, base: number): void {
+  const pos = geo.getAttribute('position') as THREE.BufferAttribute;
+  const nor = geo.getAttribute('normal') as THREE.BufferAttribute;
+  const cols = new Float32Array(pos.count * 3);
+  for (let i = 0; i < pos.count; i++) {
+    const v = base * (0.85 + 0.3 * clamp01(nor.getY(i)));
+    cols[i * 3] = cols[i * 3 + 1] = cols[i * 3 + 2] = v;
   }
   geo.setAttribute('color', new THREE.BufferAttribute(cols, 3));
 }
@@ -116,6 +128,7 @@ function pineGeometry(): THREE.BufferGeometry {
   parts.push(spike);
   const geo = mergeGeometries(parts.map((g) => g.toNonIndexed()), false)!;
   for (const g of parts) g.dispose();
+  bakeForm(geo, 0, 7.4, 1.0); // 单株内部受光/背光明暗 => 森林内部对比
   return geo;
 }
 
@@ -128,6 +141,7 @@ function canopyGeometry(): THREE.BufferGeometry {
   }
   const geo = mergeGeometries(parts.map((g) => g.toNonIndexed()), false)!;
   for (const g of parts) g.dispose();
+  bakeForm(geo, 0, 5.2, 1.0);
   return geo;
 }
 
@@ -180,45 +194,46 @@ function moundRing(radius: number, baseH: number, varH: number, peaks: number, s
   return geo;
 }
 
-/** 圆塔：分段 + 收分（下粗上细）+ 檐口环 + 锥顶脊线 / 残缺顶 + 可选垛口。 */
-function tower(parts: THREE.BufferGeometry[], x: number, z: number, y0: number, r: number, h: number, spire: number, opts: { merlons?: boolean; broken?: boolean } = {}): void {
+/** 圆塔：分段 + 收分（下粗上细）+ 檐口环 + 锥顶脊线 / 残缺顶 + 可选垛口。
+ *  石砌体进 stone[]，锥顶/脊线/残顶进 roof[]（屋面比墙面暗，靠内部对比认出城堡）。 */
+function tower(stone: THREE.BufferGeometry[], roof: THREE.BufferGeometry[], x: number, z: number, y0: number, r: number, h: number, spire: number, opts: { merlons?: boolean; broken?: boolean } = {}): void {
   const seg = 10;
   for (let b = 0; b < 3; b++) {
     const bh = h / 3;
     const rr = r * (1.12 - b * 0.09); // 收分
     const body = new THREE.CylinderGeometry(rr * 0.97, rr * 1.04, bh, seg);
     body.translate(x, y0 + bh * (b + 0.5), z);
-    parts.push(body);
+    stone.push(body);
     if (b < 2) {
       const ring = new THREE.CylinderGeometry(rr * 1.1, rr * 1.1, 0.35, seg);
       ring.translate(x, y0 + bh * (b + 1), z);
-      parts.push(ring);
+      stone.push(ring);
     }
   }
   const cap = new THREE.CylinderGeometry(r * 1.16, r * 1.16, 0.5, seg);
   cap.translate(x, y0 + h + 0.25, z);
-  parts.push(cap);
+  stone.push(cap);
   if (opts.merlons) {
     for (let i = 0; i < 8; i++) {
       const a = (i / 8) * Math.PI * 2;
       const m = new THREE.BoxGeometry(r * 0.4, 0.9, r * 0.28);
       m.rotateY(-a);
       m.translate(x + Math.cos(a) * r * 1.05, y0 + h + 0.85, z + Math.sin(a) * r * 1.05);
-      parts.push(m);
+      stone.push(m);
     }
   }
   if (opts.broken) {
     const stub = new THREE.ConeGeometry(r * 1.15, spire * 0.4, seg, 1, true);
     stub.translate(x, y0 + h + 0.5 + spire * 0.2, z);
-    parts.push(stub);
+    roof.push(stub);
     const jag = new THREE.BoxGeometry(r * 0.7, spire * 0.25, r * 0.5);
     jag.rotateY(0.6);
     jag.translate(x + r * 0.3, y0 + h + 0.5 + spire * 0.35, z);
-    parts.push(jag);
+    roof.push(jag);
   } else {
     const cone = new THREE.ConeGeometry(r * 1.2, spire, seg);
     cone.translate(x, y0 + h + 0.5 + spire / 2, z);
-    parts.push(cone);
+    roof.push(cone);
     const cR = r * 1.2;
     const slopeLen = Math.hypot(cR, spire);
     const tilt = Math.atan2(cR, spire);
@@ -228,7 +243,7 @@ function tower(parts: THREE.BufferGeometry[], x: number, z: number, y0: number, 
       rib.rotateZ(tilt);
       rib.rotateY(-a);
       rib.translate(x + Math.cos(a) * cR * 0.5, y0 + h + 0.5 + spire * 0.5, z + Math.sin(a) * cR * 0.5);
-      parts.push(rib);
+      roof.push(rib);
     }
   }
 }
@@ -256,7 +271,7 @@ export function buildScenery(_m: Materials): Scenery {
 
   // ——— 中景 foothill（3D 低缓 mound，承载中景元素）———
   const footGeo = moundRing(70, 14, 6, 34, 71);
-  bakeForm(footGeo, -6, 24);
+  bakeForm(footGeo, -6, 24, 0.5);
   weatherTint(footGeo, 72);
   const foot = new THREE.Mesh(footGeo, basic(0x9aa4ae, 0x161e2b, 0.68, 0.4));
   foot.castShadow = false; foot.receiveShadow = false;
@@ -313,9 +328,23 @@ export function buildScenery(_m: Materials): Scenery {
   }
   const cragGeo = mergeGeometries(cragParts, false)!;
   for (const g of cragParts) g.dispose();
-  bakeForm(cragGeo, -6, cy + 10);
+  bakeForm(cragGeo, -6, cy + 10, 1.5);
+  { // 块面明暗：节理阴影 + 岩层阴面 + 阳面/阴面
+    const pp = cragGeo.getAttribute('position') as THREE.BufferAttribute;
+    const cc = cragGeo.getAttribute('color') as THREE.BufferAttribute;
+    const nn = cragGeo.getAttribute('normal') as THREE.BufferAttribute;
+    for (let i = 0; i < pp.count; i++) {
+      const ang = Math.atan2(pp.getX(i), pp.getZ(i));
+      let f = 0.65 + 0.55 * clamp01(-nn.getX(i));
+      if (Math.sin(ang * 6) > 0.72) f *= 0.5;
+      if (nn.getY(i) < -0.15) f *= 0.6;
+      if (Math.floor((pp.getY(i) + 33) / 7) % 2 === 0) f *= 0.82; // 岩层阳/阴交替
+      cc.setXYZ(i, cc.getX(i) * f, cc.getY(i) * f, cc.getZ(i) * f);
+    }
+    cc.needsUpdate = true;
+  }
   weatherTint(cragGeo, 73);
-  const cragMat = basic(0x9aa4ae, 0x151d2a, 0.68, 0.42);
+  const cragMat = basic(0xb4bec8, 0x151d2a, 0.68, 0.42);
   const cragMesh = new THREE.Mesh(cragGeo, cragMat);
   cragMesh.position.set(cx, (cy + 6) / 2 - 6, cz);
   cragMesh.castShadow = false; cragMesh.receiveShadow = false;
@@ -323,6 +352,7 @@ export function buildScenery(_m: Materials): Scenery {
 
   // ——— 山顶城堡 ———
   const cp: THREE.BufferGeometry[] = [];
+  const cr: THREE.BufferGeometry[] = [];
   const kw = 13, kh = 26;
   for (let b = 0; b < 3; b++) {
     const bh = kh / 3;
@@ -352,23 +382,23 @@ export function buildScenery(_m: Materials): Scenery {
   const roof = new THREE.ConeGeometry(kw * 0.78, 12, 4);
   roof.rotateY(Math.PI / 4);
   roof.translate(cx, cy + kh + 6, cz);
-  cp.push(roof);
+  cr.push(roof);
   const ridge = new THREE.BoxGeometry(0.5, 0.5, kw * 0.5);
   ridge.translate(cx, cy + kh + 9, cz);
-  cp.push(ridge);
+  cr.push(ridge);
   for (const [dx, dz] of [[-3, -2], [3, 2]]) {
     const ch = new THREE.BoxGeometry(1.2, 5, 1.2);
     ch.translate(cx + dx, cy + kh + 8, cz + dz);
     cp.push(ch);
   }
   for (const [dx, dz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) {
-    tower(cp, cx + dx * kw / 2, cz + dz * kw / 2, cy + kh * 0.5, 2.0, kh * 0.62, 7, { broken: dx === 1 && dz === -1 });
+    tower(cp, cr, cx + dx * kw / 2, cz + dz * kw / 2, cy + kh * 0.5, 2.0, kh * 0.62, 7, { broken: dx === 1 && dz === -1 });
   }
   const ring: [number, number, number, number, boolean][] = [
     [-16, -10, 3.0, 20, false], [-17, 8, 2.6, 16, true], [14, -12, 3.2, 23, false],
     [16, 7, 2.7, 17, false], [-3, -17, 2.4, 15, true], [6, 15, 2.5, 18, false], [-10, 14, 2.2, 14, false],
   ];
-  for (const [dx, dz, r, h, broken] of ring) tower(cp, cx + dx, cz + dz, cy - 3, r, h, r * 2.3, { merlons: true, broken });
+  for (const [dx, dz, r, h, broken] of ring) tower(cp, cr, cx + dx, cz + dz, cy - 3, r, h, r * 2.3, { merlons: true, broken });
   const wallPairs: [number, number, number, number][] = [
     [-15, -9, -3, -16], [-3, -16, 13, -11], [13, -11, 15, 6], [15, 6, 5, 14],
     [5, 14, -9, 13], [-9, 13, -16, 7], [-16, 7, -15, -9],
@@ -406,18 +436,19 @@ export function buildScenery(_m: Materials): Scenery {
     }
     wi++;
   }
-  tower(cp, cx - 4, cz - 16, cy - 3, 2.6, 18, 7, { merlons: true });
-  tower(cp, cx + 4, cz - 16, cy - 3, 2.6, 18, 7, { merlons: true });
+  tower(cp, cr, cx - 4, cz - 16, cy - 3, 2.6, 18, 7, { merlons: true });
+  tower(cp, cr, cx + 4, cz - 16, cy - 3, 2.6, 18, 7, { merlons: true });
   const gateWall = new THREE.BoxGeometry(10, 14, 3);
   gateWall.translate(cx, cy + 4, cz - 16);
   cp.push(gateWall);
   const castleGeo = mergeGeometries(cp.map((g) => g.toNonIndexed()), false)!;
   for (const g of cp) g.dispose();
-  bakeForm(castleGeo, cy - 6, 50);
+  bakeForm(castleGeo, cy - 6, 50, 1.4);
   weatherTint(castleGeo, 74);
-  const castle = new THREE.Mesh(castleGeo, basic(0xa8b2bc, 0x1a2434, 0.76, 0.45));
+  const castle = new THREE.Mesh(castleGeo, basic(0xccd6e0, 0x1a2434, 0.5, 0.45));
   castle.castShadow = false; castle.receiveShadow = false;
   group.add(castle);
+  for (const g of cr) bakeFlat(g, 0.32);
 
   // 门洞暗色 + 吊闸（合批）
   const archDark = new THREE.MeshBasicMaterial({ color: 0x0a0d12, fog: false });
@@ -466,25 +497,28 @@ export function buildScenery(_m: Materials): Scenery {
 
   // ——— 第二城门塔（画面左侧远景）———
   const gp: THREE.BufferGeometry[] = [];
-  tower(gp, gx - 3.6, gz, gy, 2.5, 17, 7, { merlons: true });
-  tower(gp, gx + 3.6, gz, gy, 2.5, 17, 7, { merlons: true, broken: true });
+  const gr: THREE.BufferGeometry[] = [];
+  tower(gp, gr, gx - 3.6, gz, gy, 2.5, 17, 7, { merlons: true });
+  tower(gp, gr, gx + 3.6, gz, gy, 2.5, 17, 7, { merlons: true, broken: true });
   const gwall = new THREE.BoxGeometry(9.5, 12, 3);
   gwall.translate(gx, gy + 6, gz);
   gp.push(gwall);
   const groof = new THREE.ConeGeometry(5.6, 4.5, 4);
   groof.rotateY(Math.PI / 4);
   groof.translate(gx, gy + 14.2, gz);
-  gp.push(groof);
+  gr.push(groof);
   const gateGeo = mergeGeometries(gp.map((g) => g.toNonIndexed()), false)!;
   for (const g of gp) g.dispose();
-  bakeForm(gateGeo, gy, 26);
+  bakeForm(gateGeo, gy, 26, 0.7);
+  for (const g of gr) bakeFlat(g, 0.32);
   weatherTint(gateGeo, 75);
-  const gate = new THREE.Mesh(gateGeo, basic(0xb0bac4, 0x182231, 0.72, 0.42));
+  const gate = new THREE.Mesh(gateGeo, basic(0xb8c2cc, 0x182231, 0.6, 0.42));
   gate.castShadow = false; gate.receiveShadow = false;
   group.add(gate);
 
   // ——— 中景补充：下城郭 / 坍塌墙 / 瞭望塔 ———
   const midParts: THREE.BufferGeometry[] = [];
+  const mr: THREE.BufferGeometry[] = [];
   const townSpots: [number, number][] = [[62, -26], [70, -10], [58, 8], [76, -38], [52, 26], [44, 48], [30, 62], [-24, 58], [-36, 44]];
   for (const [tx, tz] of townSpots) {
     const n = 3 + Math.floor(R() * 3);
@@ -515,14 +549,22 @@ export function buildScenery(_m: Materials): Scenery {
       }
     }
   }
-  tower(midParts, -28, -62, 10, 2.2, 22, 6, { merlons: true });
+  tower(midParts, mr, -28, -62, 10, 2.2, 22, 6, { merlons: true });
   const midGeo = mergeGeometries(midParts.map((g) => g.toNonIndexed()), false)!;
   for (const g of midParts) g.dispose();
-  bakeForm(midGeo, 4, 30);
+  bakeForm(midGeo, 4, 30, 0.6);
+  for (const g of mr) bakeFlat(g, 0.32);
   weatherTint(midGeo, 76);
   const mid = new THREE.Mesh(midGeo, basic(0x9aa4ae, 0x161e2b, 0.68, 0.4));
   mid.castShadow = false; mid.receiveShadow = false;
   group.add(mid);
+
+  // 屋面/锥顶统一合批：比墙面暗 0.10-0.18，靠内部对比认出城堡
+  const roofAll = mergeGeometries([...cr, ...gr, ...mr].map((g) => g.toNonIndexed()), false)!;
+  for (const g of [...cr, ...gr, ...mr]) g.dispose();
+  const roofMesh = new THREE.Mesh(roofAll, basic(0x8a94a0, 0x141c28, 0.5, 0.45));
+  roofMesh.castShadow = false; roofMesh.receiveShadow = false;
+  group.add(roofMesh);
 
   // 裸岩 outcrop
   const outGeo = new THREE.DodecahedronGeometry(3, 0);
@@ -544,7 +586,7 @@ export function buildScenery(_m: Materials): Scenery {
   // ——— 松林：foothill 单株（比坡面暗）+ 一脊带顶林冠线 + 枯阔叶 ———
   const pineGeo = pineGeometry();
   const mkPines = (spots: { x: number; y: number; z: number; h: number }[], day: number, df: number): void => {
-    const inst = new THREE.InstancedMesh(pineGeo, basic(day, 0x1a2430, df, 0.4, false), spots.length);
+    const inst = new THREE.InstancedMesh(pineGeo, basic(day, 0x1a2430, df, 0.4, true), spots.length);
     spots.forEach((p, i) => {
       const s = p.h / 7.4;
       dummy.position.set(p.x, p.y, -p.z);
@@ -552,7 +594,7 @@ export function buildScenery(_m: Materials): Scenery {
       dummy.scale.set(s * (0.85 + R() * 0.3), s, s * (0.85 + R() * 0.3));
       dummy.updateMatrix();
       inst.setMatrixAt(i, dummy.matrix);
-      tmpC.setScalar(0.8 + R() * 0.25);
+      tmpC.setScalar(0.75 + R() * 0.35);
       inst.setColorAt(i, tmpC);
     });
     inst.instanceMatrix.needsUpdate = true;
@@ -567,11 +609,11 @@ export function buildScenery(_m: Materials): Scenery {
     if (x > -13 && x < 32 && z > -11 && z < 32) continue;
     footPines.push({ x, y: 3 + 11 * clamp01((88 - rr) / 38) + R() * 2, z, h: 5 + R() * 4 });
   }
-  mkPines(footPines, 0xa6b0a8, 0.58); // 比 foothill 坡面(0x9aa4ae/0.62)暗
+  mkPines(footPines, 0x747e76, 0.3); // 比 foothill 坡面(0x9aa4ae/0.62)暗
 
   // 一脊带顶林冠线（沿 crest 噪声放置，比带面暗）
   const crest1 = (a: number): number => 40 + 10 * (0.5 * Math.sin(a * 3 + 11) + 0.3 * Math.sin(a * 7 + 25.3) + 0.2 * Math.sin(a * 13 + 45.1));
-  const canInst = new THREE.InstancedMesh(canopyGeometry(), basic(0xa0aaa2, 0x1c2632, 0.58, 0.45, false), 220);
+  const canInst = new THREE.InstancedMesh(canopyGeometry(), basic(0x747e76, 0x1c2632, 0.3, 0.45, true), 220);
   for (let i = 0; i < 220; i++) {
     const a = (i / 220) * Math.PI * 2 + R() * 0.1;
     const rr = 118 + R() * 6;
@@ -581,7 +623,7 @@ export function buildScenery(_m: Materials): Scenery {
     dummy.scale.set(s, s, s);
     dummy.updateMatrix();
     canInst.setMatrixAt(i, dummy.matrix);
-    tmpC.setScalar(0.8 + R() * 0.25);
+    tmpC.setScalar(0.75 + R() * 0.35);
     canInst.setColorAt(i, tmpC);
   }
   canInst.instanceMatrix.needsUpdate = true;
@@ -603,15 +645,23 @@ export function buildScenery(_m: Materials): Scenery {
   deadInst.castShadow = false; deadInst.receiveShadow = false;
   group.add(deadInst);
 
-  // ——— 每帧大气驱动（挂恒可见地盘）———
+  // ——— 每帧大气驱动（挂恒可见地盘）；雾感锚定天空地平线值（uHorizon），不随 fog.color 漂移 ———
   const tmpA = new THREE.Color(), tmpB = new THREE.Color();
+  let skyUniforms: { uHorizon: { value: THREE.Color } } | null = null;
   ground.onBeforeRender = (_r, scene) => {
     const fog = scene.fog as THREE.Fog | null;
     if (!fog) return;
+    if (!skyUniforms) {
+      scene.traverse((o) => {
+        const mm = (o as THREE.Mesh).material as THREE.ShaderMaterial | undefined;
+        if (!skyUniforms && mm && mm.uniforms && mm.uniforms.uHorizon) skyUniforms = mm.uniforms as { uHorizon: { value: THREE.Color } };
+      });
+    }
     const night: number = scene.userData.night ?? 0;
+    const haze = skyUniforms ? skyUniforms.uHorizon.value : fog.color;
     for (const a of atmo) {
       tmpA.copy(a.day).lerp(a.night, night);
-      tmpB.copy(fog.color).multiplyScalar(1 + night * 1.6);
+      tmpB.copy(haze).multiplyScalar(1 + night * 0.6);
       const amount = Math.min(0.95, a.df) * (1 - night) + a.nf * night;
       a.mat.color.copy(tmpA).lerp(tmpB, Math.min(0.95, amount));
     }
