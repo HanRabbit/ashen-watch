@@ -75,6 +75,27 @@ function drapedCloth(cx: number, cz: number, top: number, w: number, d: number, 
   return geo;
 }
 
+/** 炉罩/热源上方烟熏扇形贴花：下浓上淡、边缘渐隐。 */
+function sootTexture(): THREE.CanvasTexture {
+  const W = 128, H = 128;
+  const c = document.createElement('canvas');
+  c.width = W; c.height = H;
+  const g = c.getContext('2d')!;
+  const grd = g.createLinearGradient(0, H, 0, 0);
+  grd.addColorStop(0, 'rgba(0,0,0,0.85)');
+  grd.addColorStop(0.45, 'rgba(0,0,0,0.4)');
+  grd.addColorStop(1, 'rgba(0,0,0,0)');
+  g.fillStyle = grd; g.fillRect(0, 0, W, H);
+  g.globalCompositeOperation = 'destination-in';
+  const rad = g.createRadialGradient(W / 2, H * 0.85, 8, W / 2, H * 0.85, W * 0.75);
+  rad.addColorStop(0, 'rgba(0,0,0,1)');
+  rad.addColorStop(0.7, 'rgba(0,0,0,0.5)');
+  rad.addColorStop(1, 'rgba(0,0,0,0)');
+  g.fillStyle = rad; g.fillRect(0, 0, W, H);
+  const t = new THREE.CanvasTexture(c);
+  return t;
+}
+
 /** 褪色酒红长旗：燕尾破边 + 城堡徽记 + 竖纹褪色 + 底部潮湿（圣经 4.3 / concept/02、03）。 */
 function bannerTexture(seed: number): THREE.CanvasTexture {
   const W = 256, H = 512;
@@ -219,33 +240,61 @@ export function buildFurniture(m: Materials): THREE.Group {
     const y0 = p.x0 >= 13 || p.z0 >= 25.5 ? R : 0;
     switch (p.tag) {
       case 'hearth': {
-        // 壁炉主体用 GLB（雕花烟罩+炉膛），这里只留炉前石台
-        b.box(v.wallAshlar, p.x0, p.z0 - 0.1, p.x1 + 0.55, p.z1 + 0.1, 0, 0.16);
-        const fp = loadProp({
-          name: 'fireplace', size: 2.6, rotY: HALF_PI,
-          norm: {
-            FirePlaceLogs: { color: 0x6b5038, roughness: 0.85, metalness: 0, wear: { kind: 'wood', seed: 9 } },
-            FirePlaceRack: { color: 0x3a3b3e, roughness: 0.6, metalness: 1, wear: { kind: 'iron', seed: 4 } },
-            FirePlaceAshes: { color: 0x4a4a48, roughness: 0.95, metalness: 0 },
-          },
-          normDefault: { color: 0xc4c8ce, roughness: 0.88, metalness: 0, wear: { kind: 'soot', seed: 2, sootY: 1.15 } },
+        // 石砌开放壁炉（concept/02）：烟囱胸墙从墙里长出 + 敞开炉膛 + 石炉台 + 炉罩烟熏
+        const hx = p.x0, hz0 = p.z0, hz1 = p.z1;
+        b.box(v.wallTrim, hx, hz0 - 0.1, hx + 0.85, hz1 + 0.1, 0, 0.16); // 炉前石台
+        b.box(v.wallAshlar, hx, hz0, hx + 0.55, hz0 + 0.45, 0.16, 1.5); // 左垛
+        b.box(v.wallAshlar, hx, hz1 - 0.45, hx + 0.55, hz1, 0.16, 1.5); // 右垛
+        b.box(v.wallRough, hx, hz0 + 0.45, hx + 0.15, hz1 - 0.45, 0.16, 1.5); // 炉膛背
+        b.box(v.wallRough, hx, hz0 + 0.45, hx + 0.55, hz1 - 0.45, 0.16, 0.24); // 炉膛底
+        // 尖拱券眉 + 托石 + 炉罩 mantel
+        for (const sz of [-1, 1]) {
+          b.geo(v.wallTrim, tiledBox(0.8, 0.16, 0.14, 1), hx + 0.27, 1.32, -4.4 + sz * 0.42, 0, 0, sz * 0.35);
+          b.box(v.wallTrim, hx + 0.45, -4.4 + sz * 0.78 - 0.09, hx + 0.62, -4.4 + sz * 0.78 + 0.09, 1.34, 1.5);
+        }
+        b.box(v.wallTrim, hx, hz0 - 0.06, hx + 0.68, hz1 + 0.06, 1.5, 1.64); // mantel
+        // 收分炉罩（四棱台）+ 烟道
+        const hood = scaleUV(new THREE.CylinderGeometry(0.72, 1.7, 1.1, 4, 1), 1.5);
+        hood.rotateY(Math.PI / 4);
+        hood.scale(0.24, 1, 1);
+        b.geo(v.wallAshlar, hood, hx + 0.28, 2.19, -4.4);
+        b.box(v.wallAshlar, hx + 0.05, -4.85, hx + 0.5, -3.95, 2.72, 3.5);
+        // 炉膛正上方铁吊杆 + 吊环（吊锅挂这里）
+        b.box(m.iron, hx + 0.22, hz0 + 0.45, hx + 0.34, hz1 - 0.45, 1.42, 1.47);
+        b.geo(m.iron, new THREE.TorusGeometry(0.035, 0.01, 5, 8), hx + 0.28, 1.38, -4.4);
+        // 炉罩烟熏：贴附炉罩表面的渐淡壳（热源正上方，圣经 5.2）
+        const sootMat = new THREE.MeshBasicMaterial({
+          map: sootTexture(), transparent: true, depthWrite: false, color: 0x0a0908, opacity: 0.6,
+          polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2,
         });
-        fp.position.set(-2.5, 0, 4.4);
-        group.add(fp);
-        break;
-      }
-      case 'pot': {
-        b.box(v.wallTrim, p.x0, p.z0, p.x1, p.z1, 0, 0.3);
-        // 吊锅（GLB 锅体+链）+ 墙上锻铁吊臂
+        const sootHood = new THREE.Mesh(hood.clone().scale(1.03, 1.0, 1.03), sootMat);
+        sootHood.position.set(hx + 0.28, 2.19, -4.4);
+        sootHood.renderOrder = 1;
+        group.add(sootHood);
+        const sootBack = new THREE.Mesh(new THREE.PlaneGeometry(1.4, 0.8), sootMat);
+        sootBack.rotation.y = HALF_PI;
+        sootBack.position.set(hx + 0.16, 1.1, -4.4);
+        sootBack.renderOrder = 1;
+        group.add(sootBack);
+        // 炉膛内柴堆
+        const logs = loadProp({
+          name: 'firewood', size: 1.0,
+          normDefault: { color: 0x6b5038, roughness: 0.85, metalness: 0, wear: { kind: 'wood', seed: 41 } },
+        });
+        logs.position.set(hx + 0.28, 0.24, 4.4);
+        group.add(logs);
+        // 吊锅：铁链挂在炉膛正上方
         const pot = loadProp({
           name: 'cauldron', size: 0.95,
           normDefault: { color: 0x5a5d62, roughness: 0.8, metalness: 0.3, wear: { kind: 'soot', seed: 6, sootY: 0.55 } },
         });
-        pot.position.set(-2.45, 0.42, 2.55);
+        pot.position.set(hx + 0.28, 0.5, 4.4);
         group.add(pot);
-        b.box(m.iron, -3.0, -2.58, -2.45, -2.52, 1.35, 1.4);
-        b.geo(m.iron, new THREE.TorusGeometry(0.09, 0.014, 5, 12, Math.PI * 1.3), -2.75, 1.28, -2.55, 0, 0, 2.4);
-        b.geo(m.iron, new THREE.TorusGeometry(0.035, 0.01, 5, 8), -2.45, 1.33, -2.55);
+        break;
+      }
+      case 'pot': {
+        // 炉旁石墩：备餐台（热食碗/食材），锅已挂在炉膛上方
+        b.box(v.wallTrim, p.x0, p.z0, p.x1, p.z1, 0, 0.3);
         break;
       }
       case 'woodpile': {

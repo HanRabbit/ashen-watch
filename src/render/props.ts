@@ -161,17 +161,25 @@ function scrollArm(m: Materials): THREE.Group {
     const rivet = mesh(new THREE.SphereGeometry(0.016, 5, 4), m.iron); rivet.position.set(0.06, ry, rz); g.add(rivet);
   }
   const armCurve = new THREE.CatmullRomCurve3([
-    new THREE.Vector3(0.05, 0.1, 0), new THREE.Vector3(0.22, 0.17, 0),
-    new THREE.Vector3(0.42, 0.18, 0), new THREE.Vector3(0.55, 0.13, 0),
+    new THREE.Vector3(0.05, 0.1, 0), new THREE.Vector3(0.24, 0.18, 0),
+    new THREE.Vector3(0.46, 0.19, 0), new THREE.Vector3(0.6, 0.13, 0),
   ]);
-  g.add(mesh(new THREE.TubeGeometry(armCurve, 12, 0.018, 6), m.iron));
-  const curl = mesh(new THREE.TorusGeometry(0.13, 0.014, 5, 14, Math.PI * 1.25), polished);
-  curl.position.set(0.28, 0.02, 0); curl.rotation.z = -0.5;
+  g.add(mesh(new THREE.TubeGeometry(armCurve, 14, 0.02, 6), m.iron));
+  // 斜撑 + 臂端矛尖（concept/04 锻铁语汇）
+  const braceCurve = new THREE.CatmullRomCurve3([
+    new THREE.Vector3(0.05, -0.14, 0), new THREE.Vector3(0.2, -0.02, 0), new THREE.Vector3(0.34, 0.12, 0),
+  ]);
+  g.add(mesh(new THREE.TubeGeometry(braceCurve, 10, 0.014, 6), m.iron));
+  const spear = mesh(new THREE.ConeGeometry(0.026, 0.11, 4), polished);
+  spear.position.set(0.6, 0.2, 0);
+  g.add(spear);
+  const curl = mesh(new THREE.TorusGeometry(0.14, 0.015, 5, 14, Math.PI * 1.35), polished);
+  curl.position.set(0.3, 0.0, 0); curl.rotation.z = -0.5;
   const curl2 = mesh(new THREE.TorusGeometry(0.06, 0.012, 5, 10, Math.PI * 1.5), polished);
   curl2.position.set(0.12, -0.08, 0); curl2.rotation.z = 2.2;
   const curl3 = mesh(new THREE.TorusGeometry(0.05, 0.012, 5, 10, Math.PI * 1.4), polished);
   curl3.position.set(0.47, 0.06, 0); curl3.rotation.z = -1.2;
-  const hangRing = mesh(new THREE.TorusGeometry(0.03, 0.009, 5, 10), m.iron); hangRing.position.set(0.55, 0.1, 0);
+  const hangRing = mesh(new THREE.TorusGeometry(0.03, 0.009, 5, 10), m.iron); hangRing.position.set(0.6, 0.1, 0);
   g.add(curl, curl2, curl3, hangRing);
   mergeByMaterial(g);
   return g;
@@ -382,7 +390,7 @@ export class Props {
   readonly group = new THREE.Group();
   readonly hearthLight = new THREE.PointLight(0xff9a48, 0, 16, 1.6);
   readonly windowLight = new THREE.PointLight(0xff9a48, 0, 9, 1.8);
-  readonly lampLight = new THREE.PointLight(0xffa850, 0, 18, 1.5);
+  readonly lampLight = new THREE.PointLight(0xffb25e, 0, 16, 1.9);
   readonly brazierLight = new THREE.PointLight(0xff9440, 0, 15, 1.5);
   readonly lampDebugRing: THREE.Mesh;
 
@@ -497,16 +505,22 @@ export class Props {
       color: 0x3a2a16, emissive: 0xffa640, emissiveIntensity: 0, roughness: 0.2,
       transparent: true, opacity: 0.55, side: THREE.DoubleSide, roughnessMap: grimeTexture(),
     });
-    const lx = 0.55, ly = -0.14;
+    const lx = 0.6, ly = -0.28;
     this.lampArm.add(scrollArm(m));
     const lanternBody = hexLantern(m, this.lampGlass);
     lanternBody.position.set(lx, ly, 0);
     this.lampArm.add(lanternBody);
+    for (const ly2 of [0.05, -0.01]) {
+      const link = mesh(new THREE.TorusGeometry(0.022, 0.007, 5, 8), m.iron);
+      link.position.set(lx, ly2, 0);
+      link.rotation.y = HALF_PI;
+      this.lampArm.add(link);
+    }
     this.lampFlame = flame(tex, 0.16); this.lampFlame.position.set(lx, ly - 0.09, 0);
     this.lampArm.add(this.lampFlame);
     lamp.add(this.lampStub, this.lampArm);
     g.add(lamp);
-    put(this.lampLight, LAMP_POS.x + ln[0] * 0.6, LAMP_POS.y - 0.16, LAMP_POS.z + ln[1] * 0.6);
+    put(this.lampLight, LAMP_POS.x + ln[0] * 0.75, LAMP_POS.y - 0.3, LAMP_POS.z + ln[1] * 0.75);
     g.add(this.lampLight);
     // 西墙装饰烛灯（概念图左墙藤幕中的挂灯）：入夜自燃，暖琥珀小光池
     for (const [sx, sy] of [[-0.6, 2.9], [-8.6, 2.6]]) {
@@ -518,15 +532,15 @@ export class Props {
         transparent: true, opacity: 0.55, side: THREE.DoubleSide, roughnessMap: grimeTexture(),
       });
       const body = hexLantern(m, glass);
-      body.position.set(0.55, -0.14, 0);
+      body.position.set(0.6, -0.26, 0);
       body.scale.setScalar(0.9);
       sc.add(body);
-      const fl = flame(tex, 0.12); fl.position.set(0.55, -0.22, 0); fl.visible = false;
+      const fl = flame(tex, 0.12); fl.position.set(0.6, -0.34, 0); fl.visible = false;
       sc.add(fl);
-      const glow = glowSprite(tex, 0xffb25e, 0.7); glow.position.set(0.55, -0.14, 0); glow.material.opacity = 0;
+      const glow = glowSprite(tex, 0xffb25e, 0.7); glow.position.set(0.6, -0.26, 0); glow.material.opacity = 0;
       sc.add(glow);
-      const light = new THREE.PointLight(0xffb25e, 0, 10, 1.7);
-      light.position.set(0.55, -0.14, 0);
+      const light = new THREE.PointLight(0xffb25e, 0, 10, 1.9);
+      light.position.set(0.6, -0.26, 0);
       sc.add(light);
       g.add(sc);
       this.sconces.push({ glass, glow, light, flame: fl });
@@ -645,20 +659,20 @@ export class Props {
     g.add(board, sheet, can, spout, funnel, rag, this.benchGlow, stub);
 
     // 炉火套件（PRP-07）：GLB 壁炉炉膛内的柴与火，锅在炉旁吊臂下
-    this.embers = put(boxMesh(m.ember, 0.44, 0.05, 0.9, 1), -2.35, 0.28, -4.4);
+    this.embers = put(boxMesh(m.ember, 0.4, 0.05, 0.9, 1), -2.72, 0.3, -4.4);
     this.embers.castShadow = false;
     g.add(this.embers);
     for (const [dz, s] of [[-0.22, 0.6], [0.22, 0.72]]) {
-      const f = put(flame(tex, s), -2.35, 0.32, -4.4 + dz);
+      const f = put(flame(tex, s), -2.72, 0.36, -4.4 + dz);
       this.flames.push(f); g.add(f);
     }
-    this.hearthEmbers = new Embers(-2.35, 0.45, -4.4, 22, 1.5, 0xffa050, 0.09);
+    this.hearthEmbers = new Embers(-2.72, 0.5, -4.4, 22, 1.5, 0xffa050, 0.09);
     g.add(this.hearthEmbers.points);
-    put(this.hearthLight, -2.3, 0.75, -4.4);
+    put(this.hearthLight, -2.4, 0.8, -4.4);
     put(this.windowLight, -2.0, 1.9, 1.4);
     g.add(this.hearthLight, this.windowLight);
     // 锅体由 furniture.ts 的 cauldron GLB 承担，这里只留锅下暖光
-    this.potGlow = glowSprite(tex, 0xff7a28, 0.7); put(this.potGlow, -2.45, 0.5, -2.55);
+    this.potGlow = glowSprite(tex, 0xff7a28, 0.7); put(this.potGlow, -2.72, 0.45, -4.4);
     this.food = put(new THREE.Group(), -2.05, 0, -2.2);
     const sack = mesh(new THREE.SphereGeometry(0.17, 8, 6), m.cloth); sack.position.y = 0.15; sack.scale.y = 1.1;
     const root = cyl(m.paper, 0.03, 0.05, 0.16, 6); root.position.set(0.05, 0.33, 0); root.rotation.z = 0.4;
@@ -677,7 +691,7 @@ export class Props {
     // 炉烟：从屋顶烟囱口升起
     for (let i = 0; i < 3; i++) {
       const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.smokeTex, color: 0x8a8a8a, transparent: true, opacity: 0, depthWrite: false }));
-      s.position.set(-2.5, 2.7 + i * 0.5, -4.4);
+      s.position.set(-2.72, 3.5 + i * 0.5, -4.4);
       s.scale.setScalar(0.7 + i * 0.4);
       this.chimneySmoke.push(s); g.add(s);
     }
@@ -726,10 +740,10 @@ export class Props {
     for (const sc of this.sconces) {
       sc.glass.emissiveIntensity = 1.5 * candle;
       sc.glow.material.opacity = 0.22 * candle;
-      sc.light.intensity = 14 * candle;
+      sc.light.intensity = 10 * candle;
       sc.flame.visible = candle > 0;
     }
-    this.lampLight.intensity = 18 * fade * flick;
+    this.lampLight.intensity = 4.5 * fade * flick;
     this.lampFlame.scale.setScalar(0.6 + 0.4 * fade * flick);
     this.lampEmbers.update(dt, time, lit && hi);
 
@@ -805,8 +819,8 @@ export class Props {
       const on = fire > 0;
       s.material.opacity = on ? 0.16 * fire : 0;
       if (on) {
-        s.position.y = 2.7 + ((time * 0.4 + i * 0.6) % 2.2);
-        s.position.x = -2.5 + Math.sin(time * 0.5 + i) * 0.2;
+        s.position.y = 3.5 + ((time * 0.4 + i * 0.6) % 2.2);
+        s.position.x = -2.72 + Math.sin(time * 0.5 + i) * 0.2;
         s.scale.setScalar(0.7 + ((time * 0.4 + i * 0.6) % 2.2) * 0.5);
       }
     });
