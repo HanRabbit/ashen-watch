@@ -6,6 +6,9 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { GTAOPass } from 'three/addons/postprocessing/GTAOPass.js';
+import { SSRPass } from 'three/addons/postprocessing/SSRPass.js';
+import { LUTPass } from 'three/addons/postprocessing/LUTPass.js';
 import { PHASE } from '../config';
 import { cameraClearT } from '../sim/collision';
 import { groundY, regionAt } from '../sim/level';
@@ -16,6 +19,8 @@ import { glowTexture, makeMaterials, smokeTexture } from './materials';
 import { Props } from './props';
 import { applySky, makeSkyMaterial, SkyState } from './sky';
 import { FogController, installHeightFog } from './post/fog';
+import { LightGlowShader, MAX_GLOW_LIGHTS } from './post/glow';
+import { fillLUT, makeLUT, VignetteGrainShader } from './post/grade';
 import { buildStaticLevel, StaticLevel } from './staticLevel';
 
 installHeightFog();
@@ -75,32 +80,6 @@ const RIGS: Record<'morning' | 'day' | 'dusk' | 'night', Rig> = {
 const COLOR_KEYS = ['fog', 'hemiSky', 'hemiGround', 'sun', 'zenith', 'horizon', 'ground', 'cloudLit', 'cloudDark', 'tintS', 'tintH'] as const;
 const NUM_KEYS = ['fogNear', 'fogFar', 'fogDistMax', 'fogHeightDensity', 'fogHeightFalloff', 'fogHeightBase', 'hemi', 'sunI', 'shadowI', 'exposure', 'window', 'discSize', 'discI', 'glow', 'stars', 'cover', 'rim', 'envI', 'bloom', 'vignette', 'grain', 'sat', 'contrast', 'glowStrength'] as const;
 
-// 调色 pass（在线性 HDR 空间，OutputPass 之前）：饱和、对比、暗部/亮部分色、暗角、细颗粒。
-const GradeShader = {
-  uniforms: {
-    tDiffuse: { value: null as THREE.Texture | null },
-    uVig: { value: 0.5 }, uSat: { value: 1 }, uContrast: { value: 1 }, uGrain: { value: 0.03 }, uTime: { value: 0 },
-    uTintS: { value: new THREE.Color() }, uTintH: { value: new THREE.Color() },
-  },
-  vertexShader: /* glsl */`varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
-  fragmentShader: /* glsl */`
-    uniform sampler2D tDiffuse; uniform float uVig, uSat, uContrast, uGrain, uTime;
-    uniform vec3 uTintS, uTintH; varying vec2 vUv;
-    float hash(vec2 p) { return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
-    void main() {
-      vec3 c = texture2D(tDiffuse, vUv).rgb;
-      float l = dot(c, vec3(0.299, 0.587, 0.114));
-      c = mix(vec3(l), c, uSat);
-      c = (c - 0.5) * uContrast + 0.5;
-      c += uTintS * (1.0 - clamp(l, 0.0, 1.0)) * 0.7;
-      c += uTintH * clamp(l, 0.0, 1.0) * 0.4;
-      float d = distance(vUv, vec2(0.5));
-      c *= 1.0 - uVig * smoothstep(0.32, 0.85, d);
-      c += (hash(vUv * vec2(1920.0, 1080.0) + fract(uTime) * 13.0) - 0.5) * uGrain;
-      gl_FragColor = vec4(max(c, 0.0), 1.0);
-    }`,
-};
-
 const CAM = { dist: 3.4, shoulder: 0.78, pivotY: 1.62, minDist: 0.35 };
 const FAN = { n: 12, step: (3 * Math.PI) / 180 };
 
@@ -123,9 +102,18 @@ export class SceneView {
   private sky: THREE.Mesh;
   private envDay: THREE.Texture;
   private envNight: THREE.Texture;
-  private composer: EffectComposer;
-  private bloom: UnrealBloomPass;
-  private grade: ShaderPass;
+  private mats: ReturnType<typeof makeMaterials>;
+  private composer!: EffectComposer;
+  private bloom!: UnrealBloomPass;
+  private grade!: ShaderPass;
+  private gtao!: GTAOPass;
+  private ssr: SSRPass | null = null;
+  private glow!: ShaderPass;
+  private lutPass!: LUTPass;
+  private lut = makeLUT(32);
+  private lastGradeSig = '';
+  private glowV = new THREE.Vector3();
+  private atmo: THREE.Object3D[] = [];
   private camDist = CAM.dist;
   private camShoulder = CAM.shoulder;
   private ca = new THREE.Color(); private cb = new THREE.Color();
@@ -153,6 +141,7 @@ export class SceneView {
     this.fogCtl = new FogController(this.renderer, this.scene);
 
     const m = makeMaterials();
+    this.mats = m;
     this.level = buildStaticLevel(m);
     this.props = new Props(m);
     this.player = new PlayerModel(m, glowTexture());
@@ -224,14 +213,9 @@ export class SceneView {
       this.shafts.push(shaft); this.scene.add(shaft);
     }
 
-    // 后期：渲染 → 泛光 → 调色 → 输出（色调映射与 sRGB）
-    this.composer = new EffectComposer(this.renderer);
-    this.composer.addPass(new RenderPass(this.scene, this.camera));
-    this.bloom = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 0.3, 0.4, 1.0);
-    this.composer.addPass(this.bloom);
-    this.grade = new ShaderPass(GradeShader);
-    this.composer.addPass(this.grade);
-    this.composer.addPass(new OutputPass());
+    // 后期管线按画质档重建（见 buildPipeline）
+    fillLUT(this.lut, { sat: RIGS.day.sat, contrast: RIGS.day.contrast, tintS: RIGS.day.tintS, tintH: RIGS.day.tintH });
+    this.buildPipeline();
 
     this.resize();
     window.addEventListener('resize', () => this.resize());
@@ -250,6 +234,7 @@ export class SceneView {
     this.dust.visible = heavy;
     // props 内部以 'high' 判定重特效：cinematic 同样按高档传入。
     this.props.setQuality(q === 'cinematic' ? 'high' : q);
+    this.buildPipeline();
     this.resize();
   }
 
@@ -258,6 +243,7 @@ export class SceneView {
     this.camera.aspect = w / Math.max(1, h);
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(w, h);
+    this.composer.setPixelRatio(this.renderer.getPixelRatio());
     this.composer.setSize(w, h);
   }
 
@@ -304,8 +290,14 @@ export class SceneView {
     // 后期参数
     this.bloom.strength = r.bloom;
     const gu = this.grade.uniforms;
-    gu.uVig.value = r.vignette; gu.uSat.value = r.sat; gu.uContrast.value = r.contrast; gu.uTime.value = time;
-    gu.uTintS.value.setHex(r.tintS); gu.uTintH.value.setHex(r.tintH);
+    gu.uVig.value = r.vignette; gu.uGrain.value = r.grain; gu.uTime.value = time;
+    this.glow.uniforms.uStrength.value = r.glowStrength;
+    // LUT 随 rig _blend_  crossfade：参数变化时重填 32³ 查找表
+    const sig = `${r.sat.toFixed(3)}|${r.contrast.toFixed(3)}|${r.tintS}|${r.tintH}`;
+    if (sig !== this.lastGradeSig) {
+      this.lastGradeSig = sig;
+      fillLUT(this.lut, { sat: r.sat, contrast: r.contrast, tintS: r.tintS, tintH: r.tintH });
+    }
 
     this.level.windowMat.emissiveIntensity = r.window;
     this.level.hearthWindowMat.emissiveIntensity = w.hearth.lit ? 1.5 : 0.03;
@@ -395,8 +387,110 @@ export class SceneView {
 
   render(): void {
     this.renderer.info.reset();
-    if (this.quality !== 'low') this.composer.render();
-    else this.renderer.render(this.scene, this.camera);
+    if (this.quality === 'low') { this.renderer.render(this.scene, this.camera); return; }
+    this.updateGlowLights();
+    this.composer.render();
+  }
+
+  /** 按当前画质档重建后期：cinematic = SSR + 全特效；high = 无 SSR；low 不走 composer。 */
+  private buildPipeline(): void {
+    if (this.composer) {
+      for (const pass of this.composer.passes) (pass as { dispose?: () => void }).dispose?.();
+      this.composer.dispose();
+    }
+    const size = this.renderer.getDrawingBufferSize(new THREE.Vector2());
+    // MSAA + HalfFloat：HDR 泛光与调色不失真，边缘抗锯齿
+    const rt = new THREE.WebGLRenderTarget(size.x, size.y, { type: THREE.HalfFloatType, samples: 4 });
+    this.composer = new EffectComposer(this.renderer, rt);
+    this.ssr = null;
+    if (this.quality === 'cinematic') {
+      // SSR 自带 beauty 渲染，放在链首替代 RenderPass；只让地面/积水接收反射
+      this.ssr = new SSRPass({ renderer: this.renderer, scene: this.scene, camera: this.camera, width: size.x, height: size.y, selects: this.groundMeshes(), groundReflector: null });
+      this.ssr.beautyRenderTarget.samples = 4;
+      this.ssr.opacity = 0.55;
+      this.ssr.maxDistance = 10;
+      this.ssr.thickness = 0.05;
+      this.ssr.fresnel = true;
+      this.ssr.distanceAttenuation = true;
+      this.ssr.blur = true;
+      this.composer.addPass(this.ssr);
+    } else {
+      this.composer.addPass(new RenderPass(this.scene, this.camera));
+    }
+    // GTAO：墙脚/门洞/陈设底部接触阴影
+    this.gtao = new GTAOPass(this.scene, this.camera, size.x, size.y);
+    this.gtao.output = GTAOPass.OUTPUT.Default;
+    this.gtao.blendIntensity = 0.9;
+    this.gtao.updateGtaoMaterial({ radius: 0.5, distanceExponent: 1, thickness: 1, scale: 1, samples: 16, distanceFallOff: 1, screenSpaceRadius: false });
+    this.gtao.updatePdMaterial({ lumaPhi: 10, depthPhi: 2, normalPhi: 3, radius: 4, rings: 2, samples: 8 });
+    // GTAO 的法线/深度预_pass 用 override 材质，透明雾团/扬尘/火舌会写成实体深度造成假遮蔽：
+    // 预 pass 期间隐藏它们（beauty 里仍可见）。
+    this.atmo = [];
+    this.scene.traverse((o) => {
+      const mat = (o as THREE.Mesh).material as THREE.Material | undefined;
+      if (mat && mat.transparent) this.atmo.push(o);
+    });
+    const gtaoRender = this.gtao.render.bind(this.gtao);
+    this.gtao.render = (renderer, wb, rb, dt, mask) => {
+      const hidden: THREE.Object3D[] = [];
+      for (const o of this.atmo) if (o.visible) { o.visible = false; hidden.push(o); }
+      gtaoRender(renderer, wb, rb, dt, mask);
+      for (const o of hidden) o.visible = true;
+    };
+    this.composer.addPass(this.gtao);
+    this.glow = new ShaderPass(LightGlowShader);
+    this.composer.addPass(this.glow);
+    this.bloom = new UnrealBloomPass(new THREE.Vector2(size.x, size.y), 0.3, 0.4, 1.0);
+    this.composer.addPass(this.bloom);
+    this.composer.addPass(new OutputPass());
+    this.lutPass = new LUTPass({ lut: this.lut, intensity: 1 });
+    this.composer.addPass(this.lutPass);
+    this.grade = new ShaderPass(VignetteGrainShader);
+    this.composer.addPass(this.grade);
+  }
+
+  /** SSR 反射接收面：石板地/碎石/木地板 + 低粗糙度积水。 */
+  private groundMeshes(): THREE.Mesh[] {
+    const out: THREE.Mesh[] = [];
+    const m = this.mats;
+    this.level.group.traverse((o) => {
+      const mesh = o as THREE.Mesh;
+      if (!mesh.isMesh) return;
+      const mat = mesh.material as THREE.MeshStandardMaterial;
+      if (mat === m.flag || mat === m.gravel || mat === m.woodFloor || (mat.isMeshStandardMaterial && mat.roughness < 0.15)) out.push(mesh);
+    });
+    return out;
+  }
+
+  /** 把点光源投影到屏幕，供光晕 pass 做深度遮挡散射。 */
+  private updateGlowLights(): void {
+    const u = this.glow.uniforms;
+    this.camera.updateMatrixWorld();
+    this.camera.matrixWorldInverse.copy(this.camera.matrixWorld).invert();
+    const lights = [this.props.lampLight, this.player.lanternLight, this.props.brazierLight, this.props.hearthLight, this.props.windowLight];
+    let n = 0;
+    for (const L of lights) {
+      if (n >= MAX_GLOW_LIGHTS) break;
+      if (L.intensity <= 0.05) continue;
+      const v = this.glowV;
+      L.getWorldPosition(v);
+      v.applyMatrix4(this.camera.matrixWorldInverse);
+      const depth = -v.z;
+      if (depth < 0.2) continue;
+      v.applyMatrix4(this.camera.projectionMatrix);
+      const x = v.x * 0.5 + 0.5, y = v.y * 0.5 + 0.5;
+      if (x < -0.3 || x > 1.3 || y < -0.3 || y > 1.3) continue;
+      (u.uLights.value as THREE.Vector4[])[n].set(x, y, depth, Math.min(1, L.intensity / 45));
+      (u.uLightCols.value as THREE.Color[])[n].copy(L.color);
+      n++;
+    }
+    for (let i = n; i < MAX_GLOW_LIGHTS; i++) (u.uLights.value as THREE.Vector4[])[i].w = 0;
+    u.uCount.value = n;
+    u.uNear.value = this.camera.near; u.uFar.value = this.camera.far;
+    u.uAspect.value = this.camera.aspect;
+    const depth = (this.gtao as unknown as { depthTexture?: THREE.Texture }).depthTexture;
+    u.tDepth.value = depth ?? null;
+    u.uHasDepth.value = depth ? 1 : 0;
   }
 }
 
