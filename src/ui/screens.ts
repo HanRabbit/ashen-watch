@@ -150,6 +150,8 @@ export class Screens {
   private render(): void {
     const cur = this.stack[this.stack.length - 1];
     this.el.hidden = !cur;
+    // 标题/确认页把实际渲染压成月夜基调；校准页需要真实亮度，不压暗。
+    document.body.classList.toggle('ui-title', !!cur && (cur.id === 'title' || cur.id === 'confirmNew'));
     if (!cur) { this.el.innerHTML = ''; return; }
     this.el.className = cur.id === 'title' || cur.id === 'calibrate' || cur.id === 'confirmNew' ? 'title' : cur.id === 'toolbar' ? 'light' : '';
     this.el.innerHTML = this.html(cur.id, cur.arg);
@@ -221,7 +223,8 @@ export class Screens {
     const noteHtml = note ? `<p class="warn">${esc(note)}</p>` : '';
     switch (id) {
       case 'title':
-        return `<div class="panel">
+        return `<div class="embers" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i></div>
+        <div class="panel title-panel">
           <h1>灰烬守夜</h1><p class="sub-title">ASHEN WATCH · 首夜</p>
           <p>接手一座被遗弃的城堡。白天抢修，入夜取回礼拜堂的钟舌，天亮时敲响晨钟。</p>
           ${noteHtml}

@@ -1,8 +1,13 @@
-/* 以 1080p 为参考分辨率：根字号随视口高度缩放，1080p 下为 16px。 */
+/* 《灰烬守夜》UI —— 美术圣经 v2 第 11 节：深石色半透明面板 + 细线描边 + 琥珀强调；
+   衬线字体；圆角 ≤2 px；无渐变高光、无玻璃拟态。颜色全部取自第 4.6 节变量及其透明度派生。
+   以 1080p 为参考分辨率：根字号随视口高度缩放，1080p 下为 16px。 */
 :root {
   --stone: #1b1e22;
   --panel: rgba(20, 22, 26, 0.92);
   --line: rgba(196, 204, 212, 0.26);
+  --line-strong: rgba(196, 204, 212, 0.42);
+  --line-faint: rgba(196, 204, 212, 0.12);
+  --groove: rgba(5, 6, 8, 0.85);
   --text: #e4e1d8;
   --dim: #a8a69d;
   --amber: #f0a84a;
@@ -19,105 +24,175 @@ body {
 }
 [hidden] { display: none !important; }
 #game { position: fixed; inset: 0; width: 100%; height: 100%; display: block; outline: none; }
+/* 标题页把实际渲染压成月夜基调（礼拜堂剪影 + 冷灰），仅标题/确认页生效，校准页不压暗。 */
+body.ui-title #game { filter: brightness(0.38) saturate(0.7) contrast(1.05); }
 
 .fx { position: fixed; inset: 0; pointer-events: none; opacity: 0; transition: opacity 0.25s; }
 #fx-threat { background: radial-gradient(ellipse at center, transparent 45%, rgba(0, 0, 0, 0.8) 100%); }
-#fx-cold { background: radial-gradient(ellipse at center, transparent 50%, rgba(150, 190, 225, 0.5) 100%); }
+#fx-cold { background: radial-gradient(ellipse at center, transparent 50%, rgba(159, 192, 221, 0.5) 100%); }
 #fx-hurt { background: radial-gradient(ellipse at center, transparent 30%, rgba(170, 30, 20, 0.75) 100%); transition: opacity 0.08s; }
 
 #hud { position: fixed; inset: 0; pointer-events: none; text-shadow: 0 1px 3px #000, 0 0 8px rgba(0, 0, 0, 0.8); }
 .hud-tl { position: absolute; left: 2rem; top: 1.6rem; max-width: 34rem; }
 .chip {
-  display: inline-block; padding: 0.35rem 0.9rem; font-size: 1.25rem; letter-spacing: 0.08em;
-  background: rgba(14, 16, 19, 0.72); border: 1px solid var(--line); border-left: 0.3rem solid var(--amber);
+  display: inline-flex; align-items: center; gap: 0.55rem; padding: 0.35rem 0.9rem; font-size: 1.25rem; letter-spacing: 0.08em;
+  background: rgba(14, 16, 19, 0.74); border: 1px solid var(--line); border-left: 2px solid var(--amber); border-radius: 1px;
 }
-.goal { margin-top: 0.6rem; font-size: 1.15rem; line-height: 1.5; color: var(--text); }
+.ph-ic { width: 1.15em; height: 1.15em; flex: none; }
+.ph-ic.day { color: var(--text); }
+.ph-ic.night { color: var(--cold); }
+.ph-ic.dusk, .ph-ic.dawn { color: var(--amber); }
+.goal { display: block; width: fit-content; margin-top: 0.6rem; padding: 0.3rem 0.6rem; font-size: 1.15rem; line-height: 1.55; color: var(--text); background: rgba(14, 16, 19, 0.45); border-radius: 1px; }
 .goal b { color: var(--amber); font-weight: 600; }
 
 .toasts { position: absolute; top: 1.6rem; left: 50%; transform: translateX(-50%); width: 44rem; display: flex; flex-direction: column; align-items: center; gap: 0.4rem; }
-.toast { padding: 0.45rem 1.1rem; font-size: 1.2rem; background: rgba(14, 16, 19, 0.82); border: 1px solid var(--line); animation: fadein 0.2s; text-align: center; }
+.toast { padding: 0.45rem 1.1rem; font-size: 1.2rem; background: rgba(14, 16, 19, 0.82); border: 1px solid var(--line); border-radius: 1px; animation: fadein 0.2s; text-align: center; }
 .toast.out { opacity: 0; transition: opacity 0.5s; }
 @keyframes fadein { from { opacity: 0; transform: translateY(-0.4rem); } }
 
-#crosshair { position: absolute; left: 50%; top: 50%; width: 0.4rem; height: 0.4rem; margin: -0.2rem; border-radius: 50%; background: rgba(240, 236, 226, 0.85); box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.7); }
-.prompt { position: absolute; left: 50%; top: 56%; transform: translateX(-50%); padding: 0.4rem 1rem; font-size: 1.3rem; white-space: nowrap; background: rgba(14, 16, 19, 0.8); border: 1px solid var(--line); }
-.prompt kbd { display: inline-block; min-width: 1.9rem; padding: 0 0.45rem; margin-right: 0.6rem; text-align: center; font: inherit; font-weight: 700; color: #16130e; background: var(--amber); text-shadow: none; }
+#crosshair { position: absolute; left: 50%; top: 50%; width: 0.35rem; height: 0.35rem; margin: -0.175rem; border-radius: 50%; background: rgba(228, 225, 216, 0.9); box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.75); }
+.prompt { position: absolute; left: 50%; top: 56%; transform: translateX(-50%); padding: 0.4rem 1rem; font-size: 1.3rem; white-space: nowrap; background: rgba(14, 16, 19, 0.8); border: 1px solid var(--line); border-radius: 1px; }
+.prompt kbd { display: inline-block; min-width: 1.9rem; padding: 0 0.45rem; margin-right: 0.6rem; text-align: center; font: inherit; font-weight: 700; color: #16130e; background: var(--amber); border-radius: 1px; text-shadow: none; }
 .prompt.off { color: var(--dim); border-style: dashed; }
-.prompt.off kbd { background: #6c6a64; }
+.prompt.off kbd { background: var(--dim); }
 .prompt small { display: block; margin-top: 0.15rem; font-size: 1.05rem; color: var(--dim); }
 
 .subs { position: absolute; left: 50%; bottom: 9.5rem; transform: translateX(-50%); width: 52rem; display: flex; flex-direction: column; align-items: center; gap: 0.3rem; }
 .sub { padding: 0.35rem 1rem; font-size: 1.3rem; background: rgba(8, 9, 11, 0.86); border-left: 0.25rem solid var(--cold); }
-.sub.grey { border-left-color: #d9d6cc; }
-.sub.wraith { border-left-color: #6f7c8a; border-left-style: double; border-left-width: 0.45rem; }
+.sub.grey { border-left-color: var(--text); }
+.sub.wraith { border-left-color: var(--dim); border-left-style: double; border-left-width: 0.45rem; }
 .sub .dir { display: inline-block; margin-left: 0.7rem; font-weight: 700; color: var(--amber); }
 
-.hud-bl { position: absolute; left: 2rem; bottom: 1.8rem; display: flex; flex-direction: column; gap: 0.5rem; }
+/* 状态条（信息层级第一）：深石面板 + 细铁框内凹槽。 */
+.hud-bl {
+  position: absolute; left: 2rem; bottom: 1.8rem; display: flex; flex-direction: column; gap: 0.55rem;
+  padding: 0.75rem 1rem; background: rgba(16, 18, 22, 0.78); border: 1px solid var(--line); border-radius: 1px;
+  box-shadow: inset 0 0 0 1px rgba(11, 13, 16, 0.7);
+}
 .bar { display: grid; grid-template-columns: 3.4rem 15rem auto; align-items: center; gap: 0.7rem; font-size: 1.1rem; }
-.bar-track { height: 0.85rem; background: rgba(8, 9, 11, 0.8); border: 1px solid var(--line); }
-.bar-track i { display: block; height: 100%; width: 100%; background: #c9c5b8; }
-#bar-hp .bar-track i { background: #c66a55; }
-#bar-cold .bar-track i { background: var(--cold); }
-#bar-oil .bar-track i { background: var(--amber); }
+.bar-name { color: var(--dim); letter-spacing: 0.1em; }
+.bar-track { position: relative; height: 0.8rem; background: var(--groove); border: 1px solid var(--line-strong); box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.9); }
+/* 铁 gauge 的四等分刻线 */
+.bar-track::after { content: ''; position: absolute; inset: 0; pointer-events: none; background-image: repeating-linear-gradient(90deg, transparent 0 calc(25% - 1px), rgba(0, 0, 0, 0.5) calc(25% - 1px) 25%); }
+.bar-track i { display: block; height: 100%; width: 100%; background-color: var(--dim); box-shadow: 1px 0 0 rgba(0, 0, 0, 0.6); }
+#bar-hp .bar-track i { background-color: var(--danger); }
+#bar-cold .bar-track i { background-color: var(--cold); }
+#bar-oil .bar-track i { background-color: var(--amber); }
 /* 低量状态：斜纹加文字，不只靠颜色 */
 .bar.low .bar-track i { background-image: repeating-linear-gradient(135deg, transparent 0 0.3rem, rgba(0, 0, 0, 0.55) 0.3rem 0.6rem); }
 .bar.low .bar-val { font-weight: 700; }
 .bar.low .bar-track { border-color: var(--text); }
-.bar-val { min-width: 9rem; white-space: nowrap; }
+.bar-val { min-width: 9rem; white-space: nowrap; font-variant-numeric: tabular-nums; }
 
+/* 工具栏（层级第三）：铁牌槽位，图标单色线描。 */
 .hud-br { position: absolute; right: 2rem; bottom: 1.8rem; display: flex; gap: 0.5rem; align-items: flex-end; }
-.slot { width: 5.2rem; padding: 0.35rem 0.2rem 0.3rem; text-align: center; background: rgba(14, 16, 19, 0.72); border: 1px solid var(--line); font-size: 0.95rem; }
-.slot svg { width: 2rem; height: 2rem; display: block; margin: 0 auto 0.1rem; }
+.slot { width: 5.2rem; padding: 0.4rem 0.2rem 0.35rem; text-align: center; background: rgba(14, 16, 19, 0.68); border: 1px solid var(--line); border-radius: 1px; font-size: 0.95rem; }
+.slot svg { width: 2rem; height: 2rem; display: block; margin: 0 auto 0.15rem; color: var(--text); }
 .slot b { display: block; font-size: 1.15rem; }
-.slot.empty { opacity: 0.45; }
-.slot.task { border-color: var(--amber); margin-left: 0.8rem; }
-.slot.task.empty { border-style: dashed; }
+.slot.empty { opacity: 0.5; }
+.slot.lit svg { color: var(--amber); }
+.slot.task { border-color: rgba(240, 168, 74, 0.55); margin-left: 0.8rem; }
+.slot.task.held { border-color: var(--amber); }
+.slot.task.held svg { color: var(--amber); }
+.slot.task.empty { border-style: dashed; border-color: var(--line); }
 .slot .key { color: var(--amber); }
 
-.mousehint { position: absolute; left: 50%; bottom: 1.8rem; transform: translateX(-50%); padding: 0.3rem 0.9rem; font-size: 1rem; white-space: nowrap; color: var(--dim); background: rgba(14, 16, 19, 0.66); border: 1px solid var(--line); }
+.mousehint { position: absolute; left: 50%; bottom: 1.8rem; transform: translateX(-50%); padding: 0.3rem 0.9rem; font-size: 1rem; white-space: nowrap; color: var(--dim); background: rgba(14, 16, 19, 0.66); border: 1px solid var(--line); border-radius: 1px; }
 .mousehint b { color: var(--amber); }
 
+/* 浮层与面板：双线铁框（外细线 + 内发丝线），顶部琥珀细规，标题衬线。 */
 #overlay { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; background: rgba(6, 7, 9, 0.72); }
-#overlay.title { background: linear-gradient(180deg, rgba(8, 9, 12, 0.5), rgba(8, 9, 12, 0.9)); }
+#overlay.title { justify-content: flex-start; padding-left: 7vw; background: radial-gradient(ellipse at 64% 42%, rgba(8, 9, 12, 0.16) 0%, rgba(7, 9, 14, 0.7) 80%), linear-gradient(rgba(159, 192, 221, 0.06), rgba(159, 192, 221, 0.06)); }
 #overlay.light { background: rgba(6, 7, 9, 0.35); align-items: flex-end; padding-bottom: 5rem; }
-.panel { width: 44rem; max-width: 94vw; max-height: 92vh; overflow: auto; padding: 2rem 2.4rem; background: var(--panel); border: 1px solid var(--line); border-top: 0.25rem solid var(--amber-deep); }
+.panel {
+  position: relative; width: 44rem; max-width: 94vw; max-height: 92vh; overflow: auto; padding: 2rem 2.4rem;
+  background: var(--panel); border: 1px solid var(--line); border-top: 2px solid var(--amber-deep); border-radius: 1px;
+  box-shadow: inset 0 0 0 2px rgba(20, 22, 26, 1), inset 0 0 0 3px var(--line-faint), 0 0.5rem 2.5rem rgba(0, 0, 0, 0.55);
+}
 .panel.wide { width: 58rem; }
 .panel h1 { margin: 0 0 0.3rem; font-size: 3.4rem; letter-spacing: 0.3em; font-weight: 600; }
 .panel h2 { margin: 0 0 1rem; font-size: 1.9rem; letter-spacing: 0.12em; font-weight: 600; }
-.panel h3 { margin: 1.3rem 0 0.5rem; font-size: 1.2rem; color: var(--amber); font-weight: 600; letter-spacing: 0.08em; }
+.panel h2::before { content: ''; display: inline-block; width: 0.5rem; height: 0.5rem; margin-right: 0.7rem; background: var(--amber-deep); transform: rotate(45deg); vertical-align: 0.12em; }
+.panel h3 { margin: 1.3rem 0 0.6rem; font-size: 1.2rem; color: var(--amber); font-weight: 600; letter-spacing: 0.08em; padding-bottom: 0.3rem; border-bottom: 1px solid var(--line-faint); }
 .panel p { margin: 0.5rem 0; font-size: 1.15rem; line-height: 1.7; }
 .panel .sub-title { color: var(--dim); letter-spacing: 0.2em; margin-bottom: 1.6rem; }
 .panel .note { color: var(--dim); font-size: 1.05rem; }
 .panel .warn { padding: 0.5rem 0.9rem; border-left: 0.25rem solid var(--danger); background: rgba(226, 115, 95, 0.1); }
 .panel .ok { padding: 0.5rem 0.9rem; border-left: 0.25rem solid var(--amber); background: rgba(240, 168, 74, 0.08); }
+
+/* 标题面板：靠左让出礼拜堂剪影；细线装饰 + 极克制的灰烬颗粒。 */
+.title-panel { width: 36rem; background: rgba(16, 18, 22, 0.86); }
+.title-panel h1 { font-size: 3.8rem; letter-spacing: 0.32em; padding-bottom: 0.7rem; border-bottom: 1px solid rgba(240, 168, 74, 0.35); }
+.title-panel .sub-title { display: flex; align-items: center; gap: 0.8rem; margin-top: 0.8rem; }
+.title-panel .sub-title::before { content: ''; flex: none; width: 2.2rem; height: 1px; background: var(--line-strong); }
+.title-panel .sub-title::after { content: ''; flex: 1; height: 1px; background: var(--line-faint); }
+.embers { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+.embers i { position: absolute; bottom: -1rem; width: 2px; height: 2px; border-radius: 1px; background: var(--amber); opacity: 0; animation: ember 16s linear infinite; }
+.embers i:nth-child(1) { left: 10%; animation-delay: 0s; }
+.embers i:nth-child(2) { left: 26%; animation-delay: 4s; animation-duration: 19s; }
+.embers i:nth-child(3) { left: 44%; animation-delay: 8s; animation-duration: 14s; }
+.embers i:nth-child(4) { left: 63%; animation-delay: 2.5s; animation-duration: 21s; }
+.embers i:nth-child(5) { left: 78%; animation-delay: 11s; animation-duration: 17s; }
+.embers i:nth-child(6) { left: 90%; animation-delay: 6s; animation-duration: 23s; }
+@keyframes ember {
+  0% { transform: translate(0, 0); opacity: 0; }
+  8% { opacity: 0.28; }
+  60% { opacity: 0.16; }
+  100% { transform: translate(2rem, -72vh); opacity: 0; }
+}
+
 .btns { display: flex; flex-wrap: wrap; gap: 0.7rem; margin-top: 1.4rem; }
 .btns.col { flex-direction: column; }
 button {
   font: inherit; font-size: 1.25rem; padding: 0.7rem 1.5rem; color: var(--text); cursor: pointer;
-  background: rgba(60, 64, 70, 0.55); border: 1px solid var(--line); letter-spacing: 0.08em; text-align: left;
+  background: rgba(45, 49, 55, 0.6); border: 1px solid var(--line); border-radius: 1px; letter-spacing: 0.08em; text-align: left;
 }
-button:hover:not(:disabled) { background: rgba(240, 168, 74, 0.2); border-color: var(--amber); }
+button:hover:not(:disabled) { background: rgba(240, 168, 74, 0.16); border-color: var(--amber); }
 button:focus-visible { outline: 0.2rem solid var(--amber); outline-offset: 0.15rem; }
-button.primary { background: rgba(185, 111, 28, 0.5); border-color: var(--amber); }
+button.primary { background: rgba(185, 111, 28, 0.45); border-color: var(--amber-deep); }
+button.primary:hover:not(:disabled) { background: rgba(240, 168, 74, 0.3); border-color: var(--amber); }
 button:disabled { opacity: 0.45; cursor: not-allowed; }
 button.small { font-size: 1.05rem; padding: 0.4rem 0.9rem; }
-button.on { background: rgba(240, 168, 74, 0.28); border-color: var(--amber); }
+button.on { background: rgba(240, 168, 74, 0.24); border-color: var(--amber); }
 button small { display: block; font-size: 0.95rem; color: var(--dim); letter-spacing: 0; margin-top: 0.15rem; }
 
 table.kv { width: 100%; border-collapse: collapse; font-size: 1.12rem; }
-table.kv td, table.kv th { padding: 0.4rem 0.6rem; border-bottom: 1px solid rgba(196, 204, 212, 0.14); text-align: left; vertical-align: top; }
+table.kv td, table.kv th { padding: 0.4rem 0.6rem; border-bottom: 1px solid var(--line-faint); text-align: left; vertical-align: top; }
 table.kv th { color: var(--dim); font-weight: 400; white-space: nowrap; width: 9rem; }
 .row { display: grid; grid-template-columns: 9rem 1fr 5rem; gap: 1rem; align-items: center; margin: 0.6rem 0; font-size: 1.12rem; }
-input[type="range"] { width: 100%; accent-color: var(--amber); }
+/* 滑杆：细铁线 + 琥珀方 thumb */
+input[type="range"] { -webkit-appearance: none; appearance: none; width: 100%; height: 1.4rem; background: transparent; cursor: pointer; }
+input[type="range"]::-webkit-slider-runnable-track { height: 2px; background: var(--line-strong); }
+input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 0.85rem; height: 0.85rem; margin-top: -0.4rem; background: var(--amber); border: 1px solid #0b0d10; border-radius: 1px; }
+input[type="range"]::-moz-range-track { height: 2px; background: var(--line-strong); }
+input[type="range"]::-moz-range-thumb { width: 0.8rem; height: 0.8rem; background: var(--amber); border: 1px solid #0b0d10; border-radius: 1px; }
+input[type="range"]:focus-visible { outline: 0.15rem solid var(--amber); outline-offset: 0.2rem; }
 .binds { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.5rem; }
 .binds button { font-size: 1.05rem; padding: 0.45rem 0.7rem; }
 .steps li { margin: 0.35rem 0; font-size: 1.12rem; line-height: 1.6; }
 .steps li.done { color: var(--dim); text-decoration: line-through; }
 .steps li.now { color: var(--amber); font-weight: 600; }
-.calib { display: flex; gap: 0; margin: 1rem 0; height: 7rem; border: 1px solid var(--line); }
+.calib { display: flex; gap: 0; margin: 1rem 0; height: 7rem; border: 1px solid var(--line-strong); }
 .calib div { flex: 1; display: flex; align-items: center; justify-content: center; font-size: 1.6rem; }
-.toolbar { display: flex; gap: 0.6rem; padding: 0.9rem; background: var(--panel); border: 1px solid var(--line); border-top: 0.25rem solid var(--amber-deep); }
+.toolbar { display: flex; gap: 0.6rem; padding: 0.9rem; background: var(--panel); border: 1px solid var(--line); border-top: 2px solid var(--amber-deep); border-radius: 1px; box-shadow: inset 0 0 0 2px rgba(20, 22, 26, 1), inset 0 0 0 3px var(--line-faint); }
 .toolbar button { text-align: center; min-width: 8.5rem; }
 .toolbar svg { width: 2rem; height: 2rem; display: block; margin: 0 auto 0.2rem; }
 
-#debug { position: fixed; right: 0.5rem; top: 0.5rem; padding: 0.3rem 0.6rem; font: 12px/1.4 monospace; color: #9fe; background: rgba(0, 0, 0, 0.6); pointer-events: none; white-space: pre; }
+/* 加载页 */
+#boot { position: fixed; inset: 0; z-index: 60; display: flex; align-items: center; justify-content: center; pointer-events: none; background: radial-gradient(ellipse at center, #10131a 0%, #0b0d10 85%); transition: opacity 0.55s; }
+#boot.done { opacity: 0; }
+.boot-mark { text-align: center; }
+.boot-lantern { width: 3.2rem; height: 3.2rem; color: var(--amber); }
+.boot-mark h1 { margin: 0.8rem 0 0.2rem; font-size: 2.6rem; font-weight: 600; letter-spacing: 0.4em; text-indent: 0.4em; }
+.boot-sub { margin: 0 0 1.6rem; color: var(--dim); font-size: 1rem; letter-spacing: 0.34em; text-indent: 0.34em; }
+.boot-line { position: relative; width: 16rem; height: 1px; margin: 0 auto; background: var(--line); overflow: hidden; }
+.boot-line i { position: absolute; top: 0; left: 0; width: 34%; height: 100%; background: var(--amber); animation: bootsweep 1.5s ease-in-out infinite; }
+@keyframes bootsweep { 0% { transform: translateX(-110%); } 100% { transform: translateX(310%); } }
+.boot-note { margin: 1rem 0 0; color: var(--dim); font-size: 1rem; letter-spacing: 0.12em; }
+
+@media (prefers-reduced-motion: reduce) {
+  .embers i { animation: none; opacity: 0; }
+  .boot-line i { animation: none; width: 100%; opacity: 0.5; }
+}
+
+#debug { position: fixed; right: 0.5rem; top: 0.5rem; padding: 0.3rem 0.6rem; font: 12px/1.4 monospace; color: var(--dim); background: rgba(11, 13, 16, 0.72); border: 1px solid var(--line-faint); pointer-events: none; white-space: pre; }
