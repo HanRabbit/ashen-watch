@@ -345,8 +345,8 @@ describe('庭院壁灯（A05）', () => {
   it('点亮期间两只鬼都不进入亮区；燃尽后恢复可走', () => {
     const d = nightScene(0, -4);
     d.w.repairs.lamp = true; d.w.lampBurn = 120;
-    const a = place(d.w, 'grey', 6, 23);
-    const b = place(d.w, 'wraith', 8.8, 6);
+    const a = place(d.w, 'grey', 6, 5.5);
+    const b = place(d.w, 'wraith', 5.5, 7.6, 'patrol', -3, 'B1');
     let minLit = 99, minDark = 99;
     d.onStep = (w) => {
       const m = Math.min(zoneDist(a), zoneDist(b));
