@@ -90,14 +90,12 @@ export class FogController {
       if (!mesh.material) return;
       const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
       for (const mat of mats) {
+        const props = this.renderer.properties.get(mat) as { uniforms?: Record<string, THREE.IUniform> };
+        const pu = props?.uniforms;
+        if (!pu || !pu.fogHeightDensity) continue; // 尚未编译或无雾（ShaderMaterial 自带 uniforms）
+        // 贴图异步加载触发重编译后 uniforms 换新对象：缓存失效时刷新，避免写旧克隆
         let u = this.cache.get(mat);
-        if (!u) {
-          const props = this.renderer.properties.get(mat) as { uniforms?: Record<string, THREE.IUniform> };
-          const pu = props?.uniforms;
-          if (!pu || !pu.fogHeightDensity) continue; // 尚未编译或无雾（ShaderMaterial 自带 uniforms）
-          u = pu;
-          this.cache.set(mat, u);
-        }
+        if (u !== pu) { u = pu; this.cache.set(mat, u); }
         u.fogHeightDensity.value = p.heightDensity;
         u.fogHeightFalloff.value = p.heightFalloff;
         u.fogHeightBase.value = p.heightBase;
