@@ -40,6 +40,8 @@ export function buildFloors(m: Materials): Floors {
   const group = new THREE.Group();
   group.name = 'floors';
   const b = new Batch();
+  const b1 = new Batch(); // map: B1 单独合批，玩家不在 B1 时整组隐藏省预算
+  const g1 = new THREE.Group(); g1.name = 'floors-B1';
 
   // —— 带 y0 的墙 / 护栏 / 垛墙 / 梯体护墙（staticLevel 跳过这些）——
   for (const w of WALLS) {
@@ -74,8 +76,8 @@ export function buildFloors(m: Materials): Floors {
     } else if (w.tag === 'stairMass') {
       // 梯体由 drawRun 画，跳过
     } else {
-      const mat = w.tag === 'cellar' || w.tag === 'passage' || w.tag === 'store' ? v.wallRough : v.wallTrim;
-      boxY(b, mat, w.x0, w.z0, w.x1, w.z1, y0, w.h, 2);
+      const isB1 = w.tag === 'cellar' || w.tag === 'passage' || w.tag === 'store';
+      boxY(isB1 ? b1 : b, isB1 ? v.wallRough : v.wallTrim, w.x0, w.z0, w.x1, w.z1, y0, w.h, 2);
     }
   }
 
@@ -89,33 +91,33 @@ export function buildFloors(m: Materials): Floors {
   // —— B1 拱顶（低筒拱）与地面 ——
   // 地窖顶（挖 S1 洞）：用两段横拱
   const s1 = STAIRS[0].runs[0];
-  boxY(b, v.wallRough, AREAS.cellar.x0, AREAS.cellar.z0, s1.x0, AREAS.cellar.z1, -0.75, -0.6, 2);
-  boxY(b, v.wallRough, s1.x1, AREAS.cellar.z0, AREAS.cellar.x1, AREAS.cellar.z1, -0.75, -0.6, 2);
-  boxY(b, v.wallRough, s1.x0, AREAS.cellar.z0, s1.x1, s1.z0, -0.75, -0.6, 2);
-  boxY(b, v.wallRough, s1.x0, s1.z1, s1.x1, AREAS.cellar.z1, -0.75, -0.6, 2);
+  boxY(b1, v.wallRough, AREAS.cellar.x0, AREAS.cellar.z0, s1.x0, AREAS.cellar.z1, -0.75, -0.6, 2);
+  boxY(b1, v.wallRough, s1.x1, AREAS.cellar.z0, AREAS.cellar.x1, AREAS.cellar.z1, -0.75, -0.6, 2);
+  boxY(b1, v.wallRough, s1.x0, AREAS.cellar.z0, s1.x1, s1.z0, -0.75, -0.6, 2);
+  boxY(b1, v.wallRough, s1.x0, s1.z1, s1.x1, AREAS.cellar.z1, -0.75, -0.6, 2);
   // 通道顶
-  boxY(b, v.wallRough, AREAS.passage.x0, AREAS.passage.z0, AREAS.passage.x1, AREAS.passage.z1, -0.95, -0.8, 2);
+  boxY(b1, v.wallRough, AREAS.passage.x0, AREAS.passage.z0, AREAS.passage.x1, AREAS.passage.z1, -0.95, -0.8, 2);
   // B1 地面（泥地 + 踏道石板）
-  boxY(b, v.floorDirt, AREAS.cellar.x0, AREAS.cellar.z0, AREAS.cellar.x1, AREAS.cellar.z1, B1_Y - 0.3, B1_Y, 2);
-  boxY(b, v.floorDirt, AREAS.passage.x0, AREAS.passage.z0, AREAS.passage.x1, AREAS.passage.z1, B1_Y - 0.3, B1_Y, 2);
-  boxY(b, v.floorFlagWorn, AREAS.store.x0, AREAS.store.z0, AREAS.store.x1, AREAS.store.z1, B1_Y - 0.3, B1_Y, 2);
+  boxY(b1, v.floorDirt, AREAS.cellar.x0, AREAS.cellar.z0, AREAS.cellar.x1, AREAS.cellar.z1, B1_Y - 0.3, B1_Y, 2);
+  boxY(b1, v.floorDirt, AREAS.passage.x0, AREAS.passage.z0, AREAS.passage.x1, AREAS.passage.z1, B1_Y - 0.3, B1_Y, 2);
+  boxY(b1, v.floorFlagWorn, AREAS.store.x0, AREAS.store.z0, AREAS.store.x1, AREAS.store.z1, B1_Y - 0.3, B1_Y, 2);
   // 储藏室顶 = 礼拜堂地板底（礼拜堂地面在 1F 层画）
   // B1 石墩 / 储藏架
   for (const p of PROPS) {
     if (p.tag === 'pier' && (p.y0 ?? 0) < 0) {
-      b.geo(v.wallRough, scaleUV(new THREE.CylinderGeometry(0.3, 0.34, p.h - (p.y0 ?? 0), 8), 1), (p.x0 + p.x1) / 2, ((p.y0 ?? 0) + p.h) / 2, (p.z0 + p.z1) / 2);
+      b1.geo(v.wallRough, scaleUV(new THREE.CylinderGeometry(0.3, 0.34, p.h - (p.y0 ?? 0), 8), 1), (p.x0 + p.x1) / 2, ((p.y0 ?? 0) + p.h) / 2, (p.z0 + p.z1) / 2);
     }
     if (p.tag === 'shelfB1') {
-      for (const yy of [0.4, 1.0, 1.6]) boxY(b, v.woodPlank, p.x0, p.z0, p.x1, p.z1, (p.y0 ?? 0) + yy, (p.y0 ?? 0) + yy + 0.06, 1);
-      boxY(b, v.woodBeam, p.x0, p.z0, p.x0 + 0.08, p.z1, p.y0 ?? 0, (p.y0 ?? 0) + 1.8, 1);
-      boxY(b, v.woodBeam, p.x1 - 0.08, p.z0, p.x1, p.z1, p.y0 ?? 0, (p.y0 ?? 0) + 1.8, 1);
+      for (const yy of [0.4, 1.0, 1.6]) boxY(b1, v.woodPlank, p.x0, p.z0, p.x1, p.z1, (p.y0 ?? 0) + yy, (p.y0 ?? 0) + yy + 0.06, 1);
+      boxY(b1, v.woodBeam, p.x0, p.z0, p.x0 + 0.08, p.z1, p.y0 ?? 0, (p.y0 ?? 0) + 1.8, 1);
+      boxY(b1, v.woodBeam, p.x1 - 0.08, p.z0, p.x1, p.z1, p.y0 ?? 0, (p.y0 ?? 0) + 1.8, 1);
     }
   }
   // 深层封门（地窖南端）
-  b.geo(v.wallRough, scaleUV(new THREE.BoxGeometry(1.8, 2.2, 0.3), 1), 5.9, B1_Y + 1.1, 6.4);
-  b.geo(m.iron, tiledBox(1.9, 0.1, 0.06, 1), 5.9, B1_Y + 1.2, 6.2);
+  b1.geo(v.wallRough, scaleUV(new THREE.BoxGeometry(1.8, 2.2, 0.3), 1), 5.9, B1_Y + 1.1, 6.4);
+  b1.geo(m.iron, tiledBox(1.9, 0.1, 0.06, 1), 5.9, B1_Y + 1.2, 6.2);
   // 残烛（叙事光，克制）
-  b.geo(m.iron, scaleUV(new THREE.CylinderGeometry(0.03, 0.04, 0.3, 6), 1), 14.6, B1_Y + 0.15, 21.4);
+  b1.geo(m.iron, scaleUV(new THREE.CylinderGeometry(0.03, 0.04, 0.3, 6), 1), 14.6, B1_Y + 0.15, 21.4);
 
   // —— 1F 新地面：礼拜堂 + 平台（挖 S2 洞）， courtyard S1 洞侧壁 ——
   const hole = { x0: 14.2, z0: 17.5, x1: 16.0, z1: 21.5 };
@@ -179,6 +181,7 @@ export function buildFloors(m: Materials): Floors {
   }
 
   b.build(group, true);
+  b1.build(g1, true); group.add(g1); // map: B1 子组
 
   // —— 楼梯栅门门扇（随 w.doors.gate 动画）——
   const gate = new THREE.Group();
@@ -199,7 +202,29 @@ export function buildFloors(m: Materials): Floors {
   flask.position.set(14.8, B1_Y + 0.86, -13.0);
   group.add(flask);
 
-  let gateOpen = 0;
+  // —— 礼拜堂正门双扇（朝西，随 w.doors.chapelFront）——
+  const mkLeaf = (hz: number, dir: number): THREE.Group => {
+    const g = new THREE.Group();
+    const lb = new Batch();
+    lb.box(v.woodPlank, -0.05, 0, 0.05, 0.9 * dir, 0, 3.2, 1.2);
+    for (const yy of [0.5, 1.6, 2.7]) lb.box(m.iron, -0.07, 0.05 * dir, 0.07, 0.85 * dir, yy, yy + 0.08, 1);
+    lb.build(g, true);
+    g.position.set(13.3, RAISED_Y, -hz);
+    return g;
+  };
+  const frontL = mkLeaf(15.6, 1);
+  const frontR = mkLeaf(17.4, -1);
+  group.add(frontL, frontR);
+  // —— 祭台匣（新祭台，随 w.taken.chest）——
+  const chest = new THREE.Group();
+  const cb = new Batch();
+  cb.box(v.woodPlank, -0.5, -0.35, 0.5, 0.35, 0, 0.5, 1.2);
+  cb.box(m.iron, -0.52, -0.37, 0.52, 0.37, 0.45, 0.55, 1);
+  cb.build(chest, true);
+  chest.position.set(29.3, RAISED_Y + 1.1, -16.5);
+  group.add(chest);
+
+  let gateOpen = 0, frontOpen = 0;
   return {
     group,
     update(w: World, dt: number): void {
@@ -207,6 +232,11 @@ export function buildFloors(m: Materials): Floors {
       gate.rotation.y = gateOpen * HALF_PI * 0.95;
       gate.rotation.z = w.repairs.gate ? 0 : 0.035;
       flask.visible = !w.taken.flask;
+      g1.visible = w.player.floor === 'B1'; // map: 楼层可见性剔除
+      frontOpen += ((w.doors.chapelFront ? 1 : 0) - frontOpen) * Math.min(1, dt * 6);
+      frontL.rotation.y = -frontOpen * HALF_PI * 0.95;
+      frontR.rotation.y = frontOpen * HALF_PI * 0.95;
+      chest.visible = !w.taken.chest;
     },
   };
 }
@@ -226,6 +256,8 @@ export function hideMovedProps(propsGroup: THREE.Group): void {
   const boxes: [number, number, number, number, number, number][] = [
     [10.0, 10.6, 0, 3.0, 5.0, 7.0],   // 旧侧廊栅门
     [22.0, 22.6, 1.0, 1.6, 22.7, 23.3], // 旧门厅油瓶
+    [17.9, 20.1, 0.4, 3.8, 25.0, 25.5], // 旧正门双扇（朝北旧位）
+    [18.3, 19.7, 1.4, 2.4, 8.9, 9.8],  // 旧祭台匣（旧位）
   ];
   cull(propsGroup, boxes);
 }
@@ -241,27 +273,27 @@ function cull(group: THREE.Group, boxes: [number, number, number, number, number
     const geo = me.geometry as THREE.BufferGeometry;
     const pos = geo.getAttribute('position') as THREE.BufferAttribute | undefined;
     if (!pos || geo.index) return;
-    const nor = geo.getAttribute('normal') as THREE.BufferAttribute;
-    const uv = geo.getAttribute('uv') as THREE.BufferAttribute | undefined;
-    const keepP: number[] = [], keepN: number[] = [], keepU: number[] = [];
+    const names = Object.keys(geo.attributes);
+    const keep: Record<string, number[]> = {};
+    for (const nm of names) keep[nm] = [];
     let removed = 0;
     for (let i = 0; i < pos.count; i += 3) {
       const cx = (pos.getX(i) + pos.getX(i + 1) + pos.getX(i + 2)) / 3;
       const cy = (pos.getY(i) + pos.getY(i + 1) + pos.getY(i + 2)) / 3;
       const cz = -(pos.getZ(i) + pos.getZ(i + 1) + pos.getZ(i + 2)) / 3;
       if (inBox(cx, cy, cz)) { removed++; continue; }
-      for (let k = 0; k < 3; k++) {
-        keepP.push(pos.getX(i + k), pos.getY(i + k), pos.getZ(i + k));
-        if (nor) keepN.push(nor.getX(i + k), nor.getY(i + k), nor.getZ(i + k));
-        if (uv) keepU.push(uv.getX(i + k), uv.getY(i + k));
+      for (const nm of names) {
+        const at = geo.getAttribute(nm) as THREE.BufferAttribute;
+        for (let k = 0; k < 3; k++) for (let c = 0; c < at.itemSize; c++) keep[nm].push(at.getComponent(i + k, c));
       }
     }
     if (!removed) return;
-    if (!keepP.length) { me.visible = false; return; }
+    if (!keep[names[0]].length) { me.visible = false; return; }
     const ng = new THREE.BufferGeometry();
-    ng.setAttribute('position', new THREE.Float32BufferAttribute(keepP, 3));
-    if (nor) ng.setAttribute('normal', new THREE.Float32BufferAttribute(keepN, 3));
-    if (uv) ng.setAttribute('uv', new THREE.Float32BufferAttribute(keepU, 2));
+    for (const nm of names) {
+      const at = geo.getAttribute(nm) as THREE.BufferAttribute;
+      ng.setAttribute(nm, new THREE.Float32BufferAttribute(keep[nm], at.itemSize));
+    }
     me.geometry = ng;
     geo.dispose();
   });

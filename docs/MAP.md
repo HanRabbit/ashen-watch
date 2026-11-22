@@ -379,3 +379,47 @@ hud.ts 最小接线（≤12 行，沿用现有类名）：`hud-phase` 追加 ` �
 - `npm run build` 后 `AW_URL=http://localhost:5187/ AW_OUT=/tmp/aw3-map node tools/browser-verify.mjs chrome --headless step2` 六场景全通（机器人跨层走位）。
 - A14（纯鼠标 B1→2F 双向楼梯、高度连续、HUD 楼层一致）、A15（地下双梯环 + 栅门修前后）、A16（楼板上下引鬼、楼梯追逐、B1/2F 黄昏存档）新增浏览器检查。
 - 参考机位三角 ≤8M、draw calls ≤1800；截图 ≥3 轮迭代，输出 /tmp/aw3-map，最终 ≤6 张进 docs/art-pass3/map-*.png。
+---
+
+## 15. 第二阶段实现纪要（最终几何，取代 §3 坐标）
+
+构图对齐（总监决定）：礼拜堂整体转 90°，正门朝西面向庭院。以下为**最终实测坐标**：
+
+- **礼拜堂**：x[13.5,30.5] z[11,22]，地面 +0.45。正门西墙 x=13.5、z=16.5（宽1.8）。门前平台 x[10.5,13.5] z[11,22]（+0.45，西侧三级台阶下庭院）。庭院东墙 x=10 的 z[11,22] 改敞开券廊（墩宽0.5，中 bay z[14.6,18.4] 正对正门）。门厅隔墙 x[17.5,17.9]、开口 z[11.7,13.7]；上廊跨越段隔墙降为 h3.7（`partitionLow`，无 2F 上stand，保证上廊通行）。长凳三排 x=20/21.8/23.6，两列 z[13.5,15.5]/[17.5,20.5]，中央过道 z[15.5,17.5]。柱列 (22.7,13.8)/(22.7,19.2)。祭台 x[28.7,30] z[15.1,17.9]。祭台火盆 (27,18.5)。
+- **井台** (3,13)。**壁灯**北墙 (−5,28.8)，亮区中心 (−4,21) r7（1F，覆盖主路西北）。**装饰铁栅**南墙 x5.5（不开洞）。**前景桶箱**北墙脚 x[−8,−5.6] z[26.6,28.2]。**脚手架**西墙 (−8.2..−6.4,17..18.2)。货车/堆箱/断墙位置同 §3。
+- **S1 井梯**：洞口 x[4.6,10] z[9,10.8]，西端 y0 下行东端 y−3（20级）。地窖 x[2.5,10.6] z[6.5,15.5]（净高2.4），石墩 (4.6,7.6)/(4.6,13.2)，深层封门南墙 z6.5 x[5,6.8]。
+- **内侧通道** x[10.6,14] z[9,13]（净高2.2）。**旧储藏室** x[13,24] z[11.5,21.9]（净高3.15），油瓶 (14.8,13)，储藏架西墙。**S2 后梯**改**直梯** x[14.2,16] z[17.5,21.5]（门厅地面洞，北端 y0.45 下行南端 y−3），东侧护墙 z[17.5,20.5] 留顶部入口。
+- **2F**：东步道 x[8.4,10] z[2.5,28.5]；北步道 z[27,28.5] x[−10,10]；西步道 x[−10,−8.4] z[2.5,28.5]；内护栏在转角处断开（东/西护栏 z≤27，北护栏 x[−8.4,8.4]）保证环通。**过街桥** x[8.4,13.5] z[19.5,21]，礼拜堂西墙该段为**全高开口**（无 bridgeSill/Head，1F 平台↔门厅亦通）。**上廊** x[13.5,24] z[20.3,22] 木地板，内栏板 x[15.5,24] z[20.3,20.4]（西端留桥入口）。**S4 下梯** x[24.6,29.6] z[20.4,22]（正厅北过道 y0.45 上行至 y4），顶部平台 x[24,24.6]，**楼梯栅门** x=24（修复 gate）。**S3 外梯** x[3.8,9.4] z[0.5,2.3]，内侧护墙止于 x8.6（不挡步道）。步道火盆 (−9.2,14)（2F 西步道）。
+- 东幕墙垛墙在桥位 z[19.5,21] 断开（`parapet` 分两段），保证桥面通行。
+
+**路线实测**（步行1.8m/s，Driver/bot）：主路 门房→祭台 ≈28s；2F 近路（修栅门）≈26–30s；B1 取油+续程 ≈16+18s；B1 大环路 ≈40s。测试断言：主路 26–40、2F 20–32（PRD §3 以实测为准）。
+
+**sim 结构**：`Box.y0` 竖向范围；实体 `y/floor`；`supportY/ceilingY/floorCandidates/surfacesAt`；`SLABS/STAIRS/STAIR_MASS`；3D `hasLineOfSight`；导航节点带楼层、跨层只经楼梯边；`findPath` 起点在坡面时朝目标楼层出口走（防振荡）；噪声跨层按导航路径长度衰减；`SAVE_VERSION=3`（v2 迁移补 y/floor）。
+
+**测试**：119 全过（含新增 tests/floors.test.ts：跨层导航/楼板阻断/楼梯连续/存档往返/8组合撤退/跨层噪声）。driver 增 `driveStair`（沿坡面直走，确定性上下梯）与 `walkTo/nightWalk` 的 `floor` 参数；2F 往返用轴段直走避免图寻路在楼梯振荡。
+
+## 16. 渲染预算与可见性
+
+- floors.ts 全部经 `variants(m)` 合批（Batch 按材质合并）；B1 单独子组 `floors-B1`，**玩家不在 B1 时整组隐藏**（B1 在 1F/2F 视角不可见）。
+- 参考机位实测（ref-night 1920×1080）：**1275 calls / 4.81M tris**（上限1800/8M；floors 新增远低于 250 calls/2M tris 预算）。
+- 地面开洞（S1/S2/旧礼拜堂/旧外廊）用 `hideGroundHoles` 按三角形重心 AABB 剔除 staticLevel；旧栅门/旧门厅油瓶用 `hideMovedProps` 隐藏（props.ts 不可改）。
+
+## 17. 最小接线审计（每处 ≤20 行，`// map:` 注释；合并时手工核对）
+
+| 文件 | 行号 | 内容 |
+|---|---|---|
+| src/render/view.ts | 19,83,94,95,148,152,154,358-364 | import floors；RenderPose.y；floors 字段/构建/加入场景；hideGroundHoles/hideMovedProps；update 平滑 y + floors.update |
+| src/render/characters.ts | 128,130,272,280,282,287,320,464,471,644(+trail) | update/place 签名加 y?；position.set 用 at.y ?? groundY（6 处带 /* map */） |
+| src/render/camera.ts | 6,63,87,97,99 | ceilingY import；update p.y?；pivot 用 p.y；顶限 ceilingY；下行夹地用 p.y |
+| src/render/furniture.ts | 60 | prop 基准高读 p.y0 ?? 启发式 |
+| src/render/staticLevel.ts | 145 | walls 循环跳过 y0!==undefined（三层几何归 floors） |
+| src/ui/hud.ts | 4,5,97-106 | STAIRS/node import；phase 追加楼层+楼梯去向 |
+| src/render/landmarks.ts | 442-445 + hideLegacy AABB | group 旋转 π/2 + 平移(38.5,0,2.5)；hideLegacy 剔除旧朝向装饰 |
+| src/main.ts | 无改动 | 探针 path 签名兼容；pose.y 在 view 内处理 |
+
+## 18. 验收与遗留
+
+- typecheck 零错误；vitest 119 全过；build 通过；browser step2 六场景（见 /tmp/aw3-map）。
+- 新 ref-day/ref-night：礼拜堂正立面居中、井台中景偏右、左前景桶箱/壁灯/爬藤、2F 步道横贯、右上远景城堡。构图对齐 concept/03。
+- 亮度（measure.sh 统一口径）：ref-day frame 0.335 / ref-night 0.084，略低于圣经 §7 目标（0.40–0.50 / 0.10–0.16）——属集成 lighting rig，建议 lighting 代理微调，非 map 几何问题。
+- 遗留：staticLevel 仍含旧朝向礼拜堂屋顶/山墙残件（hideLegacy 已剔除大部分），scenery 后续打磨收尾；vfx 贴地高度在 B1/2F 偏移由 chars 代理处理。
