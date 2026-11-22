@@ -422,4 +422,5 @@ hud.ts 最小接线（≤12 行，沿用现有类名）：`hud-phase` 追加 ` �
 - typecheck 零错误；vitest 119 全过；build 通过；browser step2 六场景（见 /tmp/aw3-map）。
 - 新 ref-day/ref-night：礼拜堂正立面居中、井台中景偏右、左前景桶箱/壁灯/爬藤、2F 步道横贯、右上远景城堡。构图对齐 concept/03。
 - 亮度（measure.sh 统一口径）：ref-day frame 0.335 / ref-night 0.084，略低于圣经 §7 目标（0.40–0.50 / 0.10–0.16）——属集成 lighting rig，建议 lighting 代理微调，非 map 几何问题。
+- 无头验收遗留：headless Chrome 在 step2 持续输入下出现**间歇性渲染进程崩溃**（约30s，崩溃点在不同输入步之间漂移；站立/行走/逐层 teleport/repair 浮层/夜鬼生成等隔离探针均稳定，integration 单独构建同样探针稳定）。已排除几何 NaN、cull 丢属性（已修复为保留全部 attribute）、floors 投影负载（已改不投影）。bundled chromium 离线不可用。建议总监以 headed 或修复无头环境后复跑 step2；探针见 /tmp/aw3-map/crash-*.mjs。
 - 遗留：staticLevel 仍含旧朝向礼拜堂屋顶/山墙残件（hideLegacy 已剔除大部分），scenery 后续打磨收尾；vfx 贴地高度在 B1/2F 偏移由 chars 代理处理。

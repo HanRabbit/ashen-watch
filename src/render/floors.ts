@@ -182,6 +182,7 @@ export function buildFloors(m: Materials): Floors {
 
   b.build(group, true);
   b1.build(g1, true); group.add(g1); // map: B1 子组
+  group.traverse((o) => { const me = o as THREE.Mesh; if (me.isMesh) { me.castShadow = false; me.receiveShadow = true; } }); // map: 三层几何不投影，省 shadow pass（swiftshader 稳定+预算）
 
   // —— 楼梯栅门门扇（随 w.doors.gate 动画）——
   const gate = new THREE.Group();
