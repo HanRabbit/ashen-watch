@@ -3,7 +3,7 @@
 
 export type RepairId = 'lamp' | 'gate' | 'bolt';
 
-export const SAVE_VERSION = 2;
+export const SAVE_VERSION = 3;
 export const SAVE_KEY = 'ashen-watch/save';
 export const SETTINGS_KEY = 'ashen-watch/settings';
 
@@ -38,13 +38,13 @@ export const LANTERN = {
 };
 
 /** 固定光源的亮区：圆形，且只在所在房间的矩形内生效（光不穿墙）。 */
-export interface LightZone { x: number; z: number; r: number; x0: number; z0: number; x1: number; z1: number }
+export interface LightZone { x: number; z: number; r: number; x0: number; z0: number; x1: number; z1: number; floor: 'B1' | '1F' | '2F' }
 
 export const WALL_LAMP = {
   burnTime: 180,
   oilCost: 1,
   // 视觉、AI 禁入与调试边界共用这一处定义（PRD 9.4）。
-  zone: { x: -5.5, z: 14, r: 6, x0: -10, z0: 0.5, x1: 10, z1: 28.5 } as LightZone,
+  zone: { x: -4, z: 21, r: 7, x0: -10, z0: 0.5, x1: 10, z1: 28.5, floor: '1F' } as LightZone,
 };
 
 export type BrazierId = 'chapel' | 'side';
@@ -54,12 +54,12 @@ export const BRAZIER = {
   burnTime: 180,
   oilCost: 1,
   zones: {
-    chapel: { x: 21, z: 11.5, r: 4.5, x0: 13.5, z0: 8, x1: 24.5, z1: 20.6 },
-    side: { x: 10.75, z: 9, r: 3, x0: 10.5, z0: 2, x1: 13, z1: 17.5 },
+    chapel: { x: 27, z: 18.5, r: 4.5, x0: 13.5, z0: 11, x1: 30.5, z1: 20.3, floor: '1F' },
+    side: { x: -9.2, z: 14, r: 3, x0: -10, z0: 2.5, x1: -8.4, z1: 28.5, floor: '2F' },
   } as Record<BrazierId, LightZone>,
 };
 
-export const BRAZIER_NAME: Record<BrazierId, string> = { chapel: '祭台火盆', side: '侧廊火盆' };
+export const BRAZIER_NAME: Record<BrazierId, string> = { chapel: '祭台火盆', side: '步道火盆' };
 
 export const HEARTH = {
   nightBurn: 240,
@@ -69,6 +69,8 @@ export const HEARTH = {
   coldThreshold: 160,
   coldDamagePerSec: 1,
   fastForwardSafeSecs: 10,
+  /** 2F 露天步道/桥夜间冷量累积倍率（寒风）。上廊有顶不加成。 */
+  walkColdFactor: 1.5,
 };
 
 export const MEAL = { heal: 30, coldFactor: 0.5 };
@@ -81,7 +83,7 @@ export const REPAIR_COST: Record<RepairId, { wood: number; iron: number }> = {
 
 export const REPAIR_NAME: Record<RepairId, string> = {
   lamp: '庭院壁灯',
-  gate: '侧廊栅门',
+  gate: '楼梯栅门',
   bolt: '门房门闩',
 };
 

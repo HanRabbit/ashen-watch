@@ -1,6 +1,6 @@
 // 世界状态：纯数据，可整体 JSON 序列化为黄昏快照（PRD 第 5 节、9.5）。
 import { BrazierId, LANTERN, PLAYER, RepairId } from '../config';
-import { DoorId, GHOST_SPAWN, SPAWN } from './level';
+import { DoorId, FloorId, GHOST_SPAWN, SPAWN } from './level';
 
 export type Phase = 'tutorial' | 'day' | 'dusk' | 'night' | 'dawn' | 'ended' | 'failed';
 export type GhostKind = 'grey' | 'wraith';
@@ -12,12 +12,12 @@ export interface Vec2 { x: number; z: number }
 
 export interface GhostState {
   kind: GhostKind;
-  x: number; z: number; yaw: number;
+  x: number; z: number; y: number; floor: FloorId; yaw: number;
   mode: GhostMode;
   /** 当前状态已持续的活动秒。 */
   t: number;
   patrolIdx: number;
-  path: Vec2[];
+  path: { x: number; z: number; y?: number; floor?: FloorId }[];
   goal: Vec2 | null;
   lastKnown: Vec2 | null;
   canSee: boolean;
@@ -48,7 +48,7 @@ export interface World {
   /** 本局累计游玩的活动秒（含教学与晨曦，重试不回退），结算用。 */
   played: number;
   duskWarned: boolean;
-  player: { x: number; z: number; yaw: number; pitch: number; hp: number; cold: number; moving: boolean; sprinting: boolean };
+  player: { x: number; z: number; y: number; floor: FloorId; yaw: number; pitch: number; hp: number; cold: number; moving: boolean; sprinting: boolean };
   inv: { wood: number; iron: number; oil: number; meal: number; hasLantern: boolean; hasClapper: boolean };
   lantern: { oil: number; on: boolean; raised: boolean };
   repairs: Record<RepairId, boolean>;
@@ -93,7 +93,7 @@ export interface UiRequest { repair: RepairId | null; board: boolean }
 export function newGhost(kind: GhostKind): GhostState {
   const s = GHOST_SPAWN[kind];
   return {
-    kind, x: s.x, z: s.z, yaw: s.yaw, mode: 'patrol', t: 0, patrolIdx: 0, path: [], goal: null,
+    kind, x: s.x, z: s.z, y: s.y, floor: s.floor, yaw: s.yaw, mode: 'patrol', t: 0, patrolIdx: 0, path: [], goal: null,
     lastKnown: null, canSee: false, loseT: 0, senseT: kind === 'grey' ? 0 : 0.06, repathT: 0, stuckT: 0,
     repelCd: 0, lightT: 0, cowed: 0, sawSprint: false, flankSide: 1, bangOpens: false, waiting: false,
   };
@@ -102,12 +102,12 @@ export function newGhost(kind: GhostKind): GhostState {
 export function newWorld(): World {
   return {
     phase: 'tutorial', clock: 0, total: 0, played: 0, duskWarned: false,
-    player: { x: SPAWN.x, z: SPAWN.z, yaw: SPAWN.yaw, pitch: 0, hp: PLAYER.maxHp, cold: 0, moving: false, sprinting: false },
+    player: { x: SPAWN.x, z: SPAWN.z, y: 0, floor: '1F', yaw: SPAWN.yaw, pitch: 0, hp: PLAYER.maxHp, cold: 0, moving: false, sprinting: false },
     inv: { wood: 0, iron: 0, oil: 0, meal: 0, hasLantern: false, hasClapper: false },
     lantern: { oil: LANTERN.startOil, on: false, raised: false },
     repairs: { lamp: false, gate: false, bolt: false },
-    // 礼拜堂侧门的门扇早已松脱，只剩门洞，恒为敞开；其余门默认关闭。
-    doors: { gatehouse: false, gate: false, chapelFront: false, chapelSide: true },
+    // 门默认关闭；楼梯栅门未修时卡死关闭。
+    doors: { gatehouse: false, gate: false, chapelFront: false },
     bolted: false,
     lampBurn: 0,
     braziers: { chapel: 0, side: 0 },

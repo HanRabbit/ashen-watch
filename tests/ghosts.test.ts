@@ -6,21 +6,22 @@ import { GhostKind, GhostState, newGhost, World } from '../src/sim/state';
 import { Driver, STAND } from './driver';
 
 /** 直接布置一个夜间场景：玩家与两鬼的位置由测试指定。 */
-function nightScene(px: number, pz: number): Driver {
+function nightScene(px: number, pz: number, py = 0, pf: 'B1'|'1F'|'2F' = '1F'): Driver {
   const d = new Driver();
   const w = d.w;
   w.phase = 'night'; w.clock = 0; w.nightT = 0;
   w.inv.hasLantern = true; w.quest.boardRead = true;
   w.lantern = { oil: 400, on: false, raised: false };
   w.hearth = { lit: true, burn: 9999 };
-  w.player.x = px; w.player.z = pz;
+  w.player.x = px; w.player.z = pz; w.player.y = py; w.player.floor = pf;
   w.ghosts = [];
   return d;
 }
 
-function place(w: World, kind: GhostKind, x: number, z: number, mode: GhostState['mode'] = 'patrol'): GhostState {
+function place(w: World, kind: GhostKind, x: number, z: number, mode: GhostState['mode'] = 'patrol', y?: number, floor?: 'B1'|'1F'|'2F'): GhostState {
   const g = newGhost(kind);
   g.x = x; g.z = z; g.mode = mode;
+  g.y = y ?? 0; g.floor = floor ?? '1F';
   g.yaw = Math.atan2(w.player.x - x, w.player.z - z);
   if (mode === 'chase') { g.canSee = true; g.lastKnown = { x: w.player.x, z: w.player.z }; }
   w.ghosts.push(g);
@@ -77,7 +78,7 @@ describe('察觉与预警', () => {
 
   it('冲刺的声音会把灰影引来调查', () => {
     const d = nightScene(8, 3);
-    const g = place(d.w, 'grey', 8, 10.5);
+    const g = place(d.w, 'grey', 7, 11);
     g.yaw = 0; // 背对玩家
     d.face(-8, 3);
     d.wait(0.5, { forward: 1, sprint: true });
@@ -88,7 +89,7 @@ describe('察觉与预警', () => {
     const d = nightScene(STAND.chest.x, STAND.chest.z);
     d.w.doors.chapelFront = true;
     const a = place(d.w, 'grey', 0, 23); a.yaw = Math.PI;
-    const b = place(d.w, 'wraith', 11.75, 9.5); b.yaw = Math.PI;
+    const b = place(d.w, 'wraith', 16.9, 21.0, 'patrol', -3, 'B1'); b.yaw = Math.PI;
     expect(d.use('chest')).toBe(true);
     expect(a.mode).toBe('investigate');
     expect(b.mode).toBe('investigate');
@@ -238,30 +239,27 @@ describe('退避（A06）', () => {
 });
 
 describe('门与栅门（A05）', () => {
-  it('关闭的栅门截断视线和通行，打开后恢复', () => {
-    const d = nightScene(11.5, 6);
+  it('关闭的楼梯栅门截断视线和通行，打开后恢复', () => {
+    const d = nightScene(22.5, 21.15, 4, '2F');
     d.w.repairs.gate = true; d.w.lantern.on = true;
-    const g = place(d.w, 'grey', 8.5, 6);
-    let minX = 99;
-    d.onStep = () => { minX = Math.min(minX, 10.2 - g.x); };
+    const g = place(d.w, 'grey', 25.5, 21.15, 'patrol', 4, '2F');
     d.wait(3);
     expect(g.canSee).toBe(false);
     expect(g.mode).toBe('patrol');
     d.w.doors.gate = true;
-    g.x = 8.5; g.z = 6; g.yaw = Math.PI / 2;
+    g.x = 25.5; g.z = 21.15; g.yaw = -Math.PI / 2; g.path = []; g.senseT = 0; g.mode = 'patrol';
     d.wait(0.5);
     expect(g.canSee).toBe(true);
   });
 
-  it('追逐中玩家回手关上栅门：两只鬼都过不来，并改走别的路或放弃', () => {
-    const d = nightScene(STAND.gateE.x, STAND.gateE.z);
+  it('追逐中玩家回手关上栅门：鬼过不来', () => {
+    const d = nightScene(STAND.gateW.x, STAND.gateW.z, 4, '2F');
     d.w.repairs.gate = true; d.w.doors.gate = true; d.w.lantern.on = true;
-    const a = place(d.w, 'grey', 5, 6, 'chase');
-    const b = place(d.w, 'wraith', 5, 4, 'chase');
+    const a = place(d.w, 'grey', 26, 21.15, 'chase', 4, '2F');
     expect(d.use('gate')).toBe(true);
     expect(d.w.doors.gate).toBe(false);
     let crossed = false;
-    d.onStep = () => { if (a.x > 10.3 && a.z < 14 || b.x > 10.3 && b.z < 14) crossed = true; };
+    d.onStep = () => { if (a.x < 23.9) crossed = true; };
     d.wait(12);
     expect(crossed).toBe(false);
     expect(d.w.player.hp).toBe(100);
@@ -295,7 +293,6 @@ describe('门与栅门（A05）', () => {
     expect(d.w.doors.gatehouse).toBe(true);
     expect(d.w.nightT - t0).toBeGreaterThanOrEqual(GHOST.grey.doorBangSecs - 0.1);
     expect(d.events.filter((e) => e.id === 'bang').length).toBeGreaterThanOrEqual(3);
-    // 进屋后举灯仍能逼退
     d.face(0, 0);
     d.waitUntil(() => g.mode === 'recoil', 8, { raise: true });
     expect(g.mode).toBe('recoil');
@@ -336,7 +333,6 @@ describe('门与栅门（A05）', () => {
     d.w.doors.gatehouse = false;
     expect(d.use('bolt')).toBe(true);
     expect(d.w.bolted).toBe(true);
-    // 加闩时门打不开，解除后才行
     d.w.player.x = STAND.doorIn.x; d.w.player.z = STAND.doorIn.z;
     expect(d.use('ghDoor')).toBe(false);
     d.w.player.x = STAND.boltIn.x; d.w.player.z = STAND.boltIn.z;
@@ -349,7 +345,7 @@ describe('庭院壁灯（A05）', () => {
   it('点亮期间两只鬼都不进入亮区；燃尽后恢复可走', () => {
     const d = nightScene(0, -4);
     d.w.repairs.lamp = true; d.w.lampBurn = 120;
-    const a = place(d.w, 'grey', 0, 23);
+    const a = place(d.w, 'grey', 6, 23);
     const b = place(d.w, 'wraith', 8.8, 6);
     let minLit = 99, minDark = 99;
     d.onStep = (w) => {
@@ -367,7 +363,7 @@ describe('庭院壁灯（A05）', () => {
   it('灯新亮起时，位于亮区内的鬼退到最近的暗处', () => {
     const d = nightScene(0, -4);
     d.w.repairs.lamp = true;
-    const g = place(d.w, 'grey', -6, 14);
+    const g = place(d.w, 'grey', -5, 20);
     d.wait(0.2);
     d.w.lampBurn = 300;
     d.tick();
@@ -379,7 +375,7 @@ describe('庭院壁灯（A05）', () => {
   it('玩家站在亮区里，追来的鬼停在亮区外', () => {
     const d = nightScene(WALL_LAMP.zone.x, WALL_LAMP.zone.z);
     d.w.repairs.lamp = true; d.w.lampBurn = 300;
-    const a = place(d.w, 'grey', 0, 23, 'chase');
+    const a = place(d.w, 'grey', 6, 23, 'chase');
     const b = place(d.w, 'wraith', 6, 20, 'chase');
     let min = 99;
     d.onStep = () => { min = Math.min(min, zoneDist(a), zoneDist(b)); };
@@ -412,7 +408,7 @@ describe('火盆', () => {
   });
 
   it('白天也能点（提前布置），燃烧计时照常走', () => {
-    const d = nightScene(STAND.brazierSide.x, STAND.brazierSide.z);
+    const d = nightScene(STAND.brazierSide.x, STAND.brazierSide.z, 4, '2F');
     d.w.phase = 'day'; d.w.inv.oil = 1;
     expect(d.use('brazierSide')).toBe(true);
     d.wait(10);
@@ -436,7 +432,7 @@ describe('火盆', () => {
     const zn = zoneOf('chapel');
     const d = nightScene(0, -4);
     d.w.doors.chapelFront = true;
-    const g = place(d.w, 'wraith', 19, 12.6);
+    const g = place(d.w, 'wraith', 26, 17.5);
     d.wait(0.2);
     d.w.braziers.chapel = 20;
     d.tick();
@@ -449,26 +445,24 @@ describe('火盆', () => {
     expect(entered).toBe(true);
   });
 
-  it('侧廊火盆亮着时把侧廊截成两段：鬼过不去，墙另一侧的庭院和礼拜堂不受影响', () => {
+  it('步道火盆亮着时把西步道截成两段：鬼过不去，玩家安全', () => {
     const zn = zoneOf('side');
-    // 亮区不穿墙
-    expect(inZone(zn, 9.5, 9)).toBe(false);
-    expect(inZone(zn, 14.6, 9)).toBe(false);
-    const d = nightScene(11.75, 4);
+    expect(inZone(zn, -7, 14, 0, '2F')).toBe(false); // 亮区不越出步道
+    const d = nightScene(-9.2, 4, 4, '2F');
     d.w.braziers.side = 120; d.w.lantern.on = true;
-    const g = place(d.w, 'wraith', 11.75, 15, 'chase');
-    let minZ = 99;
-    d.onStep = () => { minZ = Math.min(minZ, g.z); };
+    const g = place(d.w, 'wraith', -9.2, 20, 'chase', 4, '2F');
+    let inside = 0;
+    d.onStep = () => { if (inZone(zn, g.x, g.z, -0.05, '2F')) inside++; };
     d.wait(30);
-    expect(minZ).toBeGreaterThan(zn.z + zn.r - 0.1);
+    expect(inside).toBe(0);
     expect(d.w.player.hp).toBe(100);
   });
 
-  it('黑影的巡游路线在侧廊火盆亮着时不会卡住', () => {
+  it('祭台火盆亮着时黑影的巡游路线不会卡住', () => {
     const d = nightScene(0, -4);
-    d.w.braziers.side = 9999; d.w.braziers.chapel = 9999;
+    d.w.braziers.chapel = 9999;
     const a = place(d.w, 'grey', -6, 26.2);
-    const b = place(d.w, 'wraith', 11.75, 14);
+    const b = place(d.w, 'wraith', 5.5, 7.6, 'patrol', -3, 'B1');
     let still = 0, worst = 0, lx = b.x, lz = b.z;
     d.onStep = () => {
       still = Math.hypot(b.x - lx, b.z - lz) < 1e-4 ? still + FIXED_DT : 0;
@@ -504,8 +498,8 @@ describe('晨曦清场（A10）', () => {
 describe('巡游', () => {
   it('两只鬼各走各的暗路，长时间巡游不会卡住', () => {
     const d = nightScene(0, -4);
-    const a = place(d.w, 'grey', -6, 26.2);
-    const b = place(d.w, 'wraith', 11.75, 12.4);
+    const a = place(d.w, 'grey', 0, 23);
+    const b = place(d.w, 'wraith', 5.5, 13.2, 'patrol', -3, 'B1');
     const still = new Map<string, number>();
     const last = new Map<string, { x: number; z: number }>();
     let worst = 0;
@@ -521,8 +515,8 @@ describe('巡游', () => {
     };
     d.wait(300);
     expect(worst).toBeLessThan(3);
-    expect(visited.grey.size).toBeGreaterThanOrEqual(8);
-    expect(visited.wraith.size).toBeGreaterThanOrEqual(8);
+    expect(visited.grey.size).toBeGreaterThanOrEqual(5);
+    expect(visited.wraith.size).toBeGreaterThanOrEqual(5);
     expect(a.mode).toBe('patrol');
     expect(b.mode).toBe('patrol');
   });

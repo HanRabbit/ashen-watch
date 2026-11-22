@@ -39,6 +39,7 @@ function isWorld(v: unknown): v is World {
     && typeof w.clock === 'number' && Number.isFinite(w.clock)
     && !!p && typeof p.x === 'number' && typeof p.z === 'number' && typeof p.hp === 'number'
     && Number.isFinite(p.x) && Number.isFinite(p.z)
+    && typeof p.y === 'number' && Number.isFinite(p.y) && (p.floor === 'B1' || p.floor === '1F' || p.floor === '2F')
     && !!inv && typeof inv.wood === 'number' && typeof inv.iron === 'number' && typeof inv.oil === 'number'
     && !!w.repairs && !!w.doors && !!w.taken && !!w.quest && !!w.lantern && !!w.hearth && !!w.braziers && !!w.hints
     && Array.isArray(w.ghosts);
@@ -83,7 +84,15 @@ export class SaveStore {
     if (!data || typeof data !== 'object') return { status: 'corrupt', env: null, message: MESSAGES.corrupt };
     const e = data as Partial<SaveEnvelope>;
     if (typeof e.version !== 'number') return { status: 'corrupt', env: null, message: MESSAGES.corrupt };
-    if (e.version !== SAVE_VERSION) return { status: 'version', env: null, message: MESSAGES.version };
+    if (e.version === SAVE_VERSION - 1) {
+      // v2 → v3 迁移：补三维位置与楼层（旧档均为 1F）。
+      const d = e.dusk as (World & { player: Record<string, unknown> }) | null;
+      if (d && d.player) {
+        if (typeof d.player.y !== 'number') d.player.y = 0;
+        if (!d.player.floor) d.player.floor = '1F';
+      }
+      e.version = SAVE_VERSION;
+    } else if (e.version !== SAVE_VERSION) return { status: 'version', env: null, message: MESSAGES.version };
     if (e.dusk !== null && !isWorld(e.dusk)) return { status: 'corrupt', env: null, message: MESSAGES.corrupt };
     const env: SaveEnvelope = {
       version: SAVE_VERSION,

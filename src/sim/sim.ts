@@ -1,8 +1,8 @@
 // 固定步长模拟：时段、角色、生存、交互与修复（PRD 第 4、9 节）。不依赖渲染，可在 Node 下测试。
 import { BRAZIER, BRAZIER_NAME, BrazierId, GHOST, HEARTH, LANTERN, MEAL, PHASE, PLAYER, REPAIR_COST, REPAIR_NAME, RepairId, WALL_LAMP } from '../config';
-import { circleBlocked, circleOverlapsBox, findOpening, hasLineOfSight, moveCircle, solidBoxes } from './collision';
+import { circleBlocked, circleOverlapsBox, cylsAt, findOpening, hasLineOfSight, moveCircle, solidBoxes } from './collision';
 import { dissolveGhosts, ghostThreatens, invalidatePaths, Noise, updateGhosts } from './ghosts';
-import { Box, DOORS, DoorId, INTERACTS, InteractDef, InteractId, NODES, PROPS, regionAt, SPAWN, WELL } from './level';
+import { Box, DOORS, DoorId, FloorId, INTERACTS, InteractDef, InteractId, NODES, PROPS, regionAt, regionAt3, SPAWN, supportY } from './level';
 import { cloneWorld, newGhost, SimEvent, UiRequest, World } from './state';
 
 export type Action =
@@ -58,14 +58,14 @@ function brazierTarget(w: World, id: BrazierId): Omit<Target, 'id'> {
 }
 
 export function inWarmZone(w: World): boolean {
-  return w.hearth.lit && regionAt(w.player.x, w.player.z) === 'gatehouse';
+  return w.hearth.lit && w.player.floor === '1F' && regionAt(w.player.x, w.player.z) === 'gatehouse';
 }
 
 export function playerSafe(w: World): boolean {
   if (!inWarmZone(w)) return false;
   for (const g of w.ghosts) {
     if (g.mode === 'gone' || g.mode === 'dissolve') continue;
-    if (ghostThreatens(g) || regionAt(g.x, g.z) === 'gatehouse') return false;
+    if (ghostThreatens(g) || (g.floor === '1F' && regionAt(g.x, g.z) === 'gatehouse')) return false;
   }
   return true;
 }
@@ -161,6 +161,7 @@ export function pickTarget(w: World): Target | null {
   const p = w.player;
   let best: InteractDef | null = null, bestInfo: Omit<Target, 'id'> | null = null, bestScore = Infinity;
   for (const it of INTERACTS) {
+    if (it.floor !== p.floor) continue;
     const dx = it.x - p.x, dz = it.z - p.z;
     const d = Math.hypot(dx, dz);
     if (d > PLAYER.interactDist) continue;
@@ -171,7 +172,7 @@ export function pickTarget(w: World): Target | null {
     }
     // 视线终点向玩家收回一小段，避免贴墙的点被自身所在的墙面挡住。
     const k = d > 0.25 ? (d - 0.2) / d : 0;
-    if (!hasLineOfSight(p.x, p.z, p.x + dx * k, p.z + dz * k, w.doors, it.ownDoor)) continue;
+    if (!hasLineOfSight(p.x, p.y + 1.5, p.z, p.x + dx * k, it.y, p.z + dz * k, w.doors, it.ownDoor)) continue;
     const info = describe(w, it.id);
     if (!info) continue;
     const score = ang + d * 0.05;
@@ -191,8 +192,9 @@ function toggleDoor(w: World, id: DoorId, h: Hooks, noises: Noise[]): void {
   h.emit({ kind: 'sfx', id: id === 'gate' ? 'gate' : 'door' });
   const cx = (box.x0 + box.x1) / 2, cz = (box.z0 + box.z1) / 2;
   if (w.phase === 'night') {
-    if (id === 'gate' && w.doors[id]) noises.push({ x: cx, z: cz, r: GHOST.noise.gate, kind: 'gate' });
-    else noises.push({ x: cx, z: cz, r: GHOST.noise.door, kind: 'door' });
+    const nf = id === 'gate' ? '2F' as const : '1F' as const;
+    if (id === 'gate' && w.doors[id]) noises.push({ x: cx, z: cz, floor: nf, r: GHOST.noise.gate, kind: 'gate' });
+    else noises.push({ x: cx, z: cz, floor: nf, r: GHOST.noise.door, kind: 'door' });
   }
   invalidatePaths(w);
 }
@@ -279,7 +281,7 @@ function interact(w: World, h: Hooks, noises: Noise[]): void {
       h.emit({ kind: 'sfx', id: 'chest' });
       h.emit({ kind: 'toast', text: w.phase === 'dawn' ? '取得钟舌。回门房外装上晨钟' : '取得钟舌——匣盖的响声传遍了礼拜堂。带它回门房，等到晨曦' });
       h.emit({ kind: 'quest' });
-      if (w.phase === 'night') noises.push({ x: w.player.x, z: w.player.z, r: GHOST.noise.chest, kind: 'chest' });
+      if (w.phase === 'night') noises.push({ x: w.player.x, z: w.player.z, y: w.player.y, floor: w.player.floor, r: GHOST.noise.chest, kind: 'chest' });
       break;
     case 'cellar': break;
     case 'cot':
@@ -405,7 +407,7 @@ function advancePhase(w: World, rawDt: number, h: Hooks, dayClockScale: number):
  * 门洞辅助：越肩镜头下角色偏在准星一侧，对着门洞走时常会正顶在门框旁的墙上。
  * 这一步几乎被墙挡死时，沿墙把角色带向 1.2 m 内最近的门洞。陈设、井台与关着的门不触发。
  */
-function doorAssist(p: { x: number; z: number }, x0: number, z0: number, dx: number, dz: number, boxes: Box[]): void {
+function doorAssist(p: { x: number; z: number; y?: number }, x0: number, z0: number, dx: number, dz: number, boxes: Box[]): void {
   const len = Math.hypot(dx, dz);
   if (len < 1e-6) return;
   // 碰撞把角色推回的量：方向即墙面法线，大小接近步长说明几乎没走动
@@ -414,17 +416,17 @@ function doorAssist(p: { x: number; z: number }, x0: number, z0: number, dx: num
   if (push < len * 0.8) return;
   const tx0 = x0 + dx, tz0 = z0 + dz;
   for (const b of PROPS) if (circleOverlapsBox(tx0, tz0, PLAYER.radius, b)) return;
-  if (Math.hypot(tx0 - WELL.x, tz0 - WELL.z) < WELL.r + PLAYER.radius) return;
+  for (const c of cylsAt(p.y ?? 0)) if (Math.hypot(tx0 - c.x, tz0 - c.z) < c.r + PLAYER.radius) return;
   const nx = cx / push, nz = cz / push;
   const tx = nz, tz = -nx;
   // 明显斜着走时只往滑动的那一侧找，不把角色往回拉
   const along = (dx * tx + dz * tz) / len;
-  const side = findOpening(p, nx, nz, PLAYER.radius, boxes, Math.abs(along) > 0.25 ? Math.sign(along) : 0);
+  const side = findOpening(p, nx, nz, PLAYER.radius, boxes, Math.abs(along) > 0.25 ? Math.sign(along) : 0, 1.2, 0.9, cylsAt(p.y ?? 0));
   if (!side) return;
   // 沿墙的合速度不超过当前移动速度
   const slid = ((p.x - x0) * tx + (p.z - z0) * tz) * side;
   const add = Math.max(0, len - slid);
-  moveCircle(p, tx * side * add, tz * side * add, PLAYER.radius, boxes);
+  moveCircle(p, tx * side * add, tz * side * add, PLAYER.radius, boxes, cylsAt(p.y ?? 0));
 }
 
 /** 推进一个固定步长。顺序：时段转换 → 光源与门 → 角色 → 敌人（PRD 9.4）。 */
@@ -505,11 +507,14 @@ export function step(w: World, input: StepInput, dt: number, h: Hooks, dayClockS
     const sp = p.sprinting ? PLAYER.sprintSpeed : PLAYER.walkSpeed;
     const sin = Math.sin(p.yaw), cos = Math.cos(p.yaw);
     const dx = (sin * f + cos * s) * sp * dt, dz = (cos * f - sin * s) * sp * dt;
-    const boxes = solidBoxes(w.doors);
+    const boxes = solidBoxes(w.doors, p.y);
+    const cyls = cylsAt(p.y);
     const x0 = p.x, z0 = p.z;
-    moveCircle(p, dx, dz, PLAYER.radius, boxes);
+    moveCircle(p, dx, dz, PLAYER.radius, boxes, cyls);
     doorAssist(p, x0, z0, dx, dz, boxes);
-    if (p.sprinting && night) noises.push({ x: p.x, z: p.z, r: GHOST.noise.sprint, kind: 'sprint' });
+    const sup = supportY(p.x, p.z, p.y);
+    if (sup) { p.y = sup.y; p.floor = sup.floor; }
+    if (p.sprinting && night) noises.push({ x: p.x, z: p.z, y: p.y, floor: p.floor, r: GHOST.noise.sprint, kind: 'sprint' });
   }
 
   // 寒冷：夜间门房以外或炉火已熄时累积，炉火旁回暖。
@@ -517,14 +522,15 @@ export function step(w: World, input: StepInput, dt: number, h: Hooks, dayClockS
     w.nightT += dt;
     if (inWarmZone(w)) p.cold = Math.max(0, p.cold - HEARTH.warmRate * dt);
     else {
-      p.cold = Math.min(HEARTH.coldThreshold, p.cold + HEARTH.coldRate * dt);
+      const open2F = p.floor === '2F' && (regionAt3(p.x, p.z, '2F') === 'walk' || regionAt3(p.x, p.z, '2F') === 'bridge');
+      p.cold = Math.min(HEARTH.coldThreshold, p.cold + HEARTH.coldRate * (open2F ? HEARTH.walkColdFactor : 1) * dt);
       if (p.cold >= HEARTH.coldThreshold) {
         p.hp = Math.max(0, p.hp - HEARTH.coldDamagePerSec * dt);
         if (p.hp <= 0) w.failReason = '你冻倒在了夜里';
       }
     }
     w.safeT = playerSafe(w) ? w.safeT + dt : 0;
-    if (w.inv.hasClapper && regionAt(p.x, p.z) === 'gatehouse' && !w.quest.returnedBeforeDawn) {
+    if (w.inv.hasClapper && p.floor === '1F' && regionAt(p.x, p.z) === 'gatehouse' && !w.quest.returnedBeforeDawn) {
       w.quest.returnedBeforeDawn = true;
       h.emit({ kind: 'toast', text: '钟舌带回了门房。守住炉火，等到晨曦' });
       h.emit({ kind: 'quest' });
@@ -547,19 +553,22 @@ export function step(w: World, input: StepInput, dt: number, h: Hooks, dayClockS
 export function restoreWorld(snapshot: World): World {
   const w = cloneWorld(snapshot);
   const p = w.player;
-  const boxes = solidBoxes(w.doors);
-  const bad = !Number.isFinite(p.x) || !Number.isFinite(p.z) || Math.abs(p.x) > 40 || Math.abs(p.z) > 40
-    || circleBlocked(p.x, p.z, PLAYER.radius, boxes);
+  const bad = !Number.isFinite(p.x) || !Number.isFinite(p.z) || !Number.isFinite(p.y) || Math.abs(p.x) > 40 || Math.abs(p.z) > 40
+    || circleBlocked(p.x, p.z, PLAYER.radius, solidBoxes(w.doors, p.y), cylsAt(p.y));
   if (bad) {
-    let best = { x: SPAWN.x, z: SPAWN.z }, bestD = Infinity;
+    let best = { x: SPAWN.x, z: SPAWN.z, y: 0, floor: '1F' as FloorId }, bestD = Infinity;
     if (Number.isFinite(p.x) && Number.isFinite(p.z)) {
+      // 优先同层最近安全节点（PRD 9.6）
       for (const n of NODES) {
-        const d = (n.x - p.x) ** 2 + (n.z - p.z) ** 2;
-        if (d < bestD) { bestD = d; best = { x: n.x, z: n.z }; }
+        const same = n.floor === p.floor ? 0 : 1000;
+        const d = same + (n.x - p.x) ** 2 + (n.z - p.z) ** 2;
+        if (d < bestD) { bestD = d; best = { x: n.x, z: n.z, y: n.y, floor: n.floor }; }
       }
     }
-    p.x = best.x; p.z = best.z;
+    p.x = best.x; p.z = best.z; p.y = best.y; p.floor = best.floor;
   }
+  const sup = supportY(p.x, p.z, p.y);
+  if (sup) { p.y = sup.y; p.floor = sup.floor; }
   if (!Number.isFinite(p.yaw)) p.yaw = 0;
   if (!Number.isFinite(p.pitch)) p.pitch = 0;
   p.hp = Math.max(1, Math.min(PLAYER.maxHp, Number.isFinite(p.hp) ? p.hp : PLAYER.maxHp));

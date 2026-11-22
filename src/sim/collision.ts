@@ -1,14 +1,30 @@
-// 2D 碰撞与视线：圆对轴对齐盒、圆对井台、线段遮挡。墙、关闭的门各有独立碰撞（PRD 9.2）。
-import { Box, DOORS, DoorId, PROPS, WALLS, WELL } from './level';
+// 碰撞与视线：圆对轴对齐盒（带竖向范围）、圆对圆柱、3D 线段遮挡。
+// 墙、关闭的门、楼板各有独立碰撞；按实体高度过滤，三层互不干扰（PRD 9.6）。
+import { Box, COLUMNS, Cylinder, DOORS, DoorId, PROPS, SLABS, STAIR_MASS, WALLS, WELL } from './level';
 
 export type DoorOpen = Record<DoorId, boolean>;
 
 const DOOR_IDS = Object.keys(DOORS) as DoorId[];
 
-/** 当前生效的阻挡盒：墙、道具与关闭的门。 */
-export function solidBoxes(doors: DoorOpen): Box[] {
-  const out = WALLS.concat(PROPS);
-  for (const id of DOOR_IDS) if (!doors[id]) out.push(DOORS[id].box);
+/** 实体竖向占用范围 [y+0.1, y+1.7] 与盒 [y0, h] 是否重叠。 */
+function overlapsY(b: Box, y: number): boolean {
+  const y0 = b.y0 ?? 0;
+  return y0 < y + 1.7 && b.h > y + 0.1;
+}
+
+/** 当前生效的阻挡盒：墙、道具、梯体与关闭的门，按实体高度 y 过滤（缺省 0 = 1F）。 */
+export function solidBoxes(doors: DoorOpen, y = 0): Box[] {
+  const out: Box[] = [];
+  for (const b of WALLS) if (overlapsY(b, y)) out.push(b);
+  for (const b of PROPS) if (overlapsY(b, y)) out.push(b);
+  for (const id of DOOR_IDS) if (!doors[id] && overlapsY(DOORS[id].box, y)) out.push(DOORS[id].box);
+  return out;
+}
+
+/** 与实体高度重叠的圆柱障碍（井台 / 柱列）。 */
+export function cylsAt(y: number): Cylinder[] {
+  const out: Cylinder[] = [];
+  for (const c of [WELL, ...COLUMNS]) if (c.y0 < y + 1.7 && c.h > y + 0.1) out.push(c);
   return out;
 }
 
@@ -26,7 +42,6 @@ function pushOutOfBox(p: { x: number; z: number }, r: number, b: Box): boolean {
     p.z += (dz / d) * push;
     return true;
   }
-  // 圆心在盒内：沿最近的面推出。
   const l = p.x - b.x0, rt = b.x1 - p.x, n = p.z - b.z0, f = b.z1 - p.z;
   const m = Math.min(l, rt, n, f);
   dx = 0; dz = 0;
@@ -35,22 +50,19 @@ function pushOutOfBox(p: { x: number; z: number }, r: number, b: Box): boolean {
   return true;
 }
 
-function pushOutOfWell(p: { x: number; z: number }, r: number): boolean {
-  const dx = p.x - WELL.x, dz = p.z - WELL.z;
-  const min = WELL.r + r;
+function pushOutOfCyl(p: { x: number; z: number }, r: number, c: Cylinder): boolean {
+  const dx = p.x - c.x, dz = p.z - c.z;
+  const min = c.r + r;
   const d2 = dx * dx + dz * dz;
   if (d2 >= min * min) return false;
   const d = Math.sqrt(d2) || 1e-4;
-  p.x = WELL.x + (dx / d) * min;
-  p.z = WELL.z + (dz / d) * min;
+  p.x = c.x + (dx / d) * min;
+  p.z = c.z + (dz / d) * min;
   return true;
 }
 
-/**
- * 移动一个圆形碰撞体并解算穿插。分小步推进，单步位移不超过半径的一半，
- * 高倍速或掉帧时也不会穿墙。
- */
-export function moveCircle(p: { x: number; z: number }, dx: number, dz: number, r: number, boxes: Box[]): void {
+/** 移动圆形碰撞体并解算穿插（分小步，单步 ≤ 半径一半）。 */
+export function moveCircle(p: { x: number; z: number }, dx: number, dz: number, r: number, boxes: Box[], cyls: Cylinder[] = []): void {
   const dist = Math.hypot(dx, dz);
   const steps = Math.max(1, Math.ceil(dist / (r * 0.5)));
   for (let s = 0; s < steps; s++) {
@@ -59,29 +71,26 @@ export function moveCircle(p: { x: number; z: number }, dx: number, dz: number, 
     for (let it = 0; it < 3; it++) {
       let hit = false;
       for (const b of boxes) if (pushOutOfBox(p, r, b)) hit = true;
-      if (pushOutOfWell(p, r)) hit = true;
+      for (const c of cyls) if (pushOutOfCyl(p, r, c)) hit = true;
       if (!hit) break;
     }
   }
 }
 
-export function circleBlocked(x: number, z: number, r: number, boxes: Box[]): boolean {
+export function circleBlocked(x: number, z: number, r: number, boxes: Box[], cyls: Cylinder[] = []): boolean {
   for (const b of boxes) {
     const cx = Math.max(b.x0, Math.min(x, b.x1));
     const cz = Math.max(b.z0, Math.min(z, b.z1));
     if ((x - cx) ** 2 + (z - cz) ** 2 < r * r - 1e-6) return true;
   }
-  return (x - WELL.x) ** 2 + (z - WELL.z) ** 2 < (WELL.r + r) ** 2 - 1e-6;
+  for (const c of cyls) if ((x - c.x) ** 2 + (z - c.z) ** 2 < (c.r + r) ** 2 - 1e-6) return true;
+  return false;
 }
 
-/**
- * 门洞辅助用：角色贴着一面墙（法线 nx、nz 指向角色）往里走却被挡住时，
- * 沿墙面在 reach 米内找最近的、往墙里 ahead 米都走得通的位置。
- * 返回应沿切向 (nz, -nx) 移动的方向（1 或 -1），找不到返回 0。only 非零时只找这一侧。
- */
+/** 门洞辅助：贴墙被挡时沿墙找最近可通行门洞。 */
 export function findOpening(
   p: { x: number; z: number }, nx: number, nz: number, r: number, boxes: Box[],
-  only = 0, reach = 1.2, ahead = 0.9,
+  only = 0, reach = 1.2, ahead = 0.9, cyls: Cylinder[] = [],
 ): number {
   const tx = nz, tz = -nx;
   const open = [only >= 0, only <= 0];
@@ -89,12 +98,10 @@ export function findOpening(
     for (let i = 0; i < 2; i++) {
       if (!open[i]) continue;
       const side = i === 0 ? 1 : -1;
-      // 探测点略微离墙，避免把贴墙的浮点误差算成穿插
       const cx = p.x + tx * o * side + nx * 0.02, cz = p.z + tz * o * side + nz * 0.02;
-      // 沿墙的路上被挡住，这一侧不再往远处找
-      if (circleBlocked(cx, cz, r, boxes)) { open[i] = false; continue; }
+      if (circleBlocked(cx, cz, r, boxes, cyls)) { open[i] = false; continue; }
       let clear = true;
-      for (let a = 0.15; a <= ahead + 1e-6 && clear; a += 0.15) clear = !circleBlocked(cx - nx * a, cz - nz * a, r, boxes);
+      for (let a = 0.15; a <= ahead + 1e-6 && clear; a += 0.15) clear = !circleBlocked(cx - nx * a, cz - nz * a, r, boxes, cyls);
       if (clear) return side;
     }
   }
@@ -107,7 +114,7 @@ export function circleOverlapsBox(x: number, z: number, r: number, b: Box): bool
   return (x - cx) ** 2 + (z - cz) ** 2 < r * r;
 }
 
-/** 线段与盒的首个交点参数 t∈[0,1]，不相交返回 Infinity（slab 法）。 */
+/** 2D 线段与盒首个交点参数 t（slab 法），不相交 Infinity。导航用。 */
 export function segBoxT(ax: number, az: number, bx: number, bz: number, b: Box): number {
   let t0 = 0, t1 = 1;
   const dx = bx - ax, dz = bz - az;
@@ -127,41 +134,73 @@ export function segBoxT(ax: number, az: number, bx: number, bz: number, b: Box):
   return t0;
 }
 
-function segCircleHit(ax: number, az: number, bx: number, bz: number, cx: number, cz: number, r: number): boolean {
+/** 3D 线段与带竖向范围的盒首个交点参数 t。视线 / 镜头用。 */
+export function segBox3T(ax: number, ay: number, az: number, bx: number, by: number, bz: number, b: Box): number {
+  let t0 = 0, t1 = 1;
+  const d = [bx - ax, by - ay, bz - az];
+  const o = [ax, ay, az];
+  const lo = [b.x0, b.y0 ?? 0, b.z0], hi = [b.x1, b.h, b.z1];
+  for (let axis = 0; axis < 3; axis++) {
+    if (Math.abs(d[axis]) < 1e-9) {
+      if (o[axis] < lo[axis] || o[axis] > hi[axis]) return Infinity;
+    } else {
+      let ta = (lo[axis] - o[axis]) / d[axis], tb = (hi[axis] - o[axis]) / d[axis];
+      if (ta > tb) { const t = ta; ta = tb; tb = t; }
+      if (ta > t0) t0 = ta;
+      if (tb < t1) t1 = tb;
+      if (t0 > t1) return Infinity;
+    }
+  }
+  return t0;
+}
+
+function segCylHit(ax: number, ay: number, az: number, bx: number, by: number, bz: number, c: Cylinder, r: number): boolean {
+  // 先按竖向范围粗判，再 2D 圆交
+  const dy = by - ay;
+  if (Math.abs(dy) > 1e-9) {
+    const t0 = (c.y0 - ay) / dy, t1 = (c.h - ay) / dy;
+    const lo = Math.max(0, Math.min(t0, t1)), hi = Math.min(1, Math.max(t0, t1));
+    if (lo > hi) return false;
+  } else if (ay < c.y0 || ay > c.h) return false;
   const dx = bx - ax, dz = bz - az;
   const len2 = dx * dx + dz * dz;
-  let t = len2 > 0 ? ((cx - ax) * dx + (cz - az) * dz) / len2 : 0;
+  let t = len2 > 0 ? ((c.x - ax) * dx + (c.z - az) * dz) / len2 : 0;
   t = Math.max(0, Math.min(1, t));
-  const px = ax + dx * t - cx, pz = az + dz * t - cz;
+  const px = ax + dx * t - c.x, pz = az + dz * t - c.z;
   return px * px + pz * pz < r * r;
 }
 
-/** 两点间是否有直接视线。关闭的门与实墙遮挡；矮道具不遮挡。 */
+/** 两点间 3D 直接视线。墙 / 楼板 / 关闭的门 / 高道具遮挡；矮道具与护栏不遮。 */
 export function hasLineOfSight(
-  ax: number, az: number, bx: number, bz: number, doors: DoorOpen, ignoreDoor?: DoorId,
+  ax: number, ay: number, az: number, bx: number, by: number, bz: number,
+  doors: DoorOpen, ignoreDoor?: DoorId,
 ): boolean {
-  for (const b of WALLS) if (segBoxT(ax, az, bx, bz, b) !== Infinity) return false;
-  for (const b of PROPS) if (b.los && segBoxT(ax, az, bx, bz, b) !== Infinity) return false;
+  for (const b of WALLS) if (segBox3T(ax, ay, az, bx, by, bz, b) !== Infinity) return false;
+  for (const b of PROPS) if (b.los && segBox3T(ax, ay, az, bx, by, bz, b) !== Infinity) return false;
+  for (const b of STAIR_MASS) if (segBox3T(ax, ay, az, bx, by, bz, b) !== Infinity) return false;
+  for (const b of SLABS) if (segBox3T(ax, ay, az, bx, by, bz, b) !== Infinity) return false;
   for (const id of DOOR_IDS) {
     if (doors[id] || id === ignoreDoor) continue;
-    if (segBoxT(ax, az, bx, bz, DOORS[id].box) !== Infinity) return false;
+    if (segBox3T(ax, ay, az, bx, by, bz, DOORS[id].box) !== Infinity) return false;
   }
-  return !segCircleHit(ax, az, bx, bz, WELL.x, WELL.z, WELL.losR);
+  for (const c of [WELL, ...COLUMNS]) if (segCylHit(ax, ay, az, bx, by, bz, c, c.losR)) return false;
+  return true;
 }
 
-/** 镜头避墙：返回从 a 到 b 的可用比例（0–1），按盒高度过滤。 */
+/** 镜头避墙：返回 a→b 可用比例（0–1），按盒高度过滤，含楼板与梯体。 */
 export function cameraClearT(
   ax: number, az: number, ay: number, bx: number, bz: number, by: number, doors: DoorOpen,
 ): number {
   let best = 1;
   const test = (b: Box): void => {
-    const t = segBoxT(ax, az, bx, bz, b);
+    const t = segBox3T(ax, ay, az, bx, by, bz, b);
     if (t === Infinity || t >= best) return;
-    const yAt = ay + (by - ay) * t;
-    if (yAt <= b.h + 0.15) best = t;
+    best = t;
   };
   for (const b of WALLS) test(b);
   for (const b of PROPS) if (b.h > 1.2) test(b);
+  for (const b of STAIR_MASS) test(b);
+  for (const b of SLABS) test(b);
   for (const id of DOOR_IDS) if (!doors[id]) test(DOORS[id].box);
   return best;
 }

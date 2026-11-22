@@ -122,6 +122,7 @@ export function buildStaticLevel(m: Materials): StaticLevel {
 
   // 墙体：勒脚（加宽基座）+ 墙身 + 压顶。贴图 3.5 m 一格 → 砌块约 0.4 m 宽。
   for (const w of WALLS) {
+    if (w.y0 !== undefined) continue; // map: 带 y0 的新几何由 floors.ts 绘制
     const mat = w.h >= 7 ? m.stoneDark : m.stone;
     b.box(mat, w.x0, w.z0, w.x1, w.z1, 0, w.h, 4.5);
     b.box(m.stoneDark, w.x0 - 0.08, w.z0 - 0.08, w.x1 + 0.08, w.z1 + 0.08, 0, 0.35, 4.5);

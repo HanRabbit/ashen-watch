@@ -1,14 +1,16 @@
-// 双鬼：感知（写入事实）→ 决策（状态机）→ 寻路（节点图）→ 位移。两鬼共用一个攻击许可（PRD 第 4 节、9.4）。
+// 双鬼：感知（3D 视线/距离）→ 决策 → 寻路（节点图，跨层经楼梯）→ 位移（supportY 连续高度）。
+// 两鬼共用一个攻击许可（PRD 第 4 节、9.4、9.6）。
 import { GHOST, LightZone } from '../config';
-import { hasLineOfSight, moveCircle, solidBoxes } from './collision';
-import { Box, PATROL, regionAt } from './level';
-import { findPath, inAnyZone, inZone, litZones, NavCtx, nearestNode, node } from './nav';
+import { cylsAt, hasLineOfSight, moveCircle, solidBoxes } from './collision';
+import { PATROL, regionAt, supportY } from './level';
+import { findPath, inAnyZone, inZone, litZones, NavCtx, nearestNode, node, pathLength } from './nav';
 import { GhostMode, GhostState, SimEvent, Vec2, World } from './state';
 
-export interface Noise { x: number; z: number; r: number; kind: 'sprint' | 'gate' | 'chest' | 'door' }
+export interface Noise { x: number; z: number; y?: number; floor?: 'B1' | '1F' | '2F'; r: number; kind: 'sprint' | 'gate' | 'chest' | 'door' }
 
 const DOOR_FRONT: Vec2 = { x: 0, z: 1.25 };
 const NAME = { grey: '灰影', wraith: '黑影' } as const;
+const EYE = 1.5;
 
 function ctxOf(w: World): NavCtx {
   return { doors: w.doors, lit: litZones(w) };
@@ -39,16 +41,23 @@ function faceTo(g: GhostState, x: number, z: number, dt: number, rate = 6): void
 function playerLit(w: World): boolean {
   const p = w.player;
   if (w.lantern.on && w.lantern.oil > 0) return true;
-  if (inAnyZone(litZones(w), p.x, p.z)) return true;
-  return w.hearth.lit && regionAt(p.x, p.z) === 'gatehouse';
+  if (inAnyZone(litZones(w), p.x, p.z, 0, p.floor)) return true;
+  return w.hearth.lit && p.floor === '1F' && regionAt(p.x, p.z) === 'gatehouse';
 }
 
-/** 感知：由近到远、由便宜到贵（距离 → 视锥 → 视线）。 */
+function dist3(g: GhostState, p: World['player']): number {
+  return Math.hypot(p.x - g.x, p.z - g.z, p.y - g.y);
+}
+function los(w: World, g: GhostState): boolean {
+  return hasLineOfSight(g.x, g.y + EYE, g.z, w.player.x, w.player.y + EYE, w.player.z, w.doors);
+}
+
+/** 感知：距离 → 视锥 → 3D 视线（楼板阻断）。 */
 function sense(g: GhostState, w: World): void {
   const cfg = GHOST[g.kind];
   const p = w.player;
   const dx = p.x - g.x, dz = p.z - g.z;
-  const d2 = dx * dx + dz * dz;
+  const d2 = dx * dx + dz * dz + (p.y - g.y) ** 2;
   const range = playerLit(w) ? cfg.sightLit : cfg.sightDark;
   let see = g.cowed <= 0 && d2 < range * range;
   if (see) {
@@ -59,7 +68,7 @@ function sense(g: GhostState, w: World): void {
       if (dot < Math.cos(cfg.fovHalf)) see = false;
     }
   }
-  if (see) see = hasLineOfSight(g.x, g.z, p.x, p.z, w.doors);
+  if (see) see = los(w, g);
   g.canSee = see;
   if (see) {
     g.lastKnown = { x: p.x, z: p.z };
@@ -68,47 +77,47 @@ function sense(g: GhostState, w: World): void {
   }
 }
 
-function setGoal(g: GhostState, w: World, goal: Vec2, exact = true): boolean {
-  const path = findPath({ x: g.x, z: g.z }, goal, ctxOf(w), exact);
-  g.goal = goal;
+function setGoal(g: GhostState, w: World, goal: { x: number; z: number; y?: number; floor?: 'B1' | '1F' | '2F' }, exact = true): boolean {
+  const path = findPath({ x: g.x, z: g.z, y: g.y, floor: g.floor }, goal, ctxOf(w), exact);
+  g.goal = { x: goal.x, z: goal.z };
   g.path = path ?? [];
   g.repathT = 0.4;
   return path !== null;
 }
 
-/** 沿路径走一步。返回 true 表示已到达路径终点。 */
-function stepAlong(g: GhostState, w: World, speed: number, dt: number, boxes: Box[]): boolean {
+/** 沿路径走一步并更新高度/楼层。返回 true 表示到达终点。 */
+function stepAlong(g: GhostState, w: World, speed: number, dt: number): boolean {
   const reach = Math.max(0.3, speed * dt);
   while (g.path.length && Math.hypot(g.path[0].x - g.x, g.path[0].z - g.z) < reach) g.path.shift();
   if (!g.path.length) return true;
   const t = g.path[0];
-  const d = Math.hypot(t.x - g.x, t.z - g.z);
+  const d = Math.hypot(t.x - g.x, t.z - g.z) || 1e-4;
   const bx = g.x, bz = g.z;
-  moveCircle(g, ((t.x - g.x) / d) * speed * dt, ((t.z - g.z) / d) * speed * dt, GHOST.radius, boxes);
+  const boxes = solidBoxes(w.doors, g.y);
+  moveCircle(g, ((t.x - g.x) / d) * speed * dt, ((t.z - g.z) / d) * speed * dt, GHOST.radius, boxes, cylsAt(g.y));
+  const sup = supportY(g.x, g.z, g.y);
+  if (sup) { g.y = sup.y; g.floor = sup.floor; }
   faceTo(g, t.x, t.z, dt);
-  // 停滞保护：2 秒内几乎没动就重新寻路。
   const moved = Math.hypot(g.x - bx, g.z - bz);
   g.stuckT = moved < speed * dt * 0.25 ? g.stuckT + dt : 0;
   if (g.stuckT > 2) { g.stuckT = 0; g.path = []; g.repathT = 0; }
   return false;
 }
 
-/** 亮区边缘是一堵看不见的墙：踩进来的鬼沿半径推回去。推出去会越过房间边界时不推，交给「退到暗处」处理。 */
-function keepOutOfLight(g: GhostState, lit: LightZone[], boxes: Box[]): void {
+function keepOutOfLight(g: GhostState, lit: LightZone[], w: World): void {
   if (g.mode === 'flee') return;
   for (const zn of lit) {
-    if (!inZone(zn, g.x, g.z)) continue;
+    if (!inZone(zn, g.x, g.z, 0, g.floor)) continue;
     const dx = g.x - zn.x, dz = g.z - zn.z;
     const d = Math.hypot(dx, dz);
     if (d < 1e-3) continue;
     const nx = zn.x + (dx / d) * zn.r, nz = zn.z + (dz / d) * zn.r;
     if (nx < zn.x0 + GHOST.radius || nx > zn.x1 - GHOST.radius || nz < zn.z0 + GHOST.radius || nz > zn.z1 - GHOST.radius) continue;
     g.x = nx; g.z = nz;
-    moveCircle(g, 0, 0, GHOST.radius, boxes);
+    moveCircle(g, 0, 0, GHOST.radius, solidBoxes(w.doors, g.y), cylsAt(g.y));
   }
 }
 
-/** 鬼察觉玩家：音效、字幕，第一次时教玩家举灯。 */
 function spot(g: GhostState, w: World, emit: (e: SimEvent) => void, text: string): void {
   setMode(g, 'alert');
   emit({ kind: 'sfx', id: g.kind === 'grey' ? 'greyAlert' : 'wraithAlert', x: g.x, z: g.z });
@@ -123,20 +132,28 @@ function nextPatrol(g: GhostState, w: World): boolean {
   const list = PATROL[g.kind];
   for (let i = 0; i < list.length; i++) {
     const n = node(list[g.patrolIdx % list.length]);
-    if (setGoal(g, w, { x: n.x, z: n.z }) && g.path.length) return true;
+    if (setGoal(g, w, { x: n.x, z: n.z, y: n.y, floor: n.floor }) && g.path.length) return true;
     g.patrolIdx = (g.patrolIdx + 1) % list.length;
   }
   g.path = [];
   return false;
 }
 
+/** 噪声可达：同层欧氏距离；跨层只经开放楼梯、按导航路径长度衰减。 */
+function noiseReach(w: World, g: GhostState, n: Noise, r: number): boolean {
+  const nf = n.floor ?? '1F';
+  if (nf === g.floor) return (n.x - g.x) ** 2 + (n.z - g.z) ** 2 <= r * r;
+  const path = findPath({ x: n.x, z: n.z, y: n.y, floor: nf }, { x: g.x, z: g.z, y: g.y, floor: g.floor }, ctxOf(w), false);
+  if (!path) return false;
+  return pathLength(path, { x: n.x, z: n.z, y: n.y }) <= r;
+}
+
 function hear(g: GhostState, w: World, noises: Noise[], emit: (e: SimEvent) => void): void {
   if (g.mode !== 'patrol' && g.mode !== 'investigate') return;
   for (const n of noises) {
-    // 黑影主要靠眼睛盯冲刺目标，对声音只有一半敏感。
     const r = g.kind === 'wraith' && n.kind !== 'chest' ? n.r * 0.5 : n.r;
-    if ((n.x - g.x) ** 2 + (n.z - g.z) ** 2 > r * r) continue;
-    if (!setGoal(g, w, { x: n.x, z: n.z }) && !g.path.length) continue;
+    if (!noiseReach(w, g, n, r)) continue;
+    if (!setGoal(g, w, { x: n.x, z: n.z, y: n.y, floor: n.floor }) && !g.path.length) continue;
     if (g.mode !== 'investigate') {
       emit({ kind: 'subtitle', text: `【${NAME[g.kind]}】被响动引了过去`, x: g.x, z: g.z });
     }
@@ -148,7 +165,6 @@ function hear(g: GhostState, w: World, noises: Noise[], emit: (e: SimEvent) => v
 function tryAttack(g: GhostState, w: World, emit: (e: SimEvent) => void): boolean {
   if (w.attack.holder !== null) return false;
   if (w.nightT - w.attack.lastRelease < GHOST.sharedAttackGap) return false;
-  // 上一次是自己扑的、另一只也在近身等着：让给它，两只轮流
   if (w.attack.last === g.kind && w.ghosts.some((o) => o !== g && o.mode === 'chase' && o.waiting)) return false;
   w.attack.holder = g.kind;
   w.attack.last = g.kind;
@@ -162,7 +178,7 @@ function tryAttack(g: GhostState, w: World, emit: (e: SimEvent) => void): boolea
   return true;
 }
 
-function updateGhost(g: GhostState, w: World, dt: number, boxes: Box[], noises: Noise[], emit: (e: SimEvent) => void): void {
+function updateGhost(g: GhostState, w: World, dt: number, noises: Noise[], emit: (e: SimEvent) => void): void {
   if (g.mode === 'gone') return;
   g.t += dt;
   if (g.mode === 'dissolve') {
@@ -177,21 +193,19 @@ function updateGhost(g: GhostState, w: World, dt: number, boxes: Box[], noises: 
   g.senseT -= dt;
   if (g.senseT <= 0) { g.senseT = 1 / GHOST.perceiveHz; sense(g, w); }
   if (!g.canSee) g.loseT += dt;
-  const dist = Math.hypot(p.x - g.x, p.z - g.z);
+  const dist = dist3(g, p);
   const lit = litZones(w);
 
-  // 固定灯新亮起：位于亮区内的鬼优先退到最近可达暗处。
-  if (g.mode !== 'flee' && inAnyZone(lit, g.x, g.z, -0.05)) {
+  if (g.mode !== 'flee' && inAnyZone(lit, g.x, g.z, -0.05, g.floor)) {
     releasePermit(w, g);
-    const dark = nearestNode(g.x, g.z, ctxOf(w), boxes) ?? nearestNode(g.x, g.z, ctxOf(w), boxes, false);
-    g.path = dark ? [{ x: dark.x, z: dark.z }] : [];
+    const dark = nearestNode(g.x, g.z, g.floor, g.y, ctxOf(w)) ?? nearestNode(g.x, g.z, g.floor, g.y, ctxOf(w), false);
+    g.path = dark ? [{ x: dark.x, z: dark.z, y: dark.y, floor: dark.floor }] : [];
     setMode(g, 'flee');
     emit({ kind: 'subtitle', text: `【${NAME[g.kind]}】被灯光逼出了亮处`, x: g.x, z: g.z });
   }
 
-  // 举灯逼退：需要有油、点亮、有直接视线。只要举着，范围内的鬼就一直后退，不会进入前摇。
   const raised = w.lantern.raised && w.lantern.on && w.lantern.oil > 0;
-  const repelled = raised && dist < cfg.repelRange && hasLineOfSight(g.x, g.z, p.x, p.z, w.doors);
+  const repelled = raised && dist < cfg.repelRange && los(w, g);
   const repellable = g.mode === 'chase' || g.mode === 'windup' || g.mode === 'alert' || g.mode === 'investigate' || g.mode === 'recover';
   if (repelled && repellable) {
     releasePermit(w, g);
@@ -215,7 +229,7 @@ function updateGhost(g: GhostState, w: World, dt: number, boxes: Box[], noises: 
         if (!nextPatrol(g, w)) break;
         g.repathT = 1.0;
       }
-      if (stepAlong(g, w, cfg.patrolSpeed, dt, boxes)) {
+      if (stepAlong(g, w, cfg.patrolSpeed, dt)) {
         g.patrolIdx = (g.patrolIdx + 1) % PATROL[g.kind].length;
         g.path = [];
       }
@@ -228,7 +242,7 @@ function updateGhost(g: GhostState, w: World, dt: number, boxes: Box[], noises: 
       }
       hear(g, w, noises, emit);
       if (g.repathT <= 0 && g.goal) { setGoal(g, w, g.goal); g.repathT = 1.0; }
-      const arrived = stepAlong(g, w, cfg.patrolSpeed * 1.35, dt, boxes);
+      const arrived = stepAlong(g, w, cfg.patrolSpeed * 1.35, dt);
       if (!arrived) g.t = 0;
       else if (g.t > 2.5) setMode(g, 'patrol');
       break;
@@ -239,12 +253,11 @@ function updateGhost(g: GhostState, w: World, dt: number, boxes: Box[], noises: 
       break;
     }
     case 'chase': {
-      const inGatehouse = regionAt(p.x, p.z) === 'gatehouse';
+      const inGatehouse = p.floor === '1F' && regionAt(p.x, p.z) === 'gatehouse';
       const lk = g.lastKnown;
       const lkInGatehouse = !!lk && lk.z < 0.6 && Math.abs(lk.x) < 3.5;
       const lkNearDoor = !!lk && Math.hypot(lk.x - DOOR_FRONT.x, lk.z - DOOR_FRONT.z) < 6;
-      // 灰影把人一路追进关着门的门房：到门前拍门。
-      if (g.kind === 'grey' && !w.doors.gatehouse && (lkInGatehouse || (inGatehouse && lkNearDoor)) && g.z > 0.5) {
+      if (g.kind === 'grey' && g.floor === '1F' && !w.doors.gatehouse && (lkInGatehouse || (inGatehouse && lkNearDoor)) && g.z > 0.5) {
         g.loseT = 0;
         if (Math.hypot(g.x - DOOR_FRONT.x, g.z - DOOR_FRONT.z) < 0.7) {
           g.bangOpens = !w.bolted;
@@ -254,7 +267,7 @@ function updateGhost(g: GhostState, w: World, dt: number, boxes: Box[], noises: 
           break;
         }
         if (g.repathT <= 0 || !g.path.length) setGoal(g, w, DOOR_FRONT);
-        stepAlong(g, w, cfg.chaseSpeed, dt, boxes);
+        stepAlong(g, w, cfg.chaseSpeed, dt);
         break;
       }
       if (g.loseT > GHOST.loseSightAfter) {
@@ -269,35 +282,31 @@ function updateGhost(g: GhostState, w: World, dt: number, boxes: Box[], noises: 
         break;
       }
       g.waiting = false;
-      // 另一只鬼持有许可时，在外圈等待，不与它挤在一起。
       if (w.attack.holder !== null && w.attack.holder !== g.kind && g.canSee && dist < 3.2) {
         g.waiting = true;
         faceTo(g, p.x, p.z, dt, 5);
         break;
       }
       if (g.repathT <= 0 || !g.path.length) {
-        let target: Vec2 | null = g.canSee ? { x: p.x, z: p.z } : g.lastKnown;
+        let target: { x: number; z: number; y?: number; floor?: 'B1' | '1F' | '2F' } | null = g.canSee ? { x: p.x, z: p.z, y: p.y, floor: p.floor } : g.lastKnown;
         if (target && g.kind === 'wraith' && g.sawSprint && g.canSee && dist > 3.2) {
-          // 侧面靠近：目标点偏到玩家朝向的一侧。
           const nx = -(p.z - g.z) / dist, nz = (p.x - g.x) / dist;
           const off = GHOST.wraith.flankOffset * g.flankSide;
           const fx = p.x + nx * off, fz = p.z + nz * off;
-          if (hasLineOfSight(fx, fz, p.x, p.z, w.doors)) target = { x: fx, z: fz };
+          if (hasLineOfSight(fx, g.y + EYE, fz, p.x, p.y + EYE, p.z, w.doors)) target = { x: fx, z: fz, y: p.y, floor: p.floor };
           else g.flankSide = -g.flankSide;
         }
         if (!target || !setGoal(g, w, target, true)) {
-          // 无有效路径：回最近可达巡逻点。
           if (g.path.length === 0) { g.loseT += 0.4; }
         }
       }
-      stepAlong(g, w, cfg.chaseSpeed, dt, boxes);
+      stepAlong(g, w, cfg.chaseSpeed, dt);
       break;
     }
     case 'windup': {
       faceTo(g, p.x, p.z, dt, 3);
       if (g.t >= cfg.windup) {
-        // 前摇结束才结算：离开距离、躲到阻挡物后都不掉血。
-        const hit = dist <= GHOST.hitRange && hasLineOfSight(g.x, g.z, p.x, p.z, w.doors);
+        const hit = dist <= GHOST.hitRange && los(w, g);
         emit({ kind: 'sfx', id: g.kind === 'grey' ? 'greyStrike' : 'wraithStrike', x: g.x, z: g.z });
         if (hit) {
           w.player.hp = Math.max(0, w.player.hp - cfg.damage);
@@ -317,9 +326,7 @@ function updateGhost(g: GhostState, w: World, dt: number, boxes: Box[], noises: 
       break;
     }
     case 'recoil': {
-      // 背向玩家后撤，贴到墙边即止。灯还举着就一直退，放下后再退一小段。
-      // 退到逼退距离外就停住，只要灯还照着它就不回头
-      const held = repelled || (raised && dist < cfg.repelRange + GHOST.repelHoldMargin && hasLineOfSight(g.x, g.z, p.x, p.z, w.doors));
+      const held = repelled || (raised && dist < cfg.repelRange + GHOST.repelHoldMargin && los(w, g));
       if (held) {
         g.t = 0;
         g.lightT += dt;
@@ -333,19 +340,22 @@ function updateGhost(g: GhostState, w: World, dt: number, boxes: Box[], noises: 
       }
       const d = Math.max(dist, 1e-3);
       const sp = cfg.chaseSpeed * 0.8;
-      if (dist < cfg.repelRange) moveCircle(g, ((g.x - p.x) / d) * sp * dt, ((g.z - p.z) / d) * sp * dt, GHOST.radius, boxes);
+      if (dist < cfg.repelRange) {
+        moveCircle(g, ((g.x - p.x) / d) * sp * dt, ((g.z - p.z) / d) * sp * dt, GHOST.radius, solidBoxes(w.doors, g.y), cylsAt(g.y));
+        const sup = supportY(g.x, g.z, g.y);
+        if (sup) { g.y = sup.y; g.floor = sup.floor; }
+      }
       faceTo(g, p.x, p.z, dt, 4);
       if (g.t >= GHOST.repelDuration) { g.path = []; setMode(g, g.canSee ? 'chase' : 'patrol'); }
       break;
     }
     case 'flee': {
-      const done = stepAlong(g, w, cfg.chaseSpeed, dt, boxes);
-      if (!inAnyZone(lit, g.x, g.z, 0.3) || done) { g.path = []; setMode(g, 'patrol'); }
+      const done = stepAlong(g, w, cfg.chaseSpeed, dt);
+      if (!inAnyZone(lit, g.x, g.z, 0.3, g.floor) || done) { g.path = []; setMode(g, 'patrol'); }
       break;
     }
     case 'bang': {
       if (w.doors.gatehouse) { setMode(g, 'chase'); break; }
-      // 加闩立刻禁止破门。
       if (w.bolted && g.bangOpens) { g.bangOpens = false; g.t = Math.max(g.t, GHOST.grey.doorBangSecs - 1.2); }
       if (Math.floor(g.t / 0.7) !== Math.floor((g.t - dt) / 0.7)) emit({ kind: 'sfx', id: 'bang', x: g.x, z: g.z });
       const need = g.bangOpens ? GHOST.grey.doorBangSecs : Math.min(GHOST.grey.doorBangSecs, 1.8);
@@ -368,25 +378,21 @@ function updateGhost(g: GhostState, w: World, dt: number, boxes: Box[], noises: 
       break;
     }
   }
-  keepOutOfLight(g, lit, boxes);
+  keepOutOfLight(g, lit, w);
 }
 
 export function updateGhosts(w: World, dt: number, noises: Noise[], emit: (e: SimEvent) => void): void {
-  const boxes = solidBoxes(w.doors);
-  for (const g of w.ghosts) updateGhost(g, w, dt, boxes, noises, emit);
-  // 许可持有者已不在前摇（被逼退或消散）时回收，避免死锁。
+  for (const g of w.ghosts) updateGhost(g, w, dt, noises, emit);
   if (w.attack.holder !== null) {
     const h = w.ghosts.find((g) => g.kind === w.attack.holder);
     if (!h || h.mode !== 'windup') { w.attack.holder = null; w.attack.lastRelease = w.nightT; }
   }
 }
 
-/** 门、栅门、壁灯或火盆状态变化时调用，让两鬼即时重算路线。 */
 export function invalidatePaths(w: World): void {
   for (const g of w.ghosts) g.repathT = 0;
 }
 
-/** 晨曦：清空攻击许可与伤害判定，两鬼消散。 */
 export function dissolveGhosts(w: World): void {
   w.attack.holder = null;
   for (const g of w.ghosts) if (g.mode !== 'gone' && g.mode !== 'dissolve') setMode(g, 'dissolve');

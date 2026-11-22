@@ -15,6 +15,7 @@ import { installSoftShadows } from './post/shadows';
 import { buildLandmarks, hideLegacy } from './landmarks';
 import { buildScenery } from './scenery';
 import { buildStaticLevel, StaticLevel } from './staticLevel';
+import { buildFloors, Floors, hideGroundHoles, hideMovedProps } from './floors'; // map:
 import { Vfx } from './vfx';
 
 installHeightFog();
@@ -76,7 +77,7 @@ const COLOR_KEYS = ['fog', 'hemiSky', 'hemiGround', 'sun', 'zenith', 'horizon', 
 const NUM_KEYS = ['fogNear', 'fogFar', 'fogDistMax', 'fogHeightDensity', 'fogHeightFalloff', 'fogHeightBase', 'hemi', 'sunI', 'shadowI', 'shadowRadius', 'rimI', 'scatter', 'exposure', 'window', 'discSize', 'discI', 'glow', 'stars', 'cover', 'rim', 'envI', 'bloom', 'vignette', 'grain', 'sat', 'contrast', 'glowStrength'] as const;
 
 
-export interface RenderPose { x: number; z: number; ghosts: { x: number; z: number }[] }
+export interface RenderPose { x: number; z: number; y?: number; ghosts: { x: number; z: number; y?: number }[] } // map:
 
 export class SceneView {
   readonly renderer: THREE.WebGLRenderer;
@@ -87,6 +88,8 @@ export class SceneView {
   readonly ghosts: GhostModels;
   quality: Quality = 'cinematic';
   private level: StaticLevel;
+  private floors: Floors; // map:
+  private pyS: number | null = null; private gyS: number[] = []; // map:
   private hemi = new THREE.HemisphereLight(0xffffff, 0x444444, 1);
   private sun = new THREE.DirectionalLight(0xffffff, 1);
   private fog = new THREE.Fog(0x888888, 20, 120);
@@ -134,11 +137,13 @@ export class SceneView {
     const m = makeMaterials();
     this.mats = m;
     this.level = buildStaticLevel(m);
+    this.floors = buildFloors(m); // map:
     this.props = new Props(m);
     this.player = new PlayerModel(m, glowTexture());
     this.ghosts = new GhostModels();
-    this.scene.add(this.level.group, this.props.group, this.player.group, this.ghosts.group);
+    this.scene.add(this.level.group, this.props.group, this.player.group, this.ghosts.group, this.floors.group); // map:
     const landmarks = buildLandmarks(m); hideLegacy(this.level.group);
+    hideGroundHoles(this.level.group); hideMovedProps(this.props.group); // map:
     this.scene.add(landmarks.group, buildScenery(m).group);
 
     // 天空穹顶：跟随镜头，渐变天 + 日/月盘 + 夜星
@@ -328,6 +333,12 @@ export class SceneView {
 
   update(w: World, pose: RenderPose, yaw: number, pitch: number, dt: number, time: number): void {
     this.time = time;
+    // map: 平滑竖向高度（楼梯连续），鬼同理
+    const k = Math.min(1, dt * 14);
+    this.pyS = this.pyS === null ? w.player.y : this.pyS + (w.player.y - this.pyS) * k;
+    pose.y = this.pyS;
+    pose.ghosts.forEach((g, i) => { const t = w.ghosts[i]?.y ?? 0; this.gyS[i] = this.gyS[i] === undefined ? t : this.gyS[i] + (t - this.gyS[i]) * k; g.y = this.gyS[i]; });
+    this.floors.update(w, dt);
     this.applyLighting(w, pose, dt, time);
     this.props.update(w, dt, time);
     this.player.update(w, pose, yaw, dt, time);

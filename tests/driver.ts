@@ -51,29 +51,46 @@ export class Driver {
   }
 
   /** 沿导航图走到某点附近。返回所用的活动秒；走不到返回 -1。 */
-  walkTo(x: number, z: number, opts: { sprint?: boolean; stopDist?: number; maxSecs?: number; raise?: boolean } = {}): number {
+  walkTo(x: number, z: number, opts: { sprint?: boolean; stopDist?: number; maxSecs?: number; raise?: boolean; floor?: 'B1' | '1F' | '2F' } = {}): number {
     const stop = opts.stopDist ?? 0.25;
     const max = Math.round((opts.maxSecs ?? 120) / FIXED_DT);
-    let path = findPath(this.w.player, { x, z }, { doors: this.w.doors, lit: [] });
+    let path = findPath(this.w.player, { x, z, floor: opts.floor }, { doors: this.w.doors, lit: [] });
     if (!path) return -1;
-    let repath = 0, steps = 0;
+    let steps = 0, repath = 0;
     while (steps < max && this.alive()) {
       const p = this.w.player;
       if (Math.hypot(p.x - x, p.z - z) <= stop) return steps * FIXED_DT;
       while (path.length > 1 && Math.hypot(path[0].x - p.x, path[0].z - p.z) < 0.3) path.shift();
-      if (!path.length) return -1;
+      if (!path.length) {
+        const np = findPath(p, { x, z, floor: opts.floor }, { doors: this.w.doors, lit: [] });
+        if (!np) return -1;
+        path = np;
+        continue;
+      }
       if (path.length === 1 && Math.hypot(path[0].x - p.x, path[0].z - p.z) < 0.05) return steps * FIXED_DT;
       this.face(path[0].x, path[0].z);
       this.tick({ forward: 1, sprint: !!opts.sprint, raise: !!opts.raise });
       steps++;
       if (++repath >= 30) {
         repath = 0;
-        const np = findPath(this.w.player, { x, z }, { doors: this.w.doors, lit: [] });
-        if (!np) return -1;
-        path = np;
+        const np = findPath(p, { x, z, floor: opts.floor }, { doors: this.w.doors, lit: [] });
+        if (np) path = np;
       }
     }
     return Math.hypot(this.w.player.x - x, this.w.player.z - z) <= stop + 0.6 ? steps * FIXED_DT : -1;
+  }
+
+  /** 沿楼梯坡面直走（固定朝向），直到越过目标坐标。用于确定性地上下梯。 */
+  driveStair(axis: 'x' | 'z', target: number, yaw: number, maxSecs = 20): boolean {
+    this.yaw = yaw;
+    const max = Math.round(maxSecs / FIXED_DT);
+    for (let i = 0; i < max && this.alive(); i++) {
+      const c = axis === 'x' ? this.w.player.x : this.w.player.z;
+      if (yaw === 0 || yaw === Math.PI / 2 ? c >= target : c <= target) return true;
+      this.tick({ forward: 1 });
+    }
+    const c = axis === 'x' ? this.w.player.x : this.w.player.z;
+    return yaw === 0 || yaw === Math.PI / 2 ? c >= target : c <= target;
   }
 
   /** 对准某交互点并按一次交互。返回当时准星命中的目标是否就是它且可用。 */
@@ -123,17 +140,22 @@ export const STAND = {
   boltIn: { x: 0.4, z: -1.1 },
   bell: { x: 1.4, z: 1.5 },
   shelf: { x: -8.2, z: 6.2 },
-  lamp: { x: -8.7, z: 14 },
-  gateW: { x: 9.2, z: 6 },
-  gateE: { x: 11.4, z: 6 },
-  crate: { x: 16.3, z: 26.6 },
-  frontOut: { x: 19, z: 26.5 },
-  frontIn: { x: 19, z: 24.1 },
-  flask: { x: 21.4, z: 22.4 },
-  chest: { x: 19, z: 10.9 },
+  lamp: { x: -5, z: 27.4 },
+  gateW: { x: 23.2, z: 21.15 },   // 上廊侧（栅门西）
+  gateE: { x: 24.6, z: 21.15 },   // 平台侧（栅门东）
+  crate: { x: 12.1, z: 19.4 },
+  frontOut: { x: 12.6, z: 16.5 },
+  frontIn: { x: 14.4, z: 16.5 },
+  flask: { x: 15.8, z: 13.0 },    // B1 储藏室
+  chest: { x: 27.6, z: 16.5 },
   cot: { x: 0.6, z: -6.5 },
-  brazierChapel: { x: 19.9, z: 11.5 },
-  brazierSide: { x: 11.7, z: 9 },
+  brazierChapel: { x: 26.2, z: 18.5 },
+  brazierSide: { x: -9.2, z: 15.2 }, // 2F 西步道
+  cellar: { x: 5.9, z: 8.0 },     // B1 地窖
+  s1Top: { x: 4.0, z: 9.9 },
+  s2Top: { x: 14.9, z: 21.2 },
+  s3Bot: { x: 3.4, z: 1.4 },
+  s4Bot: { x: 29.0, z: 21.2 },
 } as const;
 
 /** 教学：拾提灯、看任务板并关闭。 */
