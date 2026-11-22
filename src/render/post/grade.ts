@@ -59,20 +59,22 @@ export function fillLUT(tex: THREE.Data3DTexture, p: GradeParams): void {
   tex.needsUpdate = true;
 }
 
-/** 暗角 + 细颗粒（显示空间，颗粒比上一轮更弱）。 */
+/** 暗角 + 受击暗红边缘 + 细颗粒（显示空间）。 */
 export const VignetteGrainShader = {
   uniforms: {
     tDiffuse: { value: null as THREE.Texture | null },
-    uVig: { value: 0.5 }, uGrain: { value: 0.02 }, uTime: { value: 0 },
+    uVig: { value: 0.5 }, uGrain: { value: 0.02 }, uTime: { value: 0 }, uHurt: { value: 0 },
   },
   vertexShader: /* glsl */`varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
   fragmentShader: /* glsl */`
-    uniform sampler2D tDiffuse; uniform float uVig, uGrain, uTime; varying vec2 vUv;
+    uniform sampler2D tDiffuse; uniform float uVig, uGrain, uTime, uHurt; varying vec2 vUv;
     float hash(vec2 p) { return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
     void main() {
       vec3 c = texture2D(tDiffuse, vUv).rgb;
       float d = distance(vUv, vec2(0.5));
       c *= 1.0 - uVig * smoothstep(0.34, 0.88, d);
+      // 受击：边缘暗红脉冲（美术圣经 §10，#aa1e14 低透明，无血溅）
+      c = mix(c, vec3(0.42, 0.06, 0.05), uHurt * smoothstep(0.25, 0.75, d) * 0.6);
       c += (hash(vUv * vec2(1920.0, 1080.0) + fract(uTime) * 13.0) - 0.5) * uGrain;
       gl_FragColor = vec4(max(c, 0.0), 1.0);
     }`,

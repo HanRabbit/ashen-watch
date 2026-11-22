@@ -2,9 +2,8 @@
 // 模拟状态只读，网格是它的视图。画质分高/低两档：高档含泛光与调色后期、软阴影、扬尘；低档直出以保帧率。
 import * as THREE from 'three';
 import { PHASE } from '../config';
-import { cameraClearT } from '../sim/collision';
-import { groundY, regionAt } from '../sim/level';
 import { World } from '../sim/state';
+import { CameraRig } from './camera';
 import { GhostModels, PlayerModel } from './characters';
 import { clamp01, lerp, smooth } from './geom';
 import { glowTexture, makeMaterials, smokeTexture } from './materials';
@@ -16,6 +15,7 @@ import { installSoftShadows } from './post/shadows';
 import { buildLandmarks, hideLegacy } from './landmarks';
 import { buildScenery } from './scenery';
 import { buildStaticLevel, StaticLevel } from './staticLevel';
+import { Vfx } from './vfx';
 
 installHeightFog();
 installSoftShadows();
@@ -75,8 +75,6 @@ const RIGS: Record<'morning' | 'day' | 'dusk' | 'night', Rig> = {
 const COLOR_KEYS = ['fog', 'hemiSky', 'hemiGround', 'sun', 'zenith', 'horizon', 'ground', 'cloudLit', 'cloudDark', 'tintS', 'tintH'] as const;
 const NUM_KEYS = ['fogNear', 'fogFar', 'fogDistMax', 'fogHeightDensity', 'fogHeightFalloff', 'fogHeightBase', 'hemi', 'sunI', 'shadowI', 'shadowRadius', 'rimI', 'scatter', 'exposure', 'window', 'discSize', 'discI', 'glow', 'stars', 'cover', 'rim', 'envI', 'bloom', 'vignette', 'grain', 'sat', 'contrast', 'glowStrength'] as const;
 
-const CAM = { dist: 3.4, shoulder: 0.78, pivotY: 1.62, minDist: 0.35 };
-const FAN = { n: 12, step: (3 * Math.PI) / 180 };
 
 export interface RenderPose { x: number; z: number; ghosts: { x: number; z: number }[] }
 
@@ -106,8 +104,8 @@ export class SceneView {
   private time = 0;
   /** 景深开关：仅固定机位/标题生效，游戏越肩镜头保持锐利。 */
   cinematicDof = true;
-  private camDist = CAM.dist;
-  private camShoulder = CAM.shoulder;
+  private camRig: CameraRig;
+  private vfx: Vfx;
   private ca = new THREE.Color(); private cb = new THREE.Color();
   private mist: THREE.Sprite[] = [];
   private mistMat: THREE.SpriteMaterial;
@@ -118,7 +116,8 @@ export class SceneView {
   private rig: Rig = { ...RIGS.morning };
   private dawnT = 0;
   brightness = 1;
-  fixedCam: { pos: [number, number, number]; look: [number, number, number] } | null = null;
+  get fixedCam(): { pos: [number, number, number]; look: [number, number, number] } | null { return this.camRig.fixedCam; }
+  set fixedCam(v: { pos: [number, number, number]; look: [number, number, number] } | null) { this.camRig.fixedCam = v; }
 
   constructor(canvas: HTMLCanvasElement) {
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
@@ -215,6 +214,9 @@ export class SceneView {
       const mat = (o as THREE.Mesh).material as THREE.Material | undefined;
       if (mat && mat.transparent) this.atmo.push(o);
     });
+    this.camRig = new CameraRig(this.camera);
+    this.vfx = new Vfx();
+    this.scene.add(this.vfx.group);
     this.post = new PostPipeline(this.renderer, this.scene, this.camera, {
       ground: () => this.groundMeshes(),
       atmo: () => this.atmo,
@@ -238,6 +240,7 @@ export class SceneView {
     this.dust.visible = heavy;
     // props 内部以 'high' 判定重特效：cinematic 同样按高档传入。
     this.props.setQuality(q === 'cinematic' ? 'high' : q);
+    this.vfx.setQuality(q === 'cinematic' ? 'high' : q);
     this.post.setQuality(q);
     this.resize();
   }
@@ -299,6 +302,7 @@ export class SceneView {
       ssrWet: lerp(0.16, 0.5, clamp01(r.stars)),
       fog: [r.fogHeightDensity, r.fogHeightFalloff, r.fogHeightBase],
       grade: { sat: r.sat, contrast: r.contrast, tintS: r.tintS, tintH: r.tintH },
+      hurt: this.vfx.hurt,
     });
     this.sun.shadow.radius = r.shadowRadius;
     // 轮廓光：从镜头后方偏月侧打来的弱背光，让守夜人/鬼的剪影从暗墙上分离
@@ -322,67 +326,16 @@ export class SceneView {
     (this.dust.material as THREE.PointsMaterial).opacity = 0.08 + 0.12 * dayness;
   }
 
-  private sweep(ax: number, az: number, ay: number, dir: number, len: number, by: number, doors: World['doors']): [number, number] {
-    const cast = (off: number): number =>
-      cameraClearT(ax, az, ay, ax + Math.sin(dir + off) * len, az + Math.cos(dir + off) * len, by, doors);
-    const span = FAN.n * FAN.step;
-    const hard = cast(0);
-    let soft = hard;
-    for (const side of [-1, 1]) {
-      let tPrev = hard, oPrev = 0;
-      for (let k = 1; k <= FAN.n; k++) {
-        const o = k * FAN.step, t = cast(o * side);
-        if (Math.abs(t - tPrev) > 0.06) {
-          let lo = oPrev, hi = o, tLo = tPrev, tHi = t;
-          for (let i = 0; i < 5; i++) {
-            const mid = (lo + hi) / 2, tm = cast(mid * side);
-            if (Math.abs(tm - tLo) < Math.abs(tm - tHi)) { lo = mid; tLo = tm; } else { hi = mid; tHi = tm; }
-          }
-          soft = Math.min(soft, tLo + lo / span, tHi + hi / span);
-        }
-        soft = Math.min(soft, t + o / span);
-        tPrev = t; oPrev = o;
-      }
-    }
-    return [hard, soft];
-  }
-
-  private updateCamera(w: World, p: { x: number; z: number }, yaw: number, pitch: number, dt: number): void {
-    if (this.fixedCam) {
-      const f = this.fixedCam;
-      this.camera.position.set(f.pos[0], f.pos[1], -f.pos[2]);
-      this.camera.lookAt(f.look[0], f.look[1], -f.look[2]);
-      return;
-    }
-    const sy = Math.sin(yaw), cy = Math.cos(yaw), cp = Math.cos(pitch), sp = Math.sin(pitch);
-    const py = groundY(p.x, p.z) + CAM.pivotY;
-    const reach = CAM.shoulder + 0.3;
-    const side = this.sweep(p.x, p.z, py, yaw + Math.PI / 2, reach, py, w.doors);
-    const shHard = Math.max(0, Math.min(CAM.shoulder, side[0] * reach - 0.3));
-    const shWant = Math.max(0, Math.min(CAM.shoulder, side[1] * reach - 0.3));
-    this.camShoulder = Math.min(shHard, shWant < this.camShoulder ? shWant : lerp(this.camShoulder, shWant, Math.min(1, dt * 6)));
-    const sh = this.camShoulder;
-    const ax = p.x + cy * sh, az = p.z - sy * sh;
-    const back = this.sweep(ax, az, py, yaw + Math.PI, cp * CAM.dist, py + sp * CAM.dist, w.doors);
-    let hard = Math.max(CAM.minDist, back[0] * CAM.dist - 0.25);
-    const top = regionAt(p.x, p.z) === 'gatehouse' ? 3.25 : regionAt(p.x, p.z) === 'chapel' ? 6.5 : regionAt(p.x, p.z) === 'porch' ? 3.3 : 60;
-    if (sp > 0.01) hard = Math.min(hard, Math.max(CAM.minDist, (top - py) / sp));
-    if (sp < -0.01) hard = Math.min(hard, Math.max(CAM.minDist, (py - 0.25 - groundY(p.x, p.z)) / -sp));
-    const want = Math.min(hard, Math.max(CAM.minDist, back[1] * CAM.dist - 0.25));
-    this.camDist = Math.min(hard, want < this.camDist ? want : lerp(this.camDist, want, Math.min(1, dt * 5)));
-    const d = this.camDist;
-    this.camera.position.set(ax - sy * cp * d, py + sp * d, -(az - cy * cp * d));
-    this.camera.lookAt(ax + sy * cp * 6, py - sp * 6, -(az + cy * cp * 6));
-    this.player.group.visible = d > 0.85;
-  }
-
   update(w: World, pose: RenderPose, yaw: number, pitch: number, dt: number, time: number): void {
     this.time = time;
     this.applyLighting(w, pose, dt, time);
     this.props.update(w, dt, time);
     this.player.update(w, pose, yaw, dt, time);
     this.ghosts.update(w, pose.ghosts, dt, time);
-    this.updateCamera(w, pose, yaw, pitch, dt);
+    this.vfx.update(w, pose, dt, time);
+    if (this.vfx.consumeKick()) this.camRig.kick(1);
+    const camD = this.camRig.update(w, pose, yaw, pitch, dt);
+    this.player.group.visible = camD > 0.85;
     // 景深只服务固定机位/标题构图；游戏镜头锐利
     if (this.fixedCam && this.cinematicDof && this.quality !== 'low') {
       const f = this.fixedCam;

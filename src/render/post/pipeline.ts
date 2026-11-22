@@ -29,6 +29,8 @@ export interface PostRig {
   glowStrength: number; scatter: number; ssrWet: number;
   fog: [number, number, number];
   grade: GradeParams;
+  /** 受击暗角强度 0..1（vfx.hurt） */
+  hurt: number;
 }
 
 const DEFAULT_GRADE: GradeParams = { sat: 0.9, contrast: 1.05, tintS: 0x2a3640, tintH: 0xfff0d8 };
@@ -77,7 +79,7 @@ export class PostPipeline {
   applyRig(r: PostRig): void {
     this.bloom.strength = r.bloom;
     const gu = this.grade.uniforms;
-    gu.uVig.value = r.vignette; gu.uGrain.value = r.grain;
+    gu.uVig.value = r.vignette; gu.uGrain.value = r.grain; gu.uHurt.value = r.hurt;
     const glu = this.glow.uniforms;
     glu.uStrength.value = r.glowStrength;
     glu.uScatter.value = r.scatter;
