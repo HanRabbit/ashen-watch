@@ -47,12 +47,12 @@ const RIGS: Record<'morning' | 'day' | 'dusk' | 'night', Rig> = {
   day: {
     // 阴天：雾色比天空 horizon 略暗，远景被分层吞没但留轮廓（圣经 §4.7/§6 Distant）
     fog: 0x84909c, fogNear: 32, fogFar: 150, fogDistMax: 0.8, fogHeightDensity: 0.008, fogHeightFalloff: 0.12, fogHeightBase: 0.0,
-    hemiSky: 0xc8d2da, hemiGround: 0x8f97a0, hemi: 3.5,
-    sun: 0xeef2f5, sunI: 1.8, shadowI: 0.25, shadowRadius: 7, rimI: 0.3, scatter: 0.03, fillI: 0.55, sunDir: [-0.3, 0.85, -0.42], exposure: 1.0, window: 1.0,
-    zenith: 0xa8b4c0, horizon: 0xdfe4e8, ground: 0x504c46,
-    cloudLit: 0xc8d2da, cloudDark: 0x5d6874, cover: 0.75, rim: 0.15,
+    hemiSky: 0xc8d2da, hemiGround: 0x8f97a0, hemi: 2.8,
+    sun: 0xeef2f5, sunI: 1.8, shadowI: 0.25, shadowRadius: 7, rimI: 0.3, scatter: 0.03, fillI: 0.55, sunDir: [-0.3, 0.85, -0.42], exposure: 1.06, window: 1.0,
+    zenith: 0xc6d1db, horizon: 0xd6dce2, ground: 0x504c46,
+    cloudLit: 0xccd4db, cloudDark: 0x828d99, cover: 0.75, rim: 0.15,
     discSize: 0.0, discI: 0, glow: 0.25, stars: 0,
-    envI: 1.3, bloom: 0.14, vignette: 0.42, grain: 0.018, sat: 0.86, contrast: 1.08, tintS: 0x2a3640, tintH: 0xfff0d8, glowStrength: 0.05,
+    envI: 1.0, bloom: 0.14, vignette: 0.42, grain: 0.018, sat: 0.86, contrast: 1.05, tintS: 0x2a3640, tintH: 0xfff0d8, glowStrength: 0.05,
   },
   dusk: {
     fog: 0x54505c, fogNear: 24, fogFar: 120, fogDistMax: 0.8, fogHeightDensity: 0.011, fogHeightFalloff: 0.1, fogHeightBase: 0.0,
