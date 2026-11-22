@@ -103,7 +103,7 @@ export class SceneView {
   private post: PostPipeline;
   private atmo: THREE.Object3D[] = [];
   private rim = new THREE.DirectionalLight(0xffffff, 0);
-  // 阴天方向性补光（圣经 §7 阴影面可读性）：不投影、冷灰、近水平自南向北，
+  // 阴天方向性补光（圣经 §7 阴影面可读性）：不投影、冷灰、近水平、方向由 sunDir 水平分量反向推导，
   // 只抬竖直背光面（北墙内面/墙脚陈设朝镜头侧），对朝上水平地面贡献≈0，避免推白地面。
   private fill = new THREE.DirectionalLight(0xc8d2da, 0);
   private camFwd = new THREE.Vector3();
@@ -329,10 +329,13 @@ export class SceneView {
     this.camFwd.normalize();
     this.rim.target.position.set(p.x, 0, -p.z);
     this.rim.position.set(p.x + this.camFwd.x * 40, this.camFwd.y * 40, -p.z + this.camFwd.z * 40);
-    // 阴天补光：近水平自南向北（y 分量 0），只抬竖直背光面，水平地面不受影响
+    // 阴天补光：方向由 sunDir 水平分量反向自动推导（始终补在太阳阴影侧的竖直面），
+    // y 分量 0 → 只抬竖直背光面，水平地面不受影响；太阳方位调整时补光自动跟随。
     this.fill.intensity = r.fillI;
+    const fhx = -r.sunDir[0], fhz = -r.sunDir[2];
+    const flen = Math.hypot(fhx, fhz) || 1;
     this.fill.target.position.set(p.x, 1.0, -p.z);
-    this.fill.position.set(p.x + 10, 1.0, -p.z + 38.8);
+    this.fill.position.set(p.x + (fhx / flen) * 40, 1.0, -p.z + (fhz / flen) * 40);
 
     this.level.windowMat.emissiveIntensity = r.window;
     this.level.hearthWindowMat.emissiveIntensity = w.hearth.lit ? 1.5 : 0.03;
