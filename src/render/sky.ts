@@ -40,12 +40,15 @@ float fbm3(vec2 p) {
   for (int i = 0; i < 3; i++) { v += a * vnoise(p); p = p * 2.11 + 7.3; a *= 0.5; }
   return v;
 }
-// 主云层密度：大尺度团块决定哪里成云，中尺度翻卷 + 小尺度侵蚀给出积云轮廓。
-float cloudField(vec2 uv) {
-  float base = fbm(uv * 0.5);
-  float billow = fbm3(uv * 1.7 + base * 1.6 + 5.2);
-  return base * 0.62 + billow * 0.38;
+// 主云层密度：大尺度团块 + 域扭曲花椰菜轮廓 + 中尺度侵蚀。频率低、团块大（画面 5–10 团）。
+float cloudShape(vec2 uv) {
+  vec2 w = vec2(fbm3(uv * 1.4 + 1.7), fbm3(uv * 1.4 + 9.2));
+  float base = fbm(uv * 1.8 + w * 0.40);
+  float detail = fbm3(uv * 3.2 + w * 0.6);
+  return base * 0.65 + detail * 0.35;
 }
+// 大尺度密度场：供梯度伪法线（便宜，5 octave）
+float cloudGradField(vec2 uv) { return fbm(uv * 1.8); }
 void main() {
   vec3 d = normalize(vDir);
   float h = d.y;
@@ -57,41 +60,42 @@ void main() {
   // 阴天：太阳/月亮方向一大片透云亮区（无硬日斑）
   col += uSunColor * uGlow * 0.22 * pow(clamp(cosA, 0.0, 1.0), 3.0);
 
-  // 云投影到水平面：地平线处压缩、天顶舒展
+  // 云投影到水平面：抬高偏移减少地平线拉伸，团块保持圆润
   float hh = max(h, 0.02);
-  vec2 proj = d.xz / (hh + 0.20);
+  vec2 proj = d.xz / (hh + 0.35);
 
-  // 第一层：高而薄的幕云，低对比、柔边，垫出天空纵深
-  vec2 uv1 = proj * 0.62 + uTime * vec2(0.005, 0.002) + 2.3;
+  // 第一层：极薄高幕云，仅垫纵深（夜晚几乎关闭，避免涂抹条带）
+  vec2 uv1 = proj * 0.45 + uTime * vec2(0.003, 0.0013) + 2.3;
   float veilD = fbm(uv1);
-  float veil = smoothstep(0.48, 0.92, veilD) * 0.5 * smoothstep(-0.02, 0.12, h);
-  vec3 veilCol = mix(uHorizon, uCloudLit, 0.4) * (0.88 + 0.24 * veilD);
+  float veil = smoothstep(0.55, 0.95, veilD) * 0.22 * (1.0 - uStars * 0.6) * smoothstep(-0.02, 0.12, h);
+  vec3 veilCol = mix(uHorizon, uCloudLit, 0.35);
   col = mix(col, veilCol, veil);
 
-  // 第二层：主积云/层积云，轮廓分明但边缘柔
-  vec2 uv2 = proj * 1.15 + uTime * vec2(0.009, 0.0038);
-  float dens = cloudField(uv2);
-  float lo = 0.62 - uCover * 0.34;
-  float hi = lo + 0.24;
+  // 第二层：成团积云/层积云，块状轮廓、软边
+  vec2 uv2 = proj * 0.8 + uTime * vec2(0.004, 0.0018);
+  float dens = cloudShape(uv2);
+  float lo = 0.62 - uCover * 0.20;
+  float hi = lo + 0.10;
   float cover = smoothstep(lo, hi, dens);
-  cover *= smoothstep(-0.02, 0.09, h);
+  cover *= smoothstep(-0.02, 0.08, h);
 
-  // 密度梯度近似法线：朝日/月一面亮、背面暗；厚云底部更沉
-  float e = 0.16;
+  // 密度梯度→外向伪法线：朝日/月一侧的团块侧翼亮、背侧暗（体积感）
+  float e = 0.10;
   vec2 grad = vec2(
-    cloudField(uv2 + vec2(e, 0.0)) - cloudField(uv2 - vec2(e, 0.0)),
-    cloudField(uv2 + vec2(0.0, e)) - cloudField(uv2 - vec2(0.0, e)));
-  vec3 cn = normalize(vec3(-grad.x * 3.0, 0.42, -grad.y * 3.0));
+    cloudGradField(uv2 + vec2(e, 0.0)) - cloudGradField(uv2 - vec2(e, 0.0)),
+    cloudGradField(uv2 + vec2(0.0, e)) - cloudGradField(uv2 - vec2(0.0, e)));
+  vec3 cn = normalize(vec3(-grad.x * 2.2, 0.55, -grad.y * 2.2));
   float lambert = clamp(dot(cn, sunDir), 0.0, 1.0);
-  float thick = smoothstep(lo, hi + 0.3, dens);
-  float baseDark = mix(1.0, 0.5, thick);
-  float topLight = mix(0.82, 1.0, smoothstep(0.05, 0.5, h));
-  vec3 cloudCol = mix(uCloudDark, uCloudLit, 0.08 + 0.92 * lambert);
-  cloudCol *= baseDark * topLight;
-  // 银边：云薄缘在日/月方向被勾亮（夜晚月光银边的主要来源）
+  // 团内上下明暗：高处（团顶）受光、低处沉入底色；厚云底更沉
+  float topLight = mix(0.30, 1.0, smoothstep(0.05, 0.85, h));
+  float thick = smoothstep(lo, hi + 0.10, dens);
+  float baseDark = mix(1.0, 0.45, thick);
+  float lit = clamp(0.12 + 0.88 * lambert, 0.0, 1.0) * topLight * baseDark;
+  vec3 cloudCol = mix(uCloudDark, uCloudLit, lit);
+  // 银边：只勾靠近日/月一侧的团块薄缘，不整片提亮
   float edge = cover * (1.0 - cover) * 4.0;
-  float towards = pow(clamp(cosA, 0.0, 1.0), 3.0);
-  cloudCol += uSunColor * uRim * (edge * (0.3 + 0.7 * towards) + 0.10 * towards * cover);
+  float towards = pow(clamp(cosA, 0.0, 1.0), 6.0);
+  cloudCol += uSunColor * uRim * edge * towards;
   col = mix(col, cloudCol, cover);
 
   // 日/月盘 + 光晕：厚云遮挡时减弱；晕宽而柔，不过曝
