@@ -15,7 +15,10 @@ import { clamp01, lerp, smooth } from './geom';
 import { glowTexture, makeMaterials, smokeTexture } from './materials';
 import { Props } from './props';
 import { applySky, makeSkyMaterial, SkyState } from './sky';
+import { FogController, installHeightFog } from './post/fog';
 import { buildStaticLevel, StaticLevel } from './staticLevel';
+
+installHeightFog();
 
 export type Quality = 'cinematic' | 'high' | 'low';
 
@@ -40,13 +43,13 @@ const RIGS: Record<'morning' | 'day' | 'dusk' | 'night', Rig> = {
     envI: 0.85, bloom: 0.2, vignette: 0.5, grain: 0.02, sat: 0.92, contrast: 1.04, tintS: 0x14202c, tintH: 0xffe8c8, glowStrength: 0.12,
   },
   day: {
-    fog: 0x9aa4ac, fogNear: 34, fogFar: 140, fogDistMax: 0.9, fogHeightDensity: 0.02, fogHeightFalloff: 0.085, fogHeightBase: 0.5,
-    hemiSky: 0xc8d2da, hemiGround: 0x5c564e, hemi: 2.5,
-    sun: 0xeef2f5, sunI: 2.0, shadowI: 0.35, sunDir: [-0.3, 0.85, -0.42], exposure: 1.0, window: 1.0,
+    fog: 0x9aa4ac, fogNear: 30, fogFar: 120, fogDistMax: 0.95, fogHeightDensity: 0.028, fogHeightFalloff: 0.085, fogHeightBase: 0.5,
+    hemiSky: 0xc8d2da, hemiGround: 0x5c564e, hemi: 1.9,
+    sun: 0xeef2f5, sunI: 2.4, shadowI: 0.35, sunDir: [-0.3, 0.85, -0.42], exposure: 0.95, window: 1.0,
     zenith: 0x7f93a6, horizon: 0xbcc5cb, ground: 0x504c46,
-    cloudLit: 0xeef1f3, cloudDark: 0x98a2ab, cover: 0.88, rim: 0.18,
+    cloudLit: 0xf0f3f5, cloudDark: 0x87919c, cover: 0.9, rim: 0.18,
     discSize: 0.0, discI: 0, glow: 0.2, stars: 0,
-    envI: 0.95, bloom: 0.14, vignette: 0.5, grain: 0.018, sat: 0.9, contrast: 1.05, tintS: 0x16222c, tintH: 0xfff0d8, glowStrength: 0.05,
+    envI: 0.75, bloom: 0.14, vignette: 0.5, grain: 0.018, sat: 0.9, contrast: 1.05, tintS: 0x16222c, tintH: 0xfff0d8, glowStrength: 0.05,
   },
   dusk: {
     fog: 0x5a5560, fogNear: 20, fogFar: 100, fogDistMax: 0.85, fogHeightDensity: 0.02, fogHeightFalloff: 0.09, fogHeightBase: 0.5,
@@ -60,12 +63,12 @@ const RIGS: Record<'morning' | 'day' | 'dusk' | 'night', Rig> = {
   night: {
     // 月光从画面右上方来（与天空月盘同向），冷蓝 #7f9ccf；暗部保留约 20–30% 可读亮度。
     fog: 0x101826, fogNear: 20, fogFar: 90, fogDistMax: 0.8, fogHeightDensity: 0.022, fogHeightFalloff: 0.08, fogHeightBase: 0.5,
-    hemiSky: 0x51648a, hemiGround: 0x1a2029, hemi: 0.6,
-    sun: 0x7f9ccf, sunI: 1.15, shadowI: 0.5, sunDir: [0.62, 0.72, 0.05], exposure: 1.12, window: 0.07,
+    hemiSky: 0x5a6d92, hemiGround: 0x202631, hemi: 1.5,
+    sun: 0x7f9ccf, sunI: 1.4, shadowI: 0.5, sunDir: [0.72, 0.42, -0.35], exposure: 1.15, window: 0.07,
     zenith: 0x0a1322, horizon: 0x1d2b42, ground: 0x0a0e15,
-    cloudLit: 0x46587a, cloudDark: 0x131c2e, cover: 0.72, rim: 0.85,
+    cloudLit: 0x46587a, cloudDark: 0x131c2e, cover: 0.82, rim: 0.85,
     discSize: 0.026, discI: 5.5, glow: 0.55, stars: 1,
-    envI: 0.55, bloom: 0.32, vignette: 0.8, grain: 0.025, sat: 0.88, contrast: 1.06, tintS: 0x16283c, tintH: 0xff9a50, glowStrength: 0.55,
+    envI: 1.0, bloom: 0.32, vignette: 0.8, grain: 0.025, sat: 0.88, contrast: 1.06, tintS: 0x16283c, tintH: 0xff9a50, glowStrength: 0.55,
   },
 };
 
@@ -115,6 +118,7 @@ export class SceneView {
   private hemi = new THREE.HemisphereLight(0xffffff, 0x444444, 1);
   private sun = new THREE.DirectionalLight(0xffffff, 1);
   private fog = new THREE.Fog(0x888888, 20, 120);
+  private fogCtl: FogController;
   private skyMat = makeSkyMaterial();
   private sky: THREE.Mesh;
   private envDay: THREE.Texture;
@@ -146,6 +150,7 @@ export class SceneView {
     this.renderer.info.autoReset = false;
     this.scene.fog = this.fog;
     this.scene.background = new THREE.Color();
+    this.fogCtl = new FogController(this.renderer, this.scene);
 
     const m = makeMaterials();
     this.level = buildStaticLevel(m);
@@ -281,6 +286,7 @@ export class SceneView {
     const r = this.rig;
     (this.scene.background as THREE.Color).setHex(r.fog);
     this.fog.color.setHex(r.fog); this.fog.near = r.fogNear; this.fog.far = r.fogFar;
+    this.fogCtl.update({ heightDensity: r.fogHeightDensity, heightFalloff: r.fogHeightFalloff, heightBase: r.fogHeightBase, distMax: r.fogDistMax });
     this.hemi.color.setHex(r.hemiSky); this.hemi.groundColor.setHex(r.hemiGround); this.hemi.intensity = r.hemi;
     this.sun.color.setHex(r.sun); this.sun.intensity = r.sunI;
     this.sun.target.position.set(p.x, 0, -p.z);
