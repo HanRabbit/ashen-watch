@@ -12,6 +12,7 @@ import { applySky, makeSkyMaterial, SkyState } from './sky';
 import { FogController, installHeightFog } from './post/fog';
 import { PostPipeline } from './post/pipeline';
 import { installSoftShadows } from './post/shadows';
+import { installSpecularCap, SpecularCapController } from './post/specular';
 import { buildLandmarks, hideLegacy } from './landmarks';
 import { buildScenery } from './scenery';
 import { buildStaticLevel, StaticLevel } from './staticLevel';
@@ -19,6 +20,7 @@ import { Vfx } from './vfx';
 
 installHeightFog();
 installSoftShadows();
+installSpecularCap();
 
 export type Quality = 'cinematic' | 'high' | 'low';
 
@@ -34,40 +36,41 @@ interface Rig extends SkyState {
 
 const RIGS: Record<'morning' | 'day' | 'dusk' | 'night', Rig> = {
   morning: {
-    fog: 0x9aa2a8, fogNear: 26, fogFar: 120, fogDistMax: 0.85, fogHeightDensity: 0.01, fogHeightFalloff: 0.12, fogHeightBase: 0.0,
+    fog: 0x939ba3, fogNear: 30, fogFar: 140, fogDistMax: 0.84, fogHeightDensity: 0.009, fogHeightFalloff: 0.12, fogHeightBase: 0.0,
     hemiSky: 0xcdd5db, hemiGround: 0x575049, hemi: 2.1,
     sun: 0xffe2c0, sunI: 2.2, shadowI: 0.45, shadowRadius: 5, rimI: 0.25, scatter: 0.12, sunDir: [-0.75, 0.5, -0.35], exposure: 1.0, window: 0.9,
-    zenith: 0x8fa0b2, horizon: 0xc4cacd, ground: 0x4a4640,
-    cloudLit: 0xe6e9ec, cloudDark: 0x9aa3ac, cover: 0.8, rim: 0.25,
-    discSize: 0.0, discI: 0, glow: 0.18, stars: 0,
-    envI: 0.85, bloom: 0.2, vignette: 0.5, grain: 0.02, sat: 0.92, contrast: 1.04, tintS: 0x14202c, tintH: 0xffe8c8, glowStrength: 0.12,
+    zenith: 0x8494a6, horizon: 0xbfc6cb, ground: 0x4a4640,
+    cloudLit: 0xc9d0d7, cloudDark: 0x6a7480, cover: 0.76, rim: 0.22,
+    discSize: 0.0, discI: 0, glow: 0.2, stars: 0,
+    envI: 0.85, bloom: 0.2, vignette: 0.5, grain: 0.02, sat: 0.92, contrast: 1.06, tintS: 0x14202c, tintH: 0xffe8c8, glowStrength: 0.12,
   },
   day: {
-    fog: 0x9aa4ac, fogNear: 26, fogFar: 95, fogDistMax: 0.95, fogHeightDensity: 0.01, fogHeightFalloff: 0.12, fogHeightBase: 0.0,
-    hemiSky: 0xc8d2da, hemiGround: 0x5c564e, hemi: 1.9,
-    sun: 0xeef2f5, sunI: 1.7, shadowI: 0.25, shadowRadius: 7, rimI: 0.3, scatter: 0.03, sunDir: [-0.3, 0.85, -0.42], exposure: 0.82, window: 1.0,
-    zenith: 0x7f93a6, horizon: 0xbcc5cb, ground: 0x504c46,
-    cloudLit: 0xf0f3f5, cloudDark: 0x6f7a86, cover: 0.78, rim: 0.18,
-    discSize: 0.0, discI: 0, glow: 0.2, stars: 0,
-    envI: 0.75, bloom: 0.14, vignette: 0.45, grain: 0.018, sat: 0.86, contrast: 1.1, tintS: 0x2a3640, tintH: 0xfff0d8, glowStrength: 0.05,
+    // 阴天：雾色比天空 horizon 略暗，远景被分层吞没但留轮廓（圣经 §4.7/§6 Distant）
+    fog: 0x84909c, fogNear: 32, fogFar: 150, fogDistMax: 0.8, fogHeightDensity: 0.008, fogHeightFalloff: 0.12, fogHeightBase: 0.0,
+    hemiSky: 0xc8d2da, hemiGround: 0x5c564e, hemi: 3.5,
+    sun: 0xeef2f5, sunI: 1.8, shadowI: 0.25, shadowRadius: 7, rimI: 0.3, scatter: 0.03, sunDir: [-0.3, 0.85, -0.42], exposure: 1.0, window: 1.0,
+    zenith: 0x8794a4, horizon: 0xc6cdd3, ground: 0x504c46,
+    cloudLit: 0xc9d0d7, cloudDark: 0x47525e, cover: 0.8, rim: 0.15,
+    discSize: 0.0, discI: 0, glow: 0.25, stars: 0,
+    envI: 1.3, bloom: 0.14, vignette: 0.42, grain: 0.018, sat: 0.86, contrast: 1.08, tintS: 0x2a3640, tintH: 0xfff0d8, glowStrength: 0.05,
   },
   dusk: {
-    fog: 0x5a5560, fogNear: 20, fogFar: 100, fogDistMax: 0.85, fogHeightDensity: 0.012, fogHeightFalloff: 0.1, fogHeightBase: 0.0,
+    fog: 0x54505c, fogNear: 24, fogFar: 120, fogDistMax: 0.8, fogHeightDensity: 0.011, fogHeightFalloff: 0.1, fogHeightBase: 0.0,
     hemiSky: 0x8a92a6, hemiGround: 0x3b332d, hemi: 1.1,
     sun: 0xe09a62, sunI: 1.6, shadowI: 0.5, shadowRadius: 4, rimI: 0.35, scatter: 0.25, sunDir: [0.8, 0.2, 0.3], exposure: 1.0, window: 0.45,
     zenith: 0x39445a, horizon: 0x9a7260, ground: 0x332c28,
     cloudLit: 0xb08a78, cloudDark: 0x4a4452, cover: 0.75, rim: 0.5,
     discSize: 0.035, discI: 2.6, glow: 0.7, stars: 0.18,
-    envI: 0.55, bloom: 0.25, vignette: 0.62, grain: 0.022, sat: 0.9, contrast: 1.06, tintS: 0x182030, tintH: 0xffb070, glowStrength: 0.3,
+    envI: 0.55, bloom: 0.25, vignette: 0.62, grain: 0.022, sat: 0.9, contrast: 1.08, tintS: 0x182030, tintH: 0xffb070, glowStrength: 0.3,
   },
   night: {
     // 月光从画面右上方来（与天空月盘同向），冷蓝 #7f9ccf；暗部保留约 20–30% 可读亮度。
-    fog: 0x101826, fogNear: 20, fogFar: 90, fogDistMax: 0.8, fogHeightDensity: 0.012, fogHeightFalloff: 0.1, fogHeightBase: 0.0,
+    fog: 0x0f1725, fogNear: 22, fogFar: 110, fogDistMax: 0.72, fogHeightDensity: 0.012, fogHeightFalloff: 0.1, fogHeightBase: 0.0,
     hemiSky: 0x7d90b4, hemiGround: 0x2a3140, hemi: 3.0,
     sun: 0x7f9ccf, sunI: 1.1, shadowI: 0.5, shadowRadius: 3, rimI: 0.45, scatter: 0.5, sunDir: [0.72, 0.42, -0.35], exposure: 1.15, window: 0.07,
-    zenith: 0x0a1322, horizon: 0x1d2b42, ground: 0x0a0e15,
-    cloudLit: 0x51648c, cloudDark: 0x0e1626, cover: 0.78, rim: 0.85,
-    discSize: 0.026, discI: 5.5, glow: 0.55, stars: 1,
+    zenith: 0x0a1322, horizon: 0x1c2a40, ground: 0x0a0e15,
+    cloudLit: 0x5a6d94, cloudDark: 0x0c1424, cover: 0.8, rim: 0.9,
+    discSize: 0.026, discI: 5.5, glow: 0.5, stars: 1,
     envI: 1.2, bloom: 0.32, vignette: 0.62, grain: 0.025, sat: 0.88, contrast: 1.08, tintS: 0x24364c, tintH: 0xffb25e, glowStrength: 0.45,
   },
 };
@@ -91,6 +94,7 @@ export class SceneView {
   private sun = new THREE.DirectionalLight(0xffffff, 1);
   private fog = new THREE.Fog(0x888888, 20, 120);
   private fogCtl: FogController;
+  private specCtl: SpecularCapController;
   private skyMat = makeSkyMaterial();
   private sky: THREE.Mesh;
   private envDay: THREE.Texture;
@@ -102,7 +106,7 @@ export class SceneView {
   private camFwd = new THREE.Vector3();
   private tmpV = new THREE.Vector3();
   private time = 0;
-  /** 景深开关：仅固定机位/标题生效，游戏越肩镜头保持锐利。 */
+  /** 远景轻虚化开关：仅固定机位/标题生效，游戏越肩镜头保持锐利。 */
   cinematicDof = true;
   private camRig: CameraRig;
   private vfx: Vfx;
@@ -130,6 +134,7 @@ export class SceneView {
     this.scene.fog = this.fog;
     this.scene.background = new THREE.Color();
     this.fogCtl = new FogController(this.renderer, this.scene);
+    this.specCtl = new SpecularCapController(this.renderer, this.scene);
 
     const m = makeMaterials();
     this.mats = m;
@@ -159,16 +164,17 @@ export class SceneView {
     this.scene.add(this.hemi, this.sun, this.sun.target, this.rim, this.rim.target);
 
     // 图像照明：用同一天空着色器烘两张环境图（昼/夜），给 PBR 材质提供柔和环境光与金属反射。
+    // 烘焙时压低日/月盘：方向光已承担 key，IBL 里再留高亮月盘会让湿石缝镜面反射过曝成白线。
     const pmrem = new THREE.PMREMGenerator(this.renderer);
     const envScene = new THREE.Scene();
     const envSky = new THREE.Mesh(new THREE.SphereGeometry(50, 24, 12), makeSkyMaterial());
     envScene.add(envSky);
-    const bake = (r: Rig): THREE.Texture => {
-      applySky(envSky.material as THREE.ShaderMaterial, { ...r, stars: 0 }, 0);
+    const bake = (r: Rig, discScale: number): THREE.Texture => {
+      applySky(envSky.material as THREE.ShaderMaterial, { ...r, stars: 0, discI: r.discI * discScale, glow: r.glow * 0.6 }, 0);
       return pmrem.fromScene(envScene, 0.04, 0.1, 100).texture;
     };
-    this.envDay = bake(RIGS.day);
-    this.envNight = bake(RIGS.night);
+    this.envDay = bake(RIGS.day, 1);
+    this.envNight = bake(RIGS.night, 0.12);
     pmrem.dispose();
     this.scene.environment = this.envDay;
     this.scene.environmentIntensity = 0.6;
@@ -281,6 +287,9 @@ export class SceneView {
     // 共享昼夜信号：landmarks/scenery 的 onBeforeRender 读取（0 = 白天，1 = 深夜）
     this.scene.userData.night = clamp01(r.stars);
     this.fogCtl.update({ heightDensity: r.fogHeightDensity, heightFalloff: r.fogHeightFalloff, heightBase: r.fogHeightBase, distMax: r.fogDistMax });
+    // 镜面能量钳制：夜晚冷月光镜面弱而柔、暖灯火倒影保留；白天中性偏宽
+    const nightAmt = clamp01(r.stars);
+    this.specCtl.update(lerp(1.2, 0.35, nightAmt), lerp(2.5, 2.2, nightAmt));
     this.hemi.color.setHex(r.hemiSky); this.hemi.groundColor.setHex(r.hemiGround); this.hemi.intensity = r.hemi;
     this.sun.color.setHex(r.sun); this.sun.intensity = r.sunI;
     this.sun.target.position.set(p.x, 0, -p.z);
@@ -299,10 +308,12 @@ export class SceneView {
     this.post.applyRig({
       bloom: r.bloom, vignette: r.vignette, grain: r.grain,
       glowStrength: r.glowStrength, scatter: r.scatter,
-      ssrWet: lerp(0.16, 0.5, clamp01(r.stars)),
+      ssrWet: lerp(0.12, 0.32, nightAmt),
       fog: [r.fogHeightDensity, r.fogHeightFalloff, r.fogHeightBase],
       grade: { sat: r.sat, contrast: r.contrast, tintS: r.tintS, tintH: r.tintH },
       hurt: this.vfx.hurt,
+      hiThresh: lerp(3.0, 1.3, nightAmt),
+      hiKneeCool: lerp(0.6, 2.6, nightAmt), hiKneeWarm: lerp(0.25, 0.4, nightAmt),
     });
     this.sun.shadow.radius = r.shadowRadius;
     // 轮廓光：从镜头后方偏月侧打来的弱背光，让守夜人/鬼的剪影从暗墙上分离
@@ -336,7 +347,7 @@ export class SceneView {
     if (this.vfx.consumeKick()) this.camRig.kick(1);
     const camD = this.camRig.update(w, pose, yaw, pitch, dt);
     this.player.group.visible = camD > 0.85;
-    // 景深只服务固定机位/标题构图；游戏镜头锐利
+    // 远景轻虚化只服务固定机位/标题构图；游戏镜头与近中景锐利
     if (this.fixedCam && this.cinematicDof && this.quality !== 'low') {
       const f = this.fixedCam;
       const focus = Math.hypot(f.pos[0] - f.look[0], f.pos[1] - f.look[1], f.pos[2] - f.look[2]);
