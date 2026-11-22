@@ -247,14 +247,14 @@ export function grassTexture(): THREE.CanvasTexture {
   const { c, g } = canvas(S);
   const r = rng(151);
   g.clearRect(0, 0, S, S);
-  for (let i = 0; i < 14; i++) {
+  for (let i = 0; i < 11; i++) {
     const x = 8 + r() * 48;
     const h = 20 + r() * 34;
     const lean = (r() - 0.5) * 14;
     const grd = g.createLinearGradient(0, S, 0, S - h);
-    grd.addColorStop(0, 'rgba(58,64,38,0.95)');
-    grd.addColorStop(1, 'rgba(120,118,60,0.85)');
-    g.strokeStyle = grd; g.lineWidth = 1.5 + r() * 1.5;
+    grd.addColorStop(0, 'rgba(96,100,52,0.95)');
+    grd.addColorStop(1, 'rgba(172,162,92,0.9)');
+    g.strokeStyle = grd; g.lineWidth = 2.5 + r() * 2;
     g.beginPath(); g.moveTo(x, S); g.quadraticCurveTo(x + lean * 0.5, S - h * 0.6, x + lean, S - h); g.stroke();
   }
   const t = new THREE.CanvasTexture(c);
@@ -262,27 +262,92 @@ export function grassTexture(): THREE.CanvasTexture {
   return t;
 }
 
-/** 秋叶：单片枫叶轮廓，橙褐渐变，用于地面散落贴花。 */
+/** 秋叶：锯齿五裂枫叶轮廓 + 叶柄与叶脉，锈红渐变，用于地面实例化落叶。 */
 export function leafTexture(): THREE.CanvasTexture {
-  const S = 64;
+  const S = 128;
   const { c, g } = canvas(S);
   const r = rng(191);
   g.clearRect(0, 0, S, S);
-  g.translate(S / 2, S / 2);
-  const grd = g.createRadialGradient(0, 0, 2, 0, 0, 28);
-  grd.addColorStop(0, `rgba(${150 + r() * 50},${70 + r() * 30},20,0.95)`);
-  grd.addColorStop(1, `rgba(${90 + r() * 40},${40 + r() * 20},15,0.9)`);
+  g.translate(S / 2, S / 2 + 6);
+  const grd = g.createRadialGradient(0, -8, 4, 0, 0, 58);
+  grd.addColorStop(0, `rgba(${170 + r() * 40},${86 + r() * 26},30,0.98)`);
+  grd.addColorStop(0.65, `rgba(${140 + r() * 30},${62 + r() * 20},24,0.96)`);
+  grd.addColorStop(1, `rgba(${96 + r() * 24},${44 + r() * 16},18,0.94)`);
   g.fillStyle = grd;
+  // 五裂枫叶：裂片尖 + 锯齿缘
+  const lobe = (a: number, len: number, w: number): void => {
+    const ca = Math.cos(a), sa = Math.sin(a);
+    const px = -sa, py = ca;
+    g.lineTo(ca * len * 0.45 + px * w, sa * len * 0.45 + py * w);
+    g.lineTo(ca * len * 0.62 + px * w * 0.55, sa * len * 0.62 + py * w * 0.55);
+    g.lineTo(ca * len * 0.8 + px * w * 0.8, sa * len * 0.8 + py * w * 0.8);
+    g.lineTo(ca * len, sa * len);
+    g.lineTo(ca * len * 0.8 - px * w * 0.8, sa * len * 0.8 - py * w * 0.8);
+    g.lineTo(ca * len * 0.62 - px * w * 0.55, sa * len * 0.62 - py * w * 0.55);
+    g.lineTo(ca * len * 0.45 - px * w, sa * len * 0.45 - py * w);
+  };
   g.beginPath();
-  for (let i = 0; i < 5; i++) {
-    const a = (i / 5) * Math.PI * 2 - Math.PI / 2;
-    const a2 = a + Math.PI / 5;
-    g.lineTo(Math.cos(a) * 26, Math.sin(a) * 26);
-    g.lineTo(Math.cos(a2) * 10, Math.sin(a2) * 10);
+  g.moveTo(0, 44);
+  const angles = [-Math.PI / 2, -Math.PI / 2 - 0.62, -Math.PI / 2 + 0.62, -Math.PI / 2 - 1.25, -Math.PI / 2 + 1.25];
+  const lens = [52, 44, 44, 30, 30];
+  g.moveTo(Math.cos(angles[3]) * 12, Math.sin(angles[3]) * 12 + 8);
+  for (let i = 0; i < 5; i++) lobe(angles[i], lens[i], 7 + (i === 0 ? 3 : 0));
+  g.closePath();
+  g.fill();
+  // 叶柄
+  g.strokeStyle = 'rgba(90,48,22,0.95)'; g.lineWidth = 3;
+  g.beginPath(); g.moveTo(0, 30); g.lineTo(0, 52); g.stroke();
+  // 叶脉
+  g.strokeStyle = 'rgba(70,36,16,0.5)'; g.lineWidth = 1.6;
+  for (const a of angles) {
+    g.beginPath(); g.moveTo(0, 6); g.lineTo(Math.cos(a) * 40, Math.sin(a) * 40 + 6); g.stroke();
   }
-  g.closePath(); g.fill();
-  g.strokeStyle = 'rgba(60,30,10,0.6)'; g.lineWidth = 1;
-  g.beginPath(); g.moveTo(0, 26); g.lineTo(0, -22); g.stroke();
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+
+/** 玻璃污渍：竖向灰垢条带，用作玻璃粗糙度贴图（线性）。 */
+export function grimeTexture(): THREE.CanvasTexture {
+  const S = 64;
+  const { c, g } = canvas(S);
+  const r = rng(231);
+  g.fillStyle = '#303030'; g.fillRect(0, 0, S, S);
+  for (let i = 0; i < 26; i++) {
+    const x = r() * S, w = 1 + r() * 4;
+    const a = 0.15 + r() * 0.4;
+    g.fillStyle = `rgba(255,255,255,${a})`;
+    g.fillRect(x, r() * S * 0.3, w, S * (0.4 + r() * 0.6));
+  }
+  for (let i = 0; i < 300; i++) {
+    g.fillStyle = `rgba(255,255,255,${0.05 + r() * 0.15})`;
+    g.fillRect(r() * S, r() * S, 1 + r() * 2, 1 + r() * 2);
+  }
+  return toTex(c, false);
+}
+
+/** 锈色流痕：铁件下方石面上的竖向锈渍贴花（alpha）。 */
+export function rustTexture(): THREE.CanvasTexture {
+  const W = 64, H = 128;
+  const c = document.createElement('canvas');
+  c.width = W; c.height = H;
+  const g = c.getContext('2d')!;
+  const r = rng(251);
+  g.clearRect(0, 0, W, H);
+  for (let i = 0; i < 14; i++) {
+    const x = 6 + r() * (W - 12), w = 1.5 + r() * 3.5;
+    const len = H * (0.35 + r() * 0.6);
+    const grd = g.createLinearGradient(0, 0, 0, len);
+    grd.addColorStop(0, `rgba(90,58,36,${0.5 + r() * 0.3})`);
+    grd.addColorStop(0.6, `rgba(70,44,28,${0.25 + r() * 0.2})`);
+    grd.addColorStop(1, 'rgba(60,38,24,0)');
+    g.fillStyle = grd;
+    g.fillRect(x, 0, w, len);
+  }
+  for (let i = 0; i < 160; i++) {
+    g.fillStyle = `rgba(80,50,30,${0.05 + r() * 0.2})`;
+    g.fillRect(r() * W, r() * H * 0.7, 1 + r() * 2, 1 + r() * 3);
+  }
   const t = new THREE.CanvasTexture(c);
   t.colorSpace = THREE.SRGBColorSpace;
   return t;
@@ -336,7 +401,15 @@ interface AwUniforms {
   uAwHeightMap: { value: THREE.Texture };
   uAwHasDisp: { value: number };
   uAwAlbedo: { value: THREE.Texture };
+  uAwStreakBand: { value: THREE.Vector2 };
 }
+
+/** 被磨亮的区域（井沿、台阶中央）：xz 中心 + 半径 + 强度，石材着色器共用。 */
+const AW_WEAR = { value: [
+  new THREE.Vector4(0, 14, 1.45, 0.8),   // 井沿
+  new THREE.Vector4(9.3, 27, 1.1, 0.7),  // 外廊台阶
+  new THREE.Vector4(12.5, 16, 0.8, 0.7), // 礼拜堂侧门台阶
+] };
 
 const AW_FALLBACK_HEIGHT = (() => {
   const t = new THREE.DataTexture(new Uint8Array([128, 128, 128, 255]), 1, 1);
@@ -344,7 +417,7 @@ const AW_FALLBACK_HEIGHT = (() => {
   return t;
 })();
 
-function awUniforms(floor: number, wet: number, desat: number, tint: [number, number, number], hs: number): AwUniforms {
+function awUniforms(floor: number, wet: number, desat: number, tint: [number, number, number], hs: number, band: [number, number] = [0, 0]): AwUniforms {
   return {
     uAwSteps: AW_STEPS,
     uAwFloor: { value: floor },
@@ -355,6 +428,7 @@ function awUniforms(floor: number, wet: number, desat: number, tint: [number, nu
     uAwHeightMap: { value: AW_FALLBACK_HEIGHT },
     uAwHasDisp: { value: 0 },
     uAwAlbedo: { value: AW_FALLBACK_HEIGHT },
+    uAwStreakBand: { value: new THREE.Vector2(band[0], band[1]) },
   };
 }
 
@@ -363,14 +437,33 @@ varying vec3 vAwWorldPos;
 varying vec3 vAwWorldNormal;
 `;
 
+const AW_VERT_NORMAL = /* glsl */`
+#ifdef USE_INSTANCING
+  vAwWorldNormal = normalize(mat3(modelMatrix) * mat3(instanceMatrix) * objectNormal);
+#else
+  vAwWorldNormal = normalize(mat3(modelMatrix) * objectNormal);
+#endif
+`;
+const AW_VERT_POS = /* glsl */`
+#ifdef USE_INSTANCING
+  vAwWorldPos = (modelMatrix * instanceMatrix * vec4(transformed, 1.0)).xyz;
+#else
+  vAwWorldPos = (modelMatrix * vec4(transformed, 1.0)).xyz;
+#endif
+`;
+
 const AW_FRAG_PREFIX = /* glsl */`
 varying vec3 vAwWorldPos;
 varying vec3 vAwWorldNormal;
 uniform float uAwSteps, uAwFloor, uAwWet, uAwDesat, uAwHeightScale, uAwHasDisp;
+uniform vec2 uAwStreakBand;
+uniform vec4 uAwWear[3];
+float awPolish;
 uniform vec3 uAwTint;
 uniform sampler2D uAwHeightMap, uAwAlbedo;
 vec2 awUv;
-float awWet, awMoss, awBase, awMacro, awMacro2;
+float awWet, awMoss, awBase, awMacro, awMacro2, awUp, awJGeo, awSlabHash;
+vec2 awW;
 float awHash(vec2 p) { p = fract(p * vec2(123.34, 456.21)); p += dot(p, p + 45.32); return fract(p.x * p.y); }
 float awNoise(vec2 p) {
   vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
@@ -413,45 +506,78 @@ const AW_MAP_BLOCK = /* glsl */`
   float invmax = inversesqrt(max(dot(T, T), dot(B, B)) + 1e-8);
   mat3 awTBN = mat3(T * invmax, B * invmax, awN);
   awUv = awPom(vMapUv, awV * awTBN);
+  // 石板单元（stone_pavers 每格 4x4 错缝）：单元 ID 用于每块石板的明暗/色相差异，
+  // 单元边界 + 噪声扰动 = 不规则崩边灰缝（几何遮罩，远处也清晰）
+  vec2 awCellUv = vMapUv * 4.0;
+  awCellUv += vec2(awFbm(vMapUv * 2.6 + 4.4), awFbm(vMapUv * 2.6 + 9.8)) * 0.55 - 0.27;
+  float awRow = floor(awCellUv.y);
+  awCellUv.x += mod(awRow, 2.0) * 0.5;
+  vec2 awCell = floor(awCellUv);
+  vec2 awF = fract(awCellUv);
+  float awEdge = min(min(awF.x, 1.0 - awF.x), min(awF.y, 1.0 - awF.y));
+  awEdge += (awFbm(vMapUv * 40.0) - 0.5) * 0.10;
+  awJGeo = (1.0 - smoothstep(0.02, 0.07, awEdge)) * uAwFloor;
+  awSlabHash = awHash(awCell + 17.0);
   float awH = awHeight(awUv);
-  vec2 awW = vAwWorldPos.xz;
+  awW = vAwWorldPos.xz;
   awMacro = awFbm(awW * 0.16 + 3.7);
   awMacro2 = awFbm(awW * 0.45 + 11.3);
   vec2 awWallUv = vec2(vAwWorldPos.x + vAwWorldPos.z, vAwWorldPos.y);
-  float awUp = clamp(awN.y, 0.0, 1.0);
+  awUp = clamp(awN.y, 0.0, 1.0);
   float awVert = 1.0 - awUp; awVert *= awVert;
   awBase = (1.0 - smoothstep(0.0, 0.85, vAwWorldPos.y)) * (0.55 + 0.45 * awFbm(awWallUv * 1.7)) * awVert;
-  float awTopMoss = awUp * smoothstep(0.45, 0.75, awFbm(awW * 0.9 + 5.0));
-  float awStreak = smoothstep(0.55, 0.8, awFbm(vec2(awWallUv.x * 6.0, awWallUv.y * 0.35)))
-                 * smoothstep(1.2, 3.5, vAwWorldPos.y) * awVert;
+  float awTopMoss = awUp * smoothstep(0.45, 0.75, awFbm(awW * 0.9 + 5.0)) * (1.0 - uAwFloor);
+  float awStreak = smoothstep(0.52, 0.78, awFbm(vec2(awWallUv.x * 7.0, awWallUv.y * 0.22)))
+                 * smoothstep(uAwStreakBand.x, uAwStreakBand.y, vAwWorldPos.y) * awVert;
+  awPolish = 0.0;
+  for (int i = 0; i < 3; i++) {
+    vec4 z = uAwWear[i];
+    awPolish = max(awPolish, smoothstep(z.z, z.z * 0.35, distance(vAwWorldPos.xz, z.xy)) * z.w);
+  }
+  awPolish *= awUp * (0.6 + 0.4 * awMacro2);
   awMoss = clamp(awBase * 0.8 + awTopMoss * 0.9 + awStreak * 0.35, 0.0, 1.0);
-  float awLow = 1.0 - smoothstep(0.25, 0.55, awH);
-  float awPool = smoothstep(0.45, 0.75, awFbm(awW * 0.35 + 9.1)) * awLow;
-  awWet = uAwFloor > 0.5 ? clamp(uAwWet * 0.35 + awPool * 1.2, 0.0, 1.0) : awBase * 0.5;
+  float awLow = 1.0 - smoothstep(0.3, 0.6, awH);
+  float awPool = smoothstep(0.42, 0.62, awFbm(awW * 0.22 + 9.1)) * (0.55 + 0.45 * awLow);
+  awWet = uAwFloor > 0.5 ? clamp(uAwWet * 0.65 + awPool * 1.1, 0.0, 1.0) : awBase * 0.5;
 }
 vec4 sampledDiffuseColor = texture2D(map, awUv);
+float awJ0 = 1.0 - smoothstep(0.03, 0.09, dot(sampledDiffuseColor.rgb, vec3(0.3333)));
+float awJx = 1.0 - smoothstep(0.03, 0.09, dot(texture2D(map, awUv + vec2(0.006, 0.0)).rgb, vec3(0.3333)));
+float awJy = 1.0 - smoothstep(0.03, 0.09, dot(texture2D(map, awUv + vec2(0.0, 0.006)).rgb, vec3(0.3333)));
+float awJoint = max(max(awJ0, max(awJx, awJy)) * uAwFloor, awJGeo);
+awMoss = clamp(awMoss + awUp * awJoint * smoothstep(0.42, 0.68, awFbm(awW * 0.5 + 6.2)) * (0.5 + 0.5 * awMacro2), 0.0, 1.0);
 diffuseColor *= sampledDiffuseColor;
+diffuseColor.rgb *= 1.0 - 0.6 * awJoint;
 {
   float awLum = dot(diffuseColor.rgb, vec3(0.299, 0.587, 0.114));
   diffuseColor.rgb = mix(diffuseColor.rgb, vec3(awLum), uAwDesat) * uAwTint;
   float awM = awMacro * 0.7 + awMacro2 * 0.3;
   diffuseColor.rgb *= 0.82 + 0.36 * awM;
+  diffuseColor.rgb *= 0.7 + 0.6 * awFbm(awW * 1.3 + 2.2);
+  diffuseColor.rgb *= 0.78 + 0.44 * awSlabHash;
+  diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * vec3(1.05, 1.0, 0.94), (awSlabHash - 0.5) * 0.5);
+  diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * vec3(0.94, 0.98, 1.06), (0.5 - awSlabHash) * 0.5);
   diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * vec3(1.06, 1.0, 0.92), smoothstep(0.55, 0.8, awM));
   diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * vec3(0.92, 0.98, 1.08), smoothstep(0.45, 0.2, awM));
-  diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.16, 0.22, 0.10) * (0.6 + 0.8 * awMacro2), awMoss * 0.55);
+  diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.075, 0.10, 0.05) * (0.6 + 0.8 * awMacro2), awMoss * 0.5);
+  diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.045, 0.038, 0.028), awJoint * 0.7);
   diffuseColor.rgb *= 1.0 - 0.5 * awBase;
   diffuseColor.rgb *= 1.0 - 0.62 * awWet * uAwFloor;
+  diffuseColor.rgb = mix(diffuseColor.rgb, vec3(dot(diffuseColor.rgb, vec3(0.3333))) * 1.22, awPolish * 0.5);
 }
 `;
 
 const AW_ROUGH_BLOCK = /* glsl */`
-roughnessFactor = clamp(roughnessFactor * (1.0 - 0.25 * uAwWet * uAwFloor), 0.04, 1.0);
-roughnessFactor = mix(roughnessFactor, 0.05, awWet * uAwFloor);
+roughnessFactor = clamp(roughnessFactor * (1.0 - 0.35 * uAwWet * uAwFloor), 0.04, 1.0);
+roughnessFactor = mix(roughnessFactor, 0.18, clamp(awWet * uAwFloor * 1.6, 0.0, 1.0) * 0.75);
+roughnessFactor = mix(roughnessFactor, 0.04, smoothstep(0.6, 0.9, awWet) * uAwFloor);
+roughnessFactor = mix(roughnessFactor, 0.3, awPolish);
 roughnessFactor = mix(roughnessFactor, 0.85, awMoss * 0.5);
+roughnessFactor = mix(roughnessFactor, 0.55, awJoint * 0.4);
 `;
 
 const AW_NORMAL_BLOCK = /* glsl */`
-normal = normalize(mix(normal, nonPerturbedNormal, clamp(awWet * uAwFloor * 0.9 + awMoss * 0.25, 0.0, 1.0)));
+normal = normalize(mix(normal, nonPerturbedNormal, clamp(awWet * uAwFloor * 0.9 + awMoss * 0.25 + awPolish * 0.4, 0.0, 1.0)));
 `;
 
 /** 给石材类材质挂上共享着色器扩展。uniforms 存 userData 供 enhance 写入 disp 高度图。 */
@@ -459,10 +585,10 @@ function stoneShader(mat: THREE.MeshStandardMaterial, u: AwUniforms): void {
   mat.userData.aw = u;
   if (mat.map) u.uAwAlbedo.value = mat.map;
   mat.onBeforeCompile = (shader) => {
-    Object.assign(shader.uniforms, u);
+    Object.assign(shader.uniforms, u, { uAwWear: AW_WEAR });
     shader.vertexShader = AW_VERT_PREFIX + shader.vertexShader
-      .replace('#include <defaultnormal_vertex>', '#include <defaultnormal_vertex>\n vAwWorldNormal = normalize(mat3(modelMatrix) * objectNormal);')
-      .replace('#include <project_vertex>', '#include <project_vertex>\n vAwWorldPos = (modelMatrix * vec4(transformed, 1.0)).xyz;');
+      .replace('#include <defaultnormal_vertex>', '#include <defaultnormal_vertex>\n' + AW_VERT_NORMAL)
+      .replace('#include <project_vertex>', '#include <project_vertex>\n' + AW_VERT_POS);
     shader.fragmentShader = AW_FRAG_PREFIX + shader.fragmentShader
       .replace('#include <map_fragment>', AW_MAP_BLOCK)
       .replace('#include <roughnessmap_fragment>', THREE.ShaderChunk.roughnessmap_fragment.replaceAll('vRoughnessMapUv', 'awUv') + AW_ROUGH_BLOCK)
@@ -548,26 +674,46 @@ export function makeMaterials(): Materials {
   const m: Materials = {
     stone: std(stoneS, { color: 0xffffff, roughness: 0.96, normalScale: new THREE.Vector2(1, 1) }),
     stoneDark: std(stoneDarkS, { color: 0xffffff, roughness: 0.97, normalScale: new THREE.Vector2(1, 1) }),
-    flag: std(flagS, { color: 0xffffff, roughness: 0.9, normalScale: new THREE.Vector2(1.1, 1.1) }),
+    flag: std(flagS, { color: 0xffffff, roughness: 0.9, normalScale: new THREE.Vector2(1.4, 1.4) }),
     wood: std(woodS, { color: 0xc6b49a, roughness: 0.85, normalScale: new THREE.Vector2(0.7, 0.7) }),
     woodFloor: std(woodFloorS, { color: 0xd6be9e, roughness: 0.72, normalScale: new THREE.Vector2(0.6, 0.6) }),
-    iron: std(ironS, { color: 0x6e6e76, roughness: 0.46, metalness: 0.88, normalScale: new THREE.Vector2(0.8, 0.8) }),
-    cloth: std(clothS, { color: 0xc2b6a0, roughness: 1, normalScale: new THREE.Vector2(0.4, 0.4) }),
-    banner: std(null, { map: bannerTexture(), color: 0xffffff, roughness: 1, side: THREE.DoubleSide, alphaTest: 0.4 }),
+    iron: std(ironS, { color: 0x2a2b2e, roughness: 0.62, metalness: 1.0, normalScale: new THREE.Vector2(0.8, 0.8) }),
+    cloth: new THREE.MeshPhysicalMaterial({ map: clothS.map, normalMap: clothS.normalMap, roughnessMap: clothS.roughnessMap, color: 0x7a6a52, roughness: 0.95, sheen: 0.5, sheenRoughness: 0.7, sheenColor: new THREE.Color(0x8a7a60), normalScale: new THREE.Vector2(0.4, 0.4) }),
+    banner: new THREE.MeshPhysicalMaterial({ map: bannerTexture(), color: 0xffffff, roughness: 0.95, sheen: 0.35, sheenRoughness: 0.8, sheenColor: new THREE.Color(0x6a4a44), side: THREE.DoubleSide, alphaTest: 0.4 }),
     gravel: std(gravelS, { color: 0xffffff, roughness: 1, normalScale: new THREE.Vector2(1.2, 1.2) }),
     roof: std(roofS, { color: 0xffffff, roughness: 0.9, normalScale: new THREE.Vector2(0.9, 0.9) }),
-    glass: std(null, { color: 0x8fa3b5, roughness: 0.22, metalness: 0.1, transparent: true, opacity: 0.42 }),
+    glass: std(null, { color: 0x9fb0bd, roughness: 0.12, metalness: 0.05, transparent: true, opacity: 0.35, roughnessMap: grimeTexture() }),
     ember: new THREE.MeshBasicMaterial({ color: 0xffb060 }),
     flame: new THREE.MeshBasicMaterial({ color: 0xffc070, transparent: true, opacity: 0.92, depthWrite: false }),
     paper: std(null, { color: 0xc9b891, roughness: 1 }),
     far: new THREE.MeshBasicMaterial({ color: 0x59626c, fog: true }),
   };
 
+  // 锻铁：金属度 1、粗糙 0.62；锈只出现在竖面/滴水处（世界噪声条带），锈处金属度下降。
+  m.iron.onBeforeCompile = (shader) => {
+    shader.vertexShader = AW_VERT_PREFIX + shader.vertexShader
+      .replace('#include <defaultnormal_vertex>', '#include <defaultnormal_vertex>\n' + AW_VERT_NORMAL)
+      .replace('#include <project_vertex>', '#include <project_vertex>\n' + AW_VERT_POS);
+    shader.fragmentShader = AW_FRAG_PREFIX + shader.fragmentShader
+      .replace('#include <map_fragment>', THREE.ShaderChunk.map_fragment + /* glsl */`
+      {
+        vec3 awN = normalize(vAwWorldNormal);
+        float awRust = smoothstep(0.55, 0.8, awFbm(vec2(vAwWorldPos.x + vAwWorldPos.z, vAwWorldPos.y * 0.5) * 2.2))
+                     * (0.25 + 0.75 * (1.0 - abs(awN.y)));
+        awRust = clamp(awRust * 1.2 - 0.15, 0.0, 1.0);
+        diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.106, 0.045, 0.017), awRust * 0.8);
+        awWet = awRust;
+      }`)
+      .replace('#include <roughnessmap_fragment>', THREE.ShaderChunk.roughnessmap_fragment + '\nroughnessFactor = mix(roughnessFactor, 0.88, awWet);')
+      .replace('#include <metalnessmap_fragment>', THREE.ShaderChunk.metalnessmap_fragment + '\nmetalnessFactor = mix(metalnessFactor, 0.25, awWet);');
+  };
+  m.iron.customProgramCacheKey = () => 'aw-iron';
+
   // 共享石材着色器：墙（floor=0）与地（floor=1）。冷灰调、去饱和、宏观噪声、潮湿与 POM。
-  stoneShader(m.stone, awUniforms(0, 0.3, 0.3, [0.86, 0.9, 0.98], 0.025));
-  stoneShader(m.stoneDark, awUniforms(0, 0.3, 0.35, [0.66, 0.7, 0.78], 0.025));
-  stoneShader(m.flag, awUniforms(1, 1.0, 0.45, [0.8, 0.84, 0.9], 0.02));
-  stoneShader(m.roof, awUniforms(0, 0.25, 0.2, [0.72, 0.74, 0.78], 0.02));
+  stoneShader(m.stone, awUniforms(0, 0.3, 0.3, [0.86, 0.9, 0.98], 0.025, [2.2, 4.15]));
+  stoneShader(m.stoneDark, awUniforms(0, 0.3, 0.35, [0.66, 0.7, 0.78], 0.025, [4.4, 6.85]));
+  stoneShader(m.flag, awUniforms(1, 1.0, 0.5, [0.26, 0.29, 0.34], 0.02));
+  stoneShader(m.roof, awUniforms(0, 0.25, 0.2, [0.3, 0.32, 0.34], 0.02));
   stoneShader(m.gravel, awUniforms(1, 0.4, 0.15, [0.82, 0.82, 0.82], 0.03));
 
   // 外部 CC0 贴图增强（石、地、木、瓦、碎石），2K：颜色/法线/粗糙度/AO/高度。

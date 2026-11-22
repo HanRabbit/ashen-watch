@@ -6,7 +6,7 @@ import { BRAZIER, BrazierId, HEARTH, LightZone, WALL_LAMP } from '../config';
 import { BELL_POS, BRAZIER_POS, LAMP_POS, RAISED_Y } from '../sim/level';
 import { World } from '../sim/state';
 import { archLeaf, boxMesh, cyl, halfArchLeaf, lerp, mesh, put } from './geom';
-import { glowTexture, Materials, smokeTexture } from './materials';
+import { glowTexture, grimeTexture, Materials, smokeTexture } from './materials';
 import type { Quality } from './view';
 
 const R = RAISED_Y;
@@ -146,6 +146,49 @@ class Embers {
     pos.needsUpdate = true;
     (this.points.geometry.attributes.aLife as THREE.BufferAttribute).needsUpdate = true;
   }
+}
+
+/** 卷草锻铁挂臂：贴墙板 + 铆钉 + 微拱主管 + 三处卷草 + 吊环。原点在墙面。 */
+function scrollArm(m: Materials): THREE.Group {
+  const g = new THREE.Group();
+  const mount = boxMesh(m.iron, 0.05, 0.36, 0.14, 1); mount.position.set(0.03, 0, 0);
+  g.add(mount);
+  for (const [ry, rz] of [[-0.14, 0.05], [0.14, 0.05], [-0.14, -0.05], [0.14, -0.05]]) {
+    const rivet = mesh(new THREE.SphereGeometry(0.016, 5, 4), m.iron); rivet.position.set(0.06, ry, rz); g.add(rivet);
+  }
+  const armCurve = new THREE.CatmullRomCurve3([
+    new THREE.Vector3(0.05, 0.1, 0), new THREE.Vector3(0.22, 0.17, 0),
+    new THREE.Vector3(0.42, 0.18, 0), new THREE.Vector3(0.55, 0.13, 0),
+  ]);
+  g.add(mesh(new THREE.TubeGeometry(armCurve, 12, 0.018, 6), m.iron));
+  const curl = mesh(new THREE.TorusGeometry(0.13, 0.014, 5, 14, Math.PI * 1.25), m.iron);
+  curl.position.set(0.28, 0.02, 0); curl.rotation.z = -0.5;
+  const curl2 = mesh(new THREE.TorusGeometry(0.06, 0.012, 5, 10, Math.PI * 1.5), m.iron);
+  curl2.position.set(0.12, -0.08, 0); curl2.rotation.z = 2.2;
+  const curl3 = mesh(new THREE.TorusGeometry(0.05, 0.012, 5, 10, Math.PI * 1.4), m.iron);
+  curl3.position.set(0.47, 0.06, 0); curl3.rotation.z = -1.2;
+  const hangRing = mesh(new THREE.TorusGeometry(0.03, 0.009, 5, 10), m.iron); hangRing.position.set(0.55, 0.1, 0);
+  g.add(curl, curl2, curl3, hangRing);
+  return g;
+}
+
+/** 六角铁灯笼：顶盖 + 六棱玻璃 + 立柱框 + 底托。玻璃中心在原点。 */
+function hexLantern(m: Materials, glass: THREE.Material): THREE.Group {
+  const g = new THREE.Group();
+  const cap = mesh(new THREE.ConeGeometry(0.14, 0.1, 6), m.iron); cap.position.y = 0.16;
+  const capRim = mesh(new THREE.CylinderGeometry(0.15, 0.16, 0.022, 6), m.iron); capRim.position.y = 0.11;
+  const vent = cyl(m.iron, 0.025, 0.04, 0.035, 6); vent.position.y = 0.22;
+  const glassBody = mesh(new THREE.CylinderGeometry(0.105, 0.105, 0.2, 6, 1, true), glass, false);
+  const baseRim = mesh(new THREE.CylinderGeometry(0.16, 0.13, 0.025, 6), m.iron); baseRim.position.y = -0.11;
+  const finial = mesh(new THREE.SphereGeometry(0.022, 6, 5), m.iron); finial.position.y = -0.14;
+  g.add(cap, capRim, vent, glassBody, baseRim, finial);
+  for (let i = 0; i < 6; i++) {
+    const a = (i * Math.PI * 2) / 6 + Math.PI / 6;
+    const post = boxMesh(m.iron, 0.014, 0.21, 0.014, 1);
+    post.position.set(Math.cos(a) * 0.105, 0, Math.sin(a) * 0.105);
+    g.add(post);
+  }
+  return g;
 }
 
 export function makeLantern(m: Materials, tex: THREE.Texture): { group: THREE.Group; glow: THREE.Object3D; glass: THREE.MeshStandardMaterial } {
@@ -296,6 +339,7 @@ export class Props {
   private lampStub: THREE.Mesh;
   private lampFlame: THREE.Group;
   private lampGlass: THREE.MeshStandardMaterial;
+  private sconces: { glass: THREE.MeshStandardMaterial; glow: THREE.Sprite; light: THREE.PointLight; flame: THREE.Group }[] = [];
   private lampGround: THREE.Mesh;
   private braziers: { id: BrazierId; flame: THREE.Group; coals: THREE.Mesh; ground: THREE.Mesh; embers: Embers }[] = [];
   private pickLantern: THREE.Group;
@@ -375,52 +419,44 @@ export class Props {
 
     // 庭院壁灯（PRP-02）：卷草锻铁挂臂 + 悬挂六角铁灯笼（玻璃 + 顶盖），对标概念图
     const lamp = put(new THREE.Group(), LAMP_POS.x - 0.18, LAMP_POS.y, LAMP_POS.z);
-    const mount = boxMesh(m.iron, 0.05, 0.36, 0.14, 1); mount.position.set(0.03, 0, 0);
-    lamp.add(mount);
-    for (const [ry, rz] of [[-0.14, 0.05], [0.14, 0.05], [-0.14, -0.05], [0.14, -0.05]]) {
-      const rivet = mesh(new THREE.SphereGeometry(0.016, 5, 4), m.iron); rivet.position.set(0.06, ry, rz); lamp.add(rivet);
-    }
     this.lampStub = boxMesh(m.iron, 0.2, 0.05, 0.05, 1); this.lampStub.position.set(0.1, -0.12, 0); this.lampStub.rotation.z = -0.7;
-    // 主挂臂：微拱的锻铁管
-    const armCurve = new THREE.CatmullRomCurve3([
-      new THREE.Vector3(0.05, 0.1, 0), new THREE.Vector3(0.22, 0.17, 0),
-      new THREE.Vector3(0.42, 0.18, 0), new THREE.Vector3(0.55, 0.13, 0),
-    ]);
-    const arm = mesh(new THREE.TubeGeometry(armCurve, 12, 0.018, 6), m.iron);
-    // 卷草纹：臂下大卷 + 贴墙小卷 + 端部吊环
-    const curl = mesh(new THREE.TorusGeometry(0.13, 0.014, 5, 14, Math.PI * 1.25), m.iron);
-    curl.position.set(0.28, 0.02, 0); curl.rotation.z = -0.5;
-    const curl2 = mesh(new THREE.TorusGeometry(0.06, 0.012, 5, 10, Math.PI * 1.5), m.iron);
-    curl2.position.set(0.12, -0.08, 0); curl2.rotation.z = 2.2;
-    const curl3 = mesh(new THREE.TorusGeometry(0.05, 0.012, 5, 10, Math.PI * 1.4), m.iron);
-    curl3.position.set(0.47, 0.06, 0); curl3.rotation.z = -1.2;
-    const hangRing = mesh(new THREE.TorusGeometry(0.03, 0.009, 5, 10), m.iron); hangRing.position.set(0.55, 0.1, 0);
-    this.lampArm.add(arm, curl, curl2, curl3, hangRing);
-    // 六角灯笼：顶盖 + 六棱玻璃 + 立柱框 + 底托
-    const lx = 0.55, ly = -0.14;
     this.lampGlass = new THREE.MeshStandardMaterial({
-      color: 0x2a1c0c, emissive: 0xffa640, emissiveIntensity: 0, roughness: 0.25,
-      transparent: true, opacity: 0.55, side: THREE.DoubleSide,
+      color: 0x2a1c0c, emissive: 0xffa640, emissiveIntensity: 0, roughness: 0.2,
+      transparent: true, opacity: 0.55, side: THREE.DoubleSide, roughnessMap: grimeTexture(),
     });
-    const cap = mesh(new THREE.ConeGeometry(0.14, 0.1, 6), m.iron); cap.position.set(lx, ly + 0.16, 0);
-    const capRim = mesh(new THREE.CylinderGeometry(0.15, 0.16, 0.022, 6), m.iron); capRim.position.set(lx, ly + 0.11, 0);
-    const vent = cyl(m.iron, 0.025, 0.04, 0.035, 6); vent.position.set(lx, ly + 0.22, 0);
-    const glassBody = mesh(new THREE.CylinderGeometry(0.105, 0.105, 0.2, 6, 1, true), this.lampGlass, false); glassBody.position.set(lx, ly, 0);
-    const baseRim = mesh(new THREE.CylinderGeometry(0.16, 0.13, 0.025, 6), m.iron); baseRim.position.set(lx, ly - 0.11, 0);
-    const finial = mesh(new THREE.SphereGeometry(0.022, 6, 5), m.iron); finial.position.set(lx, ly - 0.14, 0);
-    this.lampArm.add(cap, capRim, vent, glassBody, baseRim, finial);
-    for (let i = 0; i < 6; i++) {
-      const a = (i * Math.PI * 2) / 6 + Math.PI / 6;
-      const post = boxMesh(m.iron, 0.014, 0.21, 0.014, 1);
-      post.position.set(lx + Math.cos(a) * 0.105, ly, Math.sin(a) * 0.105);
-      this.lampArm.add(post);
-    }
+    const lx = 0.55, ly = -0.14;
+    this.lampArm.add(scrollArm(m));
+    const lanternBody = hexLantern(m, this.lampGlass);
+    lanternBody.position.set(lx, ly, 0);
+    this.lampArm.add(lanternBody);
     this.lampFlame = flame(tex, 0.16); this.lampFlame.position.set(lx, ly - 0.09, 0);
     this.lampArm.add(this.lampFlame);
     lamp.add(this.lampStub, this.lampArm);
     g.add(lamp);
     put(this.lampLight, LAMP_POS.x + 0.37, LAMP_POS.y - 0.14, LAMP_POS.z);
     g.add(this.lampLight);
+    // 西墙装饰烛灯（概念图左墙藤幕中的挂灯）：入夜自燃，暖琥珀小光池
+    for (const [sz, sy] of [[20.5, 2.9], [6.5, 2.6]]) {
+      const sc = put(new THREE.Group(), -9.98, sy, sz);
+      sc.add(scrollArm(m));
+      const glass = new THREE.MeshStandardMaterial({
+        color: 0x2a1c0c, emissive: 0xffb25e, emissiveIntensity: 0, roughness: 0.2,
+        transparent: true, opacity: 0.55, side: THREE.DoubleSide, roughnessMap: grimeTexture(),
+      });
+      const body = hexLantern(m, glass);
+      body.position.set(0.55, -0.14, 0);
+      body.scale.setScalar(0.9);
+      sc.add(body);
+      const fl = flame(tex, 0.12); fl.position.set(0.55, -0.22, 0); fl.visible = false;
+      sc.add(fl);
+      const glow = glowSprite(tex, 0xffb25e, 0.7); glow.position.set(0.55, -0.14, 0); glow.material.opacity = 0;
+      sc.add(glow);
+      const light = new THREE.PointLight(0xffb25e, 0, 8, 1.7);
+      light.position.set(0.55, -0.14, 0);
+      sc.add(light);
+      g.add(sc);
+      this.sconces.push({ glass, glow, light, flame: fl });
+    }
     const zn = WALL_LAMP.zone;
     this.lampGround = new THREE.Mesh(
       new THREE.CircleGeometry(zn.r, 40),
@@ -604,6 +640,13 @@ export class Props {
     this.lampFlame.visible = lit;
     const fade = lit ? Math.min(1, w.lampBurn / 12) : 0;
     this.lampGlass.emissiveIntensity = lit ? 1.8 * fade * flick : 0;
+    const candle = w.phase === 'night' || w.phase === 'dawn' ? flick : 0;
+    for (const sc of this.sconces) {
+      sc.glass.emissiveIntensity = 1.5 * candle;
+      sc.glow.material.opacity = 0.22 * candle;
+      sc.light.intensity = 8 * candle;
+      sc.flame.visible = candle > 0;
+    }
     this.lampLight.intensity = 45 * fade * flick;
     this.lampGround.visible = lit;
     (this.lampGround.material as THREE.MeshBasicMaterial).opacity = 0.38 * fade * flick;

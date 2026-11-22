@@ -7,3 +7,4 @@
 | `wine_barrel_01/` | wine_barrel_01 | gltf 1k（diff/nor_gl/arm） | 庭院木桶：鼓腹桶板 + 铁箍，加载失败回退程序化桶 |
 
 Objaverse 检索工具本轮未用到新增模型（壁灯与货箱为程序化建模，更贴合概念图）。
+| `grass_medium_01/` | grass_medium_01 | gltf 1k（diff/nor_gl/arm） | 石板缝/墙脚草丛实例化模型，加载失败回退十字 alpha 面片 |

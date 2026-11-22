@@ -4,7 +4,7 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { PROPS, RAISED_Y, WALLS, WELL } from '../sim/level';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { archHeader, archLeaf, Batch, gable } from './geom';
-import { grassTexture, ivyLeafTexture, leafTexture, Materials, mossTexture, scaleUV, tiledBox, trackPending } from './materials';
+import { grassTexture, ivyLeafTexture, leafTexture, Materials, mossTexture, rustTexture, scaleUV, tiledBox, trackPending } from './materials';
 
 const R = RAISED_Y;
 const HALF_PI = Math.PI / 2;
@@ -28,8 +28,9 @@ export interface StaticLevel {
   hearthWindowMat: THREE.MeshStandardMaterial;
 }
 
-/** 垛口：带倒角的顶缘 + 宽度/高度轻微不规则，少数风化残缺。 */
-function merlons(b: Batch, mat: THREE.Material, x0: number, z0: number, x1: number, z1: number, y: number): void {
+interface MerlonXf { x: number; y: number; z: number; ry: number; w: number; h: number; t: number }
+/** 垛口：带倒角的顶缘 + 宽度/高度轻微不规则，少数风化残缺。收集变换供 InstancedMesh。 */
+function merlons(list: MerlonXf[], x0: number, z0: number, x1: number, z1: number, y: number): void {
   const alongX = x1 - x0 > z1 - z0;
   const len = alongX ? x1 - x0 : z1 - z0;
   const n = Math.max(1, Math.floor(len / 1.5));
@@ -43,14 +44,8 @@ function merlons(b: Batch, mat: THREE.Material, x0: number, z0: number, x1: numb
     if (wear === 0) continue;
     const h = (wear === 1 ? 0.3 : 0.55 + r() * 0.14);
     const w = 0.62 + r() * 0.16;
-    // 倒角盒：ExtrudeGeometry 斜面顶缘
-    const shape = new THREE.Shape();
-    shape.moveTo(-w / 2, 0); shape.lineTo(w / 2, 0); shape.lineTo(w / 2, h); shape.lineTo(-w / 2, h); shape.closePath();
-    const geo = new THREE.ExtrudeGeometry(shape, { depth: thick, bevelEnabled: true, bevelThickness: 0.05, bevelSize: 0.045, bevelSegments: 1, curveSegments: 1 });
-    geo.translate(0, 0, -thick / 2);
-    scaleUV(geo, 0.5);
-    if (alongX) b.geo(mat, geo, c, y, (z0 + z1) / 2);
-    else b.geo(mat, geo, (x0 + x1) / 2, y, c, HALF_PI);
+    if (alongX) list.push({ x: c, y, z: (z0 + z1) / 2, ry: 0, w, h, t: thick });
+    else list.push({ x: (x0 + x1) / 2, y, z: c, ry: HALF_PI, w, h, t: thick });
   }
 }
 
@@ -143,19 +138,40 @@ export function buildStaticLevel(m: Materials): StaticLevel {
   const barrelSlots: { x: number; z: number; y0: number; h: number; ry: number }[] = [];
   const group = new THREE.Group();
   const b = new Batch();
+  const merlonXf: MerlonXf[] = [];
+  const rubbleXf: { x: number; y: number; z: number; s: number; r: number }[] = [];
   const windowMat = new THREE.MeshStandardMaterial({ color: 0x1b2026, emissive: 0xa9c0d6, emissiveIntensity: 0.9, roughness: 0.4 });
   const hearthWindowMat = new THREE.MeshStandardMaterial({ color: 0x1a1512, emissive: 0xff9a3c, emissiveIntensity: 1.2, roughness: 0.5 });
 
   // 墙体：勒脚（加宽基座）+ 墙身 + 压顶。贴图 3.5 m 一格 → 砌块约 0.4 m 宽。
   for (const w of WALLS) {
     const mat = w.h >= 7 ? m.stoneDark : m.stone;
-    b.box(mat, w.x0, w.z0, w.x1, w.z1, 0, w.h, 3.5);
-    b.box(m.stoneDark, w.x0 - 0.08, w.z0 - 0.08, w.x1 + 0.08, w.z1 + 0.08, 0, 0.35, 3.5);
-    if (w.h >= 5) b.box(m.stoneDark, w.x0 - 0.05, w.z0 - 0.05, w.x1 + 0.05, w.z1 + 0.05, w.h - 0.12, w.h, 3.5);
-    if (w.h === 5 && w.tag !== 'cellar' && !(w.x0 === 10.5 && w.z0 === 17.5)) merlons(b, m.stone, w.x0, w.z0, w.x1, w.z1, w.h);
+    b.box(mat, w.x0, w.z0, w.x1, w.z1, 0, w.h, 4.5);
+    b.box(m.stoneDark, w.x0 - 0.08, w.z0 - 0.08, w.x1 + 0.08, w.z1 + 0.08, 0, 0.35, 4.5);
+    if (w.h >= 5) b.box(m.stoneDark, w.x0 - 0.05, w.z0 - 0.05, w.x1 + 0.05, w.z1 + 0.05, w.h - 0.12, w.h, 4.5);
+    if (w.h === 5 && w.tag !== 'cellar' && !(w.x0 === 10.5 && w.z0 === 17.5)) merlons(merlonXf, w.x0, w.z0, w.x1, w.z1, w.h);
   }
-  merlons(b, m.stone, -10.5, 0, -3.6, 0.5, 4.2);
-  merlons(b, m.stone, 3.6, 0, 10.5, 0.5, 4.2);
+  merlons(merlonXf, -10.5, 0, -3.6, 0.5, 4.2);
+  merlons(merlonXf, 3.6, 0, 10.5, 0.5, 4.2);
+  // 垛口实例化：单位倒角盒 + 每实例缩放/朝向
+  {
+    const shape = new THREE.Shape();
+    shape.moveTo(-0.5, 0); shape.lineTo(0.5, 0); shape.lineTo(0.5, 1); shape.lineTo(-0.5, 1); shape.closePath();
+    const geo = new THREE.ExtrudeGeometry(shape, { depth: 1, bevelEnabled: true, bevelThickness: 0.06, bevelSize: 0.05, bevelSegments: 1, curveSegments: 1 });
+    geo.translate(0, 0, -0.5);
+    scaleUV(geo, 1 / 4.5);
+    const im = new THREE.InstancedMesh(geo, m.stone, merlonXf.length);
+    const mm = new THREE.Matrix4(), qq = new THREE.Quaternion();
+    merlonXf.forEach((t, i) => {
+      qq.setFromAxisAngle(new THREE.Vector3(0, 1, 0), t.ry);
+      mm.compose(new THREE.Vector3(t.x, t.y, -t.z), qq, new THREE.Vector3(t.w, t.h, t.t));
+      im.setMatrixAt(i, mm);
+      const k = 0.82 + ((i * 37) % 10) / 40;
+      im.setColorAt(i, new THREE.Color(k, k, k * 1.03));
+    });
+    im.castShadow = im.receiveShadow = true;
+    group.add(im);
+  }
 
   // 庭院四角与门房角的凸出角石
   for (const [x, z, h] of [[-10.25, 0.25, 4.2], [10.25, 0.25, 4.2], [-10.25, 28.75, 4.2], [10.25, 28.75, 3.2], [-3.25, -8.25, 3.6], [3.25, -8.25, 3.6]] as [number, number, number][]) {
@@ -357,7 +373,7 @@ export function buildStaticLevel(m: Materials): StaticLevel {
       case 'rubble':
         for (let i = 0; i < 7; i++) {
           const s = 0.28 + ((i * 37) % 10) / 28;
-          b.geo(m.stone, new THREE.DodecahedronGeometry(s, 0), p.x0 + 0.2 + ((i * 53) % 10) / 12, s * 0.5, p.z0 + 0.2 + ((i * 71) % 10) / 12, i);
+          rubbleXf.push({ x: p.x0 + 0.2 + ((i * 53) % 10) / 12, y: s * 0.5, z: p.z0 + 0.2 + ((i * 71) % 10) / 12, s, r: i });
         }
         break;
       case 'crate':
@@ -415,25 +431,19 @@ export function buildStaticLevel(m: Materials): StaticLevel {
   for (const [x, z, w, rot] of [[-9.95, 12, 5, HALF_PI], [-9.95, 22, 4, HALF_PI], [9.95, 12, 5, -HALF_PI], [0, 28.45, 6, 0]] as [number, number, number, number][]) {
     decal.geo(mossMat, new THREE.PlaneGeometry(w, 0.7), x, 0.35, z, rot);
   }
-  for (const [x, z, s] of [[-3, 11, 2.2], [4, 20, 2.6], [-6, 25, 2], [2, 6, 1.8]]) {
-    decal.geo(mossMat, new THREE.PlaneGeometry(s, s), x, 0.02, z, 0, -HALF_PI);
-  }
 
   // 爬藤：程序生成藤枝 + 数千片实例化叶（红褐-酒红-少量橙黄），从墙头垂下
   const ivyR = drng(131);
   const ivyMat = new THREE.MeshStandardMaterial({ map: ivyLeafTexture(), roughness: 0.85, side: THREE.DoubleSide, alphaTest: 0.45 });
-  const ivyPalette = [
-    [0.46, 0.15, 0.12], [0.38, 0.11, 0.11], [0.52, 0.22, 0.13], [0.30, 0.09, 0.10],
-    [0.60, 0.30, 0.10], [0.26, 0.22, 0.10],
-  ];
+  const ivyPalette = [0x7a2a1c, 0x5e1a1a, 0x6b2418, 0x4a1616, 0xa8642a, 0x3a3a20].map((h) => new THREE.Color(h));
   interface Patch { bx: number; bz: number; nx: number; nz: number; tx: number; tz: number; u0: number; u1: number; top: number; bot: number; dens: number }
   const patches: Patch[] = [
-    { bx: -9.94, bz: 0, nx: 1, nz: 0, tx: 0, tz: 1, u0: 3.5, u1: 9, top: 4.7, bot: 0.3, dens: 0.9 },
-    { bx: -9.94, bz: 0, nx: 1, nz: 0, tx: 0, tz: 1, u0: 17, u1: 23, top: 4.9, bot: 0.5, dens: 0.9 },
-    { bx: -9.94, bz: 0, nx: 1, nz: 0, tx: 0, tz: 1, u0: 24, u1: 27.5, top: 4.5, bot: 1.0, dens: 0.85 },
-    { bx: 0, bz: 0.56, nx: 0, nz: 1, tx: 1, tz: 0, u0: -7.5, u1: -3.6, top: 4.2, bot: 0.4, dens: 0.85 },
-    { bx: 9.94, bz: 0, nx: -1, nz: 0, tx: 0, tz: 1, u0: 18, u1: 24.5, top: 5.0, bot: 2.0, dens: 0.8 },
-    { bx: 12.94, bz: 0, nx: -1, nz: 0, tx: 0, tz: 1, u0: 9, u1: 14, top: 6.6, bot: 3.2, dens: 0.55 },
+    { bx: -9.94, bz: 0, nx: 1, nz: 0, tx: 0, tz: 1, u0: 3.5, u1: 9, top: 4.15, bot: 0.3, dens: 0.9 },
+    { bx: -9.94, bz: 0, nx: 1, nz: 0, tx: 0, tz: 1, u0: 17, u1: 23, top: 4.15, bot: 0.4, dens: 0.9 },
+    { bx: -9.94, bz: 0, nx: 1, nz: 0, tx: 0, tz: 1, u0: 24, u1: 27.5, top: 4.15, bot: 1.0, dens: 0.85 },
+    { bx: 0, bz: 0.56, nx: 0, nz: 1, tx: 1, tz: 0, u0: -7.5, u1: -3.6, top: 4.15, bot: 0.4, dens: 0.85 },
+    { bx: 9.94, bz: 0, nx: -1, nz: 0, tx: 0, tz: 1, u0: 18, u1: 24.5, top: 4.95, bot: 1.8, dens: 0.8 },
+    { bx: 12.94, bz: 0, nx: -1, nz: 0, tx: 0, tz: 1, u0: 9, u1: 14, top: 6.9, bot: 2.6, dens: 0.6 },
   ];
   const ivyPos: THREE.Vector3[] = [];
   const ivyQuat: THREE.Quaternion[] = [];
@@ -443,12 +453,12 @@ export function buildStaticLevel(m: Materials): StaticLevel {
   const eTmp = new THREE.Euler();
   for (const pa of patches) {
     const yaw = Math.atan2(pa.nx, pa.nz);
-    const stems = Math.max(2, Math.ceil((pa.u1 - pa.u0) / 0.7));
+    const stems = Math.max(3, Math.ceil((pa.u1 - pa.u0) / 0.35));
     for (let s = 0; s < stems; s++) {
       const uBase = pa.u0 + ((s + 0.5) * (pa.u1 - pa.u0)) / stems + (ivyR() - 0.5) * 0.3;
       const phase = ivyR() * 6.28, amp = 0.22 + ivyR() * 0.35;
       let step = 0;
-      for (let y = pa.top; y > pa.bot; y -= 0.11) {
+      for (let y = pa.top; y > pa.bot; y -= 0.085) {
         const u = uBase + Math.sin(y * 1.7 + phase) * amp + (ivyR() - 0.5) * 0.1;
         const px = pa.bx + pa.tx * u, pz = pa.bz + pa.tz * u;
         // 藤茎段（隔步放置，合并进 decal）
@@ -456,17 +466,17 @@ export function buildStaticLevel(m: Materials): StaticLevel {
           decal.geo(bark, new THREE.BoxGeometry(0.022, 0.17, 0.022), px + pa.nx * 0.03, y, pz + pa.nz * 0.03, yaw, (ivyR() - 0.5) * 0.3, (ivyR() - 0.5) * 0.3);
         }
         step++;
-        const n = ivyR() < pa.dens ? 2 : 1;
+        const n = ivyR() < pa.dens ? 4 : 2;
         for (let l = 0; l < n; l++) {
-          const du = (ivyR() - 0.5) * 0.36, dv = (ivyR() - 0.5) * 0.22, out = 0.04 + ivyR() * 0.11;
-          ivyPos.push(new THREE.Vector3(px + pa.tx * du + pa.nx * out, y + dv, pz + pa.tz * du + pa.nz * out));
+          const du = (ivyR() - 0.5) * 0.44, dv = (ivyR() - 0.5) * 0.22, out = 0.04 + ivyR() * 0.11;
+          ivyPos.push(new THREE.Vector3(px + pa.tx * du + pa.nx * out, y + dv, -(pz + pa.tz * du + pa.nz * out)));
           eTmp.set((ivyR() - 0.5) * 1.5, (ivyR() - 0.5) * 1.5, ivyR() * Math.PI * 2);
           qTmp.setFromEuler(eTmp);
           ivyQuat.push(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), yaw).multiply(qTmp));
-          ivyScale.push(0.09 + ivyR() * 0.09);
-          const c = ivyPalette[ivyR() < 0.12 ? 4 : ivyR() < 0.2 ? 5 : Math.floor(ivyR() * 4)];
-          const k = 0.75 + ivyR() * 0.5;
-          ivyCol.push(new THREE.Color(c[0] * k, c[1] * k, c[2] * k));
+          ivyScale.push(0.17 + ivyR() * 0.1);
+          const c = ivyPalette[ivyR() < 0.1 ? 4 : ivyR() < 0.18 ? 5 : Math.floor(ivyR() * 4)];
+          const k = 1.0 + ivyR() * 0.6;
+          ivyCol.push(c.clone().multiplyScalar(k));
         }
       }
     }
@@ -479,44 +489,106 @@ export function buildStaticLevel(m: Materials): StaticLevel {
       ivyMesh.setMatrixAt(i, mm);
       ivyMesh.setColorAt(i, ivyCol[i]);
     }
-    ivyMesh.castShadow = true;
+    ivyMesh.castShadow = false;
     ivyMesh.receiveShadow = true;
     group.add(ivyMesh);
   }
 
   // 石板缝草丛：实例化十字面片，墙脚 / 井台周围 / 板缝，数量提高
   const grassMat = new THREE.MeshStandardMaterial({ map: grassTexture(), roughness: 1, side: THREE.DoubleSide, alphaTest: 0.4 });
+  const gr = drng(211);
+  const grassPos: [number, number, number][] = [];
+  const grassH: number[] = [];
+  const pushGrass = (x: number, z: number): void => {
+    grassPos.push([x, 0, z]);
+    grassH.push(0.12 + gr() * 0.16);
+  };
+  // 石板缝（0.75 m 错缝网格）：草丛主要长在缝里
+  for (let i = 0; i < 150; i++) {
+    const row = 1 + Math.floor(gr() * 36);
+    const z = row * 0.75 + (gr() - 0.5) * 0.12;
+    const off = (row % 2) * 0.375;
+    const x = (-13 + Math.floor(gr() * 27)) * 0.75 + off + (gr() - 0.5) * 0.12;
+    if (x < -9.6 || x > 9.6 || z < 0.8 || z > 28.2) continue;
+    pushGrass(x, z);
+  }
+  for (let i = 0; i < 60; i++) pushGrass(-9.55 + gr() * 0.5, 1 + gr() * 27);
+  for (let i = 0; i < 50; i++) pushGrass(9.0 + gr() * 0.55, 1 + gr() * 27);
+  for (let i = 0; i < 30; i++) pushGrass(-9 + gr() * 18, 0.65 + gr() * 0.5);
+  for (let i = 0; i < 24; i++) pushGrass(-9 + gr() * 18, 27.7 + gr() * 0.6);
+  for (let i = 0; i < 50; i++) {
+    const a = gr() * Math.PI * 2, rr = 1.45 + gr() * 0.9;
+    pushGrass(WELL.x + Math.cos(a) * rr, WELL.z + Math.sin(a) * rr);
+  }
+  for (let i = 0; i < 12; i++) pushGrass(-8.5 + gr() * 17, 2 + gr() * 25);
+  const grassCol = (): THREE.Color => {
+    const gc = [[0.85, 0.88, 0.6], [1.0, 0.98, 0.68], [0.72, 0.8, 0.52], [1.0, 0.94, 0.62]];
+    const c = gc[Math.floor(gr() * gc.length)];
+    return new THREE.Color(c[0], c[1], c[2]);
+  };
+  // 兜底：十字 alpha 面片草丛（离线时）
   const gp1 = new THREE.PlaneGeometry(1, 1.2); gp1.translate(0, 0.6, 0);
   const gp2 = gp1.clone(); gp2.rotateY(HALF_PI);
   const grassGeo = mergeGeometries([gp1, gp2], false)!;
-  const gr = drng(211);
-  const grassPos: [number, number, number][] = [];
-  for (let i = 0; i < 70; i++) grassPos.push([-9.55 + gr() * 0.5, 0, 1 + gr() * 27]);
-  for (let i = 0; i < 60; i++) grassPos.push([9.0 + gr() * 0.55, 0, 1 + gr() * 27]);
-  for (let i = 0; i < 40; i++) grassPos.push([-9 + gr() * 18, 0, 0.65 + gr() * 0.5]);
-  for (let i = 0; i < 30; i++) grassPos.push([-9 + gr() * 18, 0, 27.7 + gr() * 0.6]);
-  for (let i = 0; i < 55; i++) {
-    const a = gr() * Math.PI * 2, rr = 1.45 + gr() * 0.9;
-    grassPos.push([WELL.x + Math.cos(a) * rr, 0, WELL.z + Math.sin(a) * rr]);
-  }
-  for (let i = 0; i < 45; i++) grassPos.push([-8.5 + gr() * 17, 0, 2 + gr() * 25]);
   const grassMesh = new THREE.InstancedMesh(grassGeo, grassMat, grassPos.length);
+  const grassXf: THREE.Matrix4[] = [];
   {
     const mm = new THREE.Matrix4(), qq = new THREE.Quaternion(), ss = new THREE.Vector3();
-    const gc = [[0.30, 0.34, 0.16], [0.42, 0.40, 0.20], [0.24, 0.30, 0.14], [0.48, 0.44, 0.24]];
     for (let i = 0; i < grassPos.length; i++) {
-      const s = 0.22 + gr() * 0.3;
+      const s = grassH[i] / 1.2;
       qq.setFromAxisAngle(new THREE.Vector3(0, 1, 0), gr() * Math.PI);
-      ss.set(s, s * (0.8 + gr() * 0.5), s);
+      ss.set(s, s, s);
       mm.compose(new THREE.Vector3(grassPos[i][0], grassPos[i][1], -grassPos[i][2]), qq, ss);
+      grassXf.push(mm.clone());
       grassMesh.setMatrixAt(i, mm);
-      const c = gc[Math.floor(gr() * gc.length)];
-      grassMesh.setColorAt(i, new THREE.Color(c[0], c[1], c[2]));
+      grassMesh.setColorAt(i, grassCol());
     }
     grassMesh.castShadow = true;
     grassMesh.receiveShadow = true;
     group.add(grassMesh);
   }
+  // 真实草丛模型（Poly Haven grass_medium_01，CC0）：合并几何后实例化，原位替换兜底
+  trackPending(new Promise<void>((resolve) => {
+    new GLTFLoader().load('models/grass_medium_01/grass_medium_01.gltf', (gltf) => {
+      const geos: THREE.BufferGeometry[] = [];
+      let mat: THREE.Material | null = null;
+      gltf.scene.updateMatrixWorld(true);
+      gltf.scene.traverse((o) => {
+        const me = o as THREE.Mesh;
+        if (me.isMesh) {
+          const g = me.geometry.clone();
+          g.applyMatrix4(me.matrixWorld);
+          geos.push(g.index ? g.toNonIndexed() : g);
+          if (!mat) mat = me.material as THREE.Material;
+        }
+      });
+      if (!geos.length || !mat) { resolve(); return; }
+      const merged = mergeGeometries(geos, false);
+      if (!merged) { resolve(); return; }
+      merged.computeBoundingBox();
+      const h0 = merged.boundingBox!.max.y - merged.boundingBox!.min.y || 1;
+      merged.translate(0, -merged.boundingBox!.min.y, 0);
+      const gm = mat as THREE.MeshStandardMaterial;
+      gm.alphaTest = 0.4;
+      gm.side = THREE.DoubleSide;
+      gm.roughness = 0.9;
+      const im = new THREE.InstancedMesh(merged, gm, grassXf.length);
+      const mm = new THREE.Matrix4(), sc = new THREE.Matrix4();
+      for (let i = 0; i < grassXf.length; i++) {
+        // 兜底矩阵的缩放是 h/1.2；模型按 h/h0 重新缩放
+        const k = (grassH[i] / h0) / (grassH[i] / 1.2);
+        sc.makeScale(k, k, k);
+        mm.copy(grassXf[i]).multiply(sc);
+        im.setMatrixAt(i, mm);
+        im.setColorAt(i, grassCol());
+      }
+      im.castShadow = true;
+      im.receiveShadow = true;
+      group.add(im);
+      group.remove(grassMesh);
+      resolve();
+    }, undefined, () => resolve());
+  }));
 
   // 枯木（ENV-07）：递归分枝，探出墙头
   const branch = (x: number, y: number, z: number, len: number, ang: number, tilt: number, depth: number): void => {
@@ -534,8 +606,29 @@ export function buildStaticLevel(m: Materials): StaticLevel {
   for (const [bx, bz] of [[8.5, 22], [-8, 3.5]]) {
     for (let i = 0; i < 6; i++) {
       const s = 0.2 + ((i * 31) % 10) / 30;
-      decal.geo(m.stone, new THREE.DodecahedronGeometry(s, 0), bx + ((i * 53) % 10) / 11, s * 0.5, bz + ((i * 71) % 10) / 11, i);
+      rubbleXf.push({ x: bx + ((i * 53) % 10) / 11, y: s * 0.5, z: bz + ((i * 71) % 10) / 11, s, r: i + 3 });
     }
+  }
+  // 瓦砾实例化
+  {
+    const geo = scaleUV(new THREE.DodecahedronGeometry(1, 0), 1 / 1.2);
+    const im = new THREE.InstancedMesh(geo, m.stone, rubbleXf.length);
+    const mm = new THREE.Matrix4(), qq = new THREE.Quaternion(), ee = new THREE.Euler();
+    rubbleXf.forEach((t, i) => {
+      ee.set(t.r * 0.7, t.r * 1.3, t.r * 0.4);
+      qq.setFromEuler(ee);
+      mm.compose(new THREE.Vector3(t.x, t.y, -t.z), qq, new THREE.Vector3(t.s, t.s * 0.8, t.s));
+      im.setMatrixAt(i, mm);
+      const k = 0.5 + ((i * 29) % 10) / 30;
+      im.setColorAt(i, new THREE.Color(k, k, k * 1.04));
+    });
+    im.castShadow = im.receiveShadow = true;
+    group.add(im);
+  }
+  // 铁件下方石面的锈色流痕（故事层）
+  const rustMat = new THREE.MeshStandardMaterial({ map: rustTexture(), roughness: 0.9, transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2 });
+  for (const [x, z, y, h, rot] of [[-9.95, 14, 1.95, 1.1, HALF_PI], [9.95, 10, 1.5, 1.0, -HALF_PI], [9.95, 20, 1.5, 1.0, -HALF_PI], [9.95, 5.1, 1.4, 1.2, -HALF_PI], [9.95, 6.9, 1.4, 1.2, -HALF_PI]] as [number, number, number, number, number][]) {
+    decal.geo(rustMat, new THREE.PlaneGeometry(0.5, h), x, y, z, rot);
   }
 
   // —— 陈设点缀：木桶（鼓腹 + 铁箍，glTF 模型替换）、断柱、壁挂灯座、麻袋、货箱搭布 ——
@@ -600,18 +693,23 @@ export function buildStaticLevel(m: Materials): StaticLevel {
     leafPos.push([WELL.x + Math.cos(a) * rr, WELL.z + Math.sin(a) * rr]);
   }
   for (let i = 0; i < 60; i++) leafPos.push([-9 + lr() * 18, 1 + lr() * 27]);
-  const leafMesh = new THREE.InstancedMesh(new THREE.PlaneGeometry(1, 1), leafMat, leafPos.length);
+  const leafGeo = new THREE.PlaneGeometry(1, 1, 3, 3);
+  {
+    const lp = leafGeo.attributes.position as THREE.BufferAttribute;
+    for (let i = 0; i < lp.count; i++) lp.setZ(i, 0.12 * lp.getX(i) * lp.getX(i) + 0.08 * lp.getY(i) * lp.getY(i));
+    leafGeo.computeVertexNormals();
+  }
+  const leafMesh = new THREE.InstancedMesh(leafGeo, leafMat, leafPos.length);
   {
     const mm = new THREE.Matrix4(), qq = new THREE.Quaternion(), ee = new THREE.Euler();
-    const lc = [[0.62, 0.30, 0.10], [0.50, 0.22, 0.08], [0.42, 0.18, 0.07], [0.68, 0.40, 0.14]];
+    const lc = [0xa8642a, 0x7a2a1c, 0x5e1a1a, 0x8a4a20].map((h) => new THREE.Color(h));
     for (let i = 0; i < leafPos.length; i++) {
       const s = 0.12 + lr() * 0.15;
       ee.set(-HALF_PI + (lr() - 0.5) * 0.3, 0, lr() * Math.PI * 2);
       qq.setFromEuler(ee);
       mm.compose(new THREE.Vector3(leafPos[i][0], 0.02 + lr() * 0.02, -leafPos[i][1]), qq, new THREE.Vector3(s, s, s));
       leafMesh.setMatrixAt(i, mm);
-      const c = lc[Math.floor(lr() * lc.length)];
-      leafMesh.setColorAt(i, new THREE.Color(c[0], c[1], c[2]));
+      leafMesh.setColorAt(i, lc[Math.floor(lr() * lc.length)].clone().multiplyScalar(0.7 + lr() * 0.6));
     }
     leafMesh.receiveShadow = true;
     group.add(leafMesh);
