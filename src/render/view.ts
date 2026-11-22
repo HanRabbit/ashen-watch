@@ -28,7 +28,7 @@ interface Rig extends SkyState {
   fog: number; fogNear: number; fogFar: number;
   fogDistMax: number; fogHeightDensity: number; fogHeightFalloff: number; fogHeightBase: number;
   hemiSky: number; hemiGround: number; hemi: number;
-  sunI: number; shadowI: number; shadowRadius: number; rimI: number; scatter: number;
+  sunI: number; shadowI: number; shadowRadius: number; rimI: number; scatter: number; fillI: number;
   exposure: number; window: number;
   envI: number; bloom: number; vignette: number; grain: number; sat: number; contrast: number;
   tintS: number; tintH: number; glowStrength: number;
@@ -37,8 +37,8 @@ interface Rig extends SkyState {
 const RIGS: Record<'morning' | 'day' | 'dusk' | 'night', Rig> = {
   morning: {
     fog: 0x939ba3, fogNear: 30, fogFar: 140, fogDistMax: 0.84, fogHeightDensity: 0.009, fogHeightFalloff: 0.12, fogHeightBase: 0.0,
-    hemiSky: 0xcdd5db, hemiGround: 0x575049, hemi: 2.1,
-    sun: 0xffe2c0, sunI: 2.2, shadowI: 0.45, shadowRadius: 5, rimI: 0.25, scatter: 0.12, sunDir: [-0.75, 0.5, -0.35], exposure: 1.0, window: 0.9,
+    hemiSky: 0xcdd5db, hemiGround: 0x868d95, hemi: 2.1,
+    sun: 0xffe2c0, sunI: 2.2, shadowI: 0.45, shadowRadius: 5, rimI: 0.25, scatter: 0.12, fillI: 0.45, sunDir: [-0.75, 0.5, -0.35], exposure: 1.0, window: 0.9,
     zenith: 0xa8b4c0, horizon: 0xd6dce1, ground: 0x4a4640,
     cloudLit: 0xc8d2da, cloudDark: 0x6a7480, cover: 0.75, rim: 0.22,
     discSize: 0.0, discI: 0, glow: 0.2, stars: 0,
@@ -47,8 +47,8 @@ const RIGS: Record<'morning' | 'day' | 'dusk' | 'night', Rig> = {
   day: {
     // 阴天：雾色比天空 horizon 略暗，远景被分层吞没但留轮廓（圣经 §4.7/§6 Distant）
     fog: 0x84909c, fogNear: 32, fogFar: 150, fogDistMax: 0.8, fogHeightDensity: 0.008, fogHeightFalloff: 0.12, fogHeightBase: 0.0,
-    hemiSky: 0xc8d2da, hemiGround: 0x5c564e, hemi: 3.5,
-    sun: 0xeef2f5, sunI: 1.8, shadowI: 0.25, shadowRadius: 7, rimI: 0.3, scatter: 0.03, sunDir: [-0.3, 0.85, -0.42], exposure: 1.0, window: 1.0,
+    hemiSky: 0xc8d2da, hemiGround: 0x8f97a0, hemi: 3.5,
+    sun: 0xeef2f5, sunI: 1.8, shadowI: 0.25, shadowRadius: 7, rimI: 0.3, scatter: 0.03, fillI: 0.55, sunDir: [-0.3, 0.85, -0.42], exposure: 1.0, window: 1.0,
     zenith: 0xa8b4c0, horizon: 0xdfe4e8, ground: 0x504c46,
     cloudLit: 0xc8d2da, cloudDark: 0x5d6874, cover: 0.75, rim: 0.15,
     discSize: 0.0, discI: 0, glow: 0.25, stars: 0,
@@ -57,7 +57,7 @@ const RIGS: Record<'morning' | 'day' | 'dusk' | 'night', Rig> = {
   dusk: {
     fog: 0x54505c, fogNear: 24, fogFar: 120, fogDistMax: 0.8, fogHeightDensity: 0.011, fogHeightFalloff: 0.1, fogHeightBase: 0.0,
     hemiSky: 0x8a92a6, hemiGround: 0x3b332d, hemi: 1.1,
-    sun: 0xe09a62, sunI: 1.6, shadowI: 0.5, shadowRadius: 4, rimI: 0.35, scatter: 0.25, sunDir: [0.8, 0.2, 0.3], exposure: 1.0, window: 0.45,
+    sun: 0xe09a62, sunI: 1.6, shadowI: 0.5, shadowRadius: 4, rimI: 0.35, scatter: 0.25, fillI: 0.2, sunDir: [0.8, 0.2, 0.3], exposure: 1.0, window: 0.45,
     zenith: 0x39445a, horizon: 0x9a7260, ground: 0x332c28,
     cloudLit: 0xb08a78, cloudDark: 0x4a4452, cover: 0.7, rim: 0.5,
     discSize: 0.035, discI: 2.6, glow: 0.7, stars: 0.18,
@@ -67,7 +67,7 @@ const RIGS: Record<'morning' | 'day' | 'dusk' | 'night', Rig> = {
     // 月光从画面右上方来（与天空月盘同向），冷蓝 #7f9ccf；暗部保留约 20–30% 可读亮度。
     fog: 0x0f1725, fogNear: 22, fogFar: 110, fogDistMax: 0.72, fogHeightDensity: 0.012, fogHeightFalloff: 0.1, fogHeightBase: 0.0,
     hemiSky: 0x7d90b4, hemiGround: 0x2a3140, hemi: 3.5,
-    sun: 0x7f9ccf, sunI: 1.1, shadowI: 0.5, shadowRadius: 3, rimI: 0.45, scatter: 0.5, sunDir: [0.72, 0.42, -0.35], exposure: 1.15, window: 0.07,
+    sun: 0x7f9ccf, sunI: 1.1, shadowI: 0.5, shadowRadius: 3, rimI: 0.45, scatter: 0.5, fillI: 0.0, sunDir: [0.72, 0.42, -0.35], exposure: 1.15, window: 0.07,
     zenith: 0x0a1322, horizon: 0x1c2a40, ground: 0x0a0e15,
     cloudLit: 0x8093b0, cloudDark: 0x0a1120, cover: 0.62, rim: 0.9,
     discSize: 0.026, discI: 5.5, glow: 0.5, stars: 1,
@@ -76,7 +76,7 @@ const RIGS: Record<'morning' | 'day' | 'dusk' | 'night', Rig> = {
 };
 
 const COLOR_KEYS = ['fog', 'hemiSky', 'hemiGround', 'sun', 'zenith', 'horizon', 'ground', 'cloudLit', 'cloudDark', 'tintS', 'tintH'] as const;
-const NUM_KEYS = ['fogNear', 'fogFar', 'fogDistMax', 'fogHeightDensity', 'fogHeightFalloff', 'fogHeightBase', 'hemi', 'sunI', 'shadowI', 'shadowRadius', 'rimI', 'scatter', 'exposure', 'window', 'discSize', 'discI', 'glow', 'stars', 'cover', 'rim', 'envI', 'bloom', 'vignette', 'grain', 'sat', 'contrast', 'glowStrength'] as const;
+const NUM_KEYS = ['fogNear', 'fogFar', 'fogDistMax', 'fogHeightDensity', 'fogHeightFalloff', 'fogHeightBase', 'hemi', 'sunI', 'shadowI', 'shadowRadius', 'rimI', 'scatter', 'fillI', 'exposure', 'window', 'discSize', 'discI', 'glow', 'stars', 'cover', 'rim', 'envI', 'bloom', 'vignette', 'grain', 'sat', 'contrast', 'glowStrength'] as const;
 
 
 export interface RenderPose { x: number; z: number; ghosts: { x: number; z: number }[] }
@@ -103,6 +103,9 @@ export class SceneView {
   private post: PostPipeline;
   private atmo: THREE.Object3D[] = [];
   private rim = new THREE.DirectionalLight(0xffffff, 0);
+  // 阴天方向性补光（圣经 §7 阴影面可读性）：不投影、冷灰、近水平自南向北，
+  // 只抬竖直背光面（北墙内面/墙脚陈设朝镜头侧），对朝上水平地面贡献≈0，避免推白地面。
+  private fill = new THREE.DirectionalLight(0xc8d2da, 0);
   private camFwd = new THREE.Vector3();
   private tmpV = new THREE.Vector3();
   private time = 0;
@@ -161,7 +164,8 @@ export class SceneView {
     this.sun.shadow.radius = 4;
     this.sun.shadow.blurSamples = 8;
     this.rim.castShadow = false;
-    this.scene.add(this.hemi, this.sun, this.sun.target, this.rim, this.rim.target);
+    this.fill.castShadow = false;
+    this.scene.add(this.hemi, this.sun, this.sun.target, this.rim, this.rim.target, this.fill, this.fill.target);
 
     // 图像照明：用同一天空着色器烘两张环境图（昼/夜），给 PBR 材质提供柔和环境光与金属反射。
     // 烘焙时压低日/月盘：方向光已承担 key，IBL 里再留高亮月盘会让湿石缝镜面反射过曝成白线。
@@ -325,6 +329,10 @@ export class SceneView {
     this.camFwd.normalize();
     this.rim.target.position.set(p.x, 0, -p.z);
     this.rim.position.set(p.x + this.camFwd.x * 40, this.camFwd.y * 40, -p.z + this.camFwd.z * 40);
+    // 阴天补光：近水平自南向北（y 分量 0），只抬竖直背光面，水平地面不受影响
+    this.fill.intensity = r.fillI;
+    this.fill.target.position.set(p.x, 1.0, -p.z);
+    this.fill.position.set(p.x + 10, 1.0, -p.z + 38.8);
 
     this.level.windowMat.emissiveIntensity = r.window;
     this.level.hearthWindowMat.emissiveIntensity = w.hearth.lit ? 1.5 : 0.03;
