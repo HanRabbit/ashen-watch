@@ -499,9 +499,11 @@ export function buildStaticLevel(m: Materials): StaticLevel {
   const gr = drng(211);
   const grassPos: [number, number, number][] = [];
   const grassH: number[] = [];
-  const pushGrass = (x: number, z: number): void => {
+  const grassEdge: boolean[] = [];
+  const pushGrass = (x: number, z: number, edge = false): void => {
     grassPos.push([x, 0, z]);
-    grassH.push(0.12 + gr() * 0.16);
+    grassH.push(edge ? 0.2 + gr() * 0.2 : 0.1 + gr() * 0.12);
+    grassEdge.push(edge);
   };
   // 石板缝（0.75 m 错缝网格）：草丛主要长在缝里
   for (let i = 0; i < 150; i++) {
@@ -512,13 +514,13 @@ export function buildStaticLevel(m: Materials): StaticLevel {
     if (x < -9.6 || x > 9.6 || z < 0.8 || z > 28.2) continue;
     pushGrass(x, z);
   }
-  for (let i = 0; i < 60; i++) pushGrass(-9.55 + gr() * 0.5, 1 + gr() * 27);
-  for (let i = 0; i < 50; i++) pushGrass(9.0 + gr() * 0.55, 1 + gr() * 27);
-  for (let i = 0; i < 30; i++) pushGrass(-9 + gr() * 18, 0.65 + gr() * 0.5);
-  for (let i = 0; i < 24; i++) pushGrass(-9 + gr() * 18, 27.7 + gr() * 0.6);
+  for (let i = 0; i < 60; i++) pushGrass(-9.55 + gr() * 0.5, 1 + gr() * 27, true);
+  for (let i = 0; i < 50; i++) pushGrass(9.0 + gr() * 0.55, 1 + gr() * 27, true);
+  for (let i = 0; i < 30; i++) pushGrass(-9 + gr() * 18, 0.65 + gr() * 0.5, true);
+  for (let i = 0; i < 24; i++) pushGrass(-9 + gr() * 18, 27.7 + gr() * 0.6, true);
   for (let i = 0; i < 50; i++) {
     const a = gr() * Math.PI * 2, rr = 1.45 + gr() * 0.9;
-    pushGrass(WELL.x + Math.cos(a) * rr, WELL.z + Math.sin(a) * rr);
+    pushGrass(WELL.x + Math.cos(a) * rr, WELL.z + Math.sin(a) * rr, true);
   }
   for (let i = 0; i < 12; i++) pushGrass(-8.5 + gr() * 17, 2 + gr() * 25);
   const grassCol = (): THREE.Color => {
@@ -547,44 +549,56 @@ export function buildStaticLevel(m: Materials): StaticLevel {
     grassMesh.receiveShadow = true;
     group.add(grassMesh);
   }
-  // 真实草丛模型（Poly Haven grass_medium_01，CC0）：合并几何后实例化，原位替换兜底
+  // 真实草丛模型（Poly Haven grass_medium_01，CC0）：gltf 里并排放着 17 个变体（共 24.7k 三角）。
+  // 按节点拆成变体、每个实例只画一个变体，每个变体一个 InstancedMesh：
+  // 石缝/空地用 tiny/small（30–830 三角），墙脚/井边用 mid（1.3k–2.3k），large 不用。
   trackPending(new Promise<void>((resolve) => {
     new GLTFLoader().load('models/grass_medium_01/grass_medium_01.gltf', (gltf) => {
-      const geos: THREE.BufferGeometry[] = [];
+      const small: THREE.BufferGeometry[] = [], mid: THREE.BufferGeometry[] = [];
       let mat: THREE.Material | null = null;
-      gltf.scene.updateMatrixWorld(true);
       gltf.scene.traverse((o) => {
         const me = o as THREE.Mesh;
-        if (me.isMesh) {
-          const g = me.geometry.clone();
-          g.applyMatrix4(me.matrixWorld);
-          geos.push(g.index ? g.toNonIndexed() : g);
-          if (!mat) mat = me.material as THREE.Material;
-        }
+        if (!me.isMesh) return;
+        const bucket = /_(tiny|small)_/.test(me.name) ? small : /_mid_/.test(me.name) ? mid : null;
+        if (!bucket) return;
+        const g = me.geometry.clone();
+        g.computeBoundingBox();
+        const bb = g.boundingBox!;
+        g.translate(-(bb.min.x + bb.max.x) / 2, -bb.min.y, -(bb.min.z + bb.max.z) / 2);
+        g.computeBoundingBox();
+        bucket.push(g);
+        if (!mat) mat = me.material as THREE.Material;
       });
-      if (!geos.length || !mat) { resolve(); return; }
-      const merged = mergeGeometries(geos, false);
-      if (!merged) { resolve(); return; }
-      merged.computeBoundingBox();
-      const h0 = merged.boundingBox!.max.y - merged.boundingBox!.min.y || 1;
-      merged.translate(0, -merged.boundingBox!.min.y, 0);
+      if (!small.length || !mid.length || !mat) { resolve(); return; }
       const gm = mat as THREE.MeshStandardMaterial;
       gm.alphaTest = 0.4;
       gm.side = THREE.DoubleSide;
       gm.roughness = 0.9;
-      const im = new THREE.InstancedMesh(merged, gm, grassXf.length);
-      const mm = new THREE.Matrix4(), sc = new THREE.Matrix4();
+      const variants = [...small, ...mid];
+      const picks: number[][] = variants.map(() => []);
       for (let i = 0; i < grassXf.length; i++) {
-        // 兜底矩阵的缩放是 h/1.2；模型按 h/h0 重新缩放
-        const k = (grassH[i] / h0) / (grassH[i] / 1.2);
-        sc.makeScale(k, k, k);
-        mm.copy(grassXf[i]).multiply(sc);
-        im.setMatrixAt(i, mm);
-        im.setColorAt(i, grassCol());
+        const pool = grassEdge[i] ? mid : small;
+        const base = grassEdge[i] ? small.length : 0;
+        picks[base + Math.floor(gr() * pool.length)].push(i);
       }
-      im.castShadow = true;
-      im.receiveShadow = true;
-      group.add(im);
+      const mm = new THREE.Matrix4(), sc = new THREE.Matrix4();
+      variants.forEach((geo, v) => {
+        if (!picks[v].length) return;
+        const h0 = geo.boundingBox!.max.y - geo.boundingBox!.min.y || 1;
+        const im = new THREE.InstancedMesh(geo, gm, picks[v].length);
+        picks[v].forEach((i, k) => {
+          // 兜底矩阵的缩放是 h/1.2；模型按 h/h0 重新缩放
+          const s = 1.2 / h0;
+          sc.makeScale(s, s, s);
+          mm.copy(grassXf[i]).multiply(sc);
+          im.setMatrixAt(k, mm);
+          im.setColorAt(k, grassCol());
+        });
+        im.castShadow = false; // 草丛太小，阴影贴图里只有噪点；接触暗部交给 GTAO
+        im.receiveShadow = true;
+        im.computeBoundingSphere();
+        group.add(im);
+      });
       group.remove(grassMesh);
       resolve();
     }, undefined, () => resolve());
