@@ -121,7 +121,7 @@ const WEAR_BODY = /* glsl */`
     float groove = smoothstep(0.07, 0.0, abs(wp.y - uWearRimY)) * smoothstep(1.35, 0.95, dc);
     diffuseColor.rgb *= 1.0 - groove * 0.35;
     roughnessFactor = mix(roughnessFactor, 0.55, groove);
-  } else {
+  } else if (uWearKind < 3.5) {
     // 火与烟：热源上方熏黑（压明度、保持高 rough）+ 铁锈
     float soot = smoothstep(0.35, 0.8, wearFbm(wp.xz * 3.0 + wp.y * 1.2 + sd)) * smoothstep(uWearSootY, uWearSootY + 0.9, wp.y);
     diffuseColor.rgb *= 1.0 - soot * 0.55;
@@ -129,11 +129,17 @@ const WEAR_BODY = /* glsl */`
     diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.106, 0.045, 0.017), rust * 0.6);
     roughnessFactor = mix(roughnessFactor, 0.88, rust);
     metalnessFactor = mix(metalnessFactor, 0.25, rust);
+  } else {
+    // 布：搭布垂坠下摆潮湿发黑（只在指定箱顶周边，避免影响地毯等共用件）
+    float dc2 = distance(wp.xz, uWearCenter);
+    float damp = smoothstep(uWearRimY - 0.12, uWearRimY - 0.5, wp.y) * smoothstep(1.1, 0.6, dc2);
+    diffuseColor.rgb *= mix(1.0, 0.5, damp);
+    roughnessFactor = mix(roughnessFactor, 0.98, damp);
   }
 }
 `;
-export interface WearOpts { kind: 'wood' | 'iron' | 'stone' | 'soot'; seed?: number; center?: [number, number]; rimY?: number; sootY?: number; }
-const wearKindId = { wood: 0, iron: 1, stone: 2, soot: 3 };
+export interface WearOpts { kind: 'wood' | 'iron' | 'stone' | 'soot' | 'cloth'; seed?: number; center?: [number, number]; rimY?: number; sootY?: number; }
+const wearKindId = { wood: 0, iron: 1, stone: 2, soot: 3, cloth: 4 };
 /** 给材质叠加上圣经 5.2 的痕迹层（共享材质只注入一次）。 */
 export function applyWear(mat: THREE.MeshStandardMaterial, o: WearOpts): void {
   if (mat.userData.awWear) return;

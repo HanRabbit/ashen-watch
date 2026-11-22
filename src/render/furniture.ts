@@ -39,7 +39,7 @@ function crateBox(b: Batch, v: Variants, x0: number, z0: number, x1: number, z1:
 /** 搭在箱顶的麻布：顶面 + 垂坠褶皱 + 破边 + 底部潮湿深色（顶点色），concept/03 左下。 */
 function drapedCloth(cx: number, cz: number, top: number, w: number, d: number, hangE: number, hangS: number): THREE.BufferGeometry {
   const NX = 14, NZ = 14;
-  const pos: number[] = [], uv: number[] = [], col: number[] = [], idx: number[] = [];
+  const pos: number[] = [], uv: number[] = [], idx: number[] = [];
   const rnd = (i: number): number => { const x = Math.sin(i * 91.7) * 43758.5453; return x - Math.floor(x); };
   for (let iz = 0; iz <= NZ; iz++) {
     const hS = hangS * (0.7 + 0.6 * rnd(iz * 3 + 1)) * (rnd(iz * 7 + 2) > 0.82 ? 0.45 : 1);
@@ -57,9 +57,6 @@ function drapedCloth(cx: number, cz: number, top: number, w: number, d: number, 
       const z = cz + Math.min(Math.max(pz, 0), d) + (pz > d ? 0.02 : pz < 0 ? -0.02 : 0);
       pos.push(x, y, z);
       uv.push(u * 2, v * 2);
-      const damp = Math.min(1, drop / 0.26);
-      const shade = 1 - damp * 0.3 - rnd(ix * 13 + iz) * 0.06;
-      col.push(shade, shade * 0.97, shade * 0.92);
     }
   }
   for (let iz = 0; iz < NZ; iz++) for (let ix = 0; ix < NX; ix++) {
@@ -69,7 +66,6 @@ function drapedCloth(cx: number, cz: number, top: number, w: number, d: number, 
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
   geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
-  geo.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
   geo.setIndex(idx);
   geo.computeVertexNormals();
   return geo;
@@ -96,74 +92,35 @@ function sootTexture(): THREE.CanvasTexture {
   return t;
 }
 
-/** 褪色酒红长旗：燕尾破边 + 城堡徽记 + 竖纹褪色 + 底部潮湿（圣经 4.3 / concept/02、03）。 */
-function bannerTexture(seed: number): THREE.CanvasTexture {
-  const W = 256, H = 512;
-  const c = document.createElement('canvas');
-  c.width = W; c.height = H;
-  const g = c.getContext('2d')!;
-  let s = seed;
-  const r = (): number => { s = (s * 16807) % 2147483647; return s / 2147483647; };
-  g.fillStyle = '#5b1f24'; g.fillRect(0, 0, W, H);
-  // 竖向褪色条带
-  for (let i = 0; i < 26; i++) {
-    const x = r() * W, w = 6 + r() * 22;
-    g.fillStyle = `rgba(${120 + r() * 40 | 0},${40 + r() * 18 | 0},${44 + r() * 16 | 0},${0.08 + r() * 0.14})`;
-    g.fillRect(x, 0, w, H);
-  }
-  // 顶部晒白、底部潮湿发黑
-  const grd = g.createLinearGradient(0, 0, 0, H);
-  grd.addColorStop(0, 'rgba(190,170,150,0.16)');
-  grd.addColorStop(0.45, 'rgba(0,0,0,0)');
-  grd.addColorStop(1, 'rgba(10,8,8,0.5)');
-  g.fillStyle = grd; g.fillRect(0, 0, W, H);
-  // 徽记：城堡剪影（concept/02 门房旗）
-  g.fillStyle = 'rgba(200,190,170,0.5)';
-  g.beginPath();
-  g.moveTo(88, 250); g.lineTo(88, 170); g.lineTo(96, 170); g.lineTo(96, 158); g.lineTo(104, 158); g.lineTo(104, 170);
-  g.lineTo(120, 170); g.lineTo(120, 140); g.lineTo(128, 128); g.lineTo(136, 140); g.lineTo(136, 170);
-  g.lineTo(152, 170); g.lineTo(152, 158); g.lineTo(160, 158); g.lineTo(160, 170); g.lineTo(168, 170); g.lineTo(168, 250);
-  g.closePath(); g.fill();
-  g.fillStyle = 'rgba(91,31,36,0.9)';
-  g.beginPath(); g.moveTo(118, 250); g.lineTo(118, 214); g.quadraticCurveTo(128, 202, 138, 214); g.lineTo(138, 250); g.closePath(); g.fill();
-  // 织纹噪点
-  for (let i = 0; i < 2600; i++) {
-    g.fillStyle = `rgba(0,0,0,${0.04 + r() * 0.1})`;
-    g.fillRect(r() * W, r() * H, 1 + r() * 2, 1 + r() * 2);
-  }
-  // 燕尾 + 破边
-  g.globalCompositeOperation = 'destination-out';
-  g.beginPath();
-  g.moveTo(0, H); g.lineTo(0, H - 8);
-  for (let x = 0; x <= W; x += 10) g.lineTo(x, H - 6 - r() * 20);
-  g.lineTo(W, H); g.closePath(); g.fill();
-  g.beginPath(); g.moveTo(W * 0.5, H * 0.78); g.lineTo(W * 0.24, H + 4); g.lineTo(W * 0.76, H + 4); g.closePath(); g.fill();
-  for (let i = 0; i < 14; i++) {
-    const y = H * (0.55 + r() * 0.45), side = r() < 0.5 ? 0 : W;
-    g.beginPath(); g.moveTo(side, y); g.lineTo(side + (side ? -1 : 1) * (4 + r() * 14), y + 6 + r() * 12); g.lineTo(side, y + 14 + r() * 16); g.closePath(); g.fill();
-  }
-  const t = new THREE.CanvasTexture(c);
-  t.colorSpace = THREE.SRGBColorSpace;
-  return t;
-}
-
 /** 挂旗：顶部铁杆 + 吊环 + 微波浪布面。原点在杆中心，布面向下垂。 */
-function makeBanner(m: Materials, w: number, h: number, seed: number): THREE.Group {
+function makeBanner(m: Materials, v: Variants, w: number, h: number, seed: number): THREE.Group {
   const g = new THREE.Group();
-  const tex = bannerTexture(seed);
-  const mat = new THREE.MeshPhysicalMaterial({
-    map: tex, color: 0xffffff, roughness: 0.95, sheen: 0.5, sheenRoughness: 0.8,
-    sheenColor: new THREE.Color(0x6a4a44), side: THREE.DoubleSide, alphaTest: 0.4,
-  });
-  const geo = new THREE.PlaneGeometry(w, h, 8, 14);
+  const geo = new THREE.PlaneGeometry(w, h, 10, 16);
   const pos = geo.attributes.position as THREE.BufferAttribute;
   for (let i = 0; i < pos.count; i++) {
     const x = pos.getX(i), y = pos.getY(i);
     const t = (h / 2 - y) / h; // 0 顶 → 1 底
-    pos.setZ(i, Math.sin(x * 4.2 + t * 5.5) * 0.035 * t + Math.sin(t * 9.0) * 0.02 * t);
+    pos.setZ(i, Math.sin(x * 4.2 + t * 5.5 + seed) * 0.035 * t + Math.sin(t * 9.0) * 0.02 * t);
+    // 燕尾：底部中央向上收尖，两角留尾
+    if (t > 0.78) {
+      const notch = (t - 0.78) / 0.22;
+      const center = 1 - Math.min(1, Math.abs(x) / (w * 0.5));
+      pos.setY(i, y + notch * center * h * 0.2);
+    }
   }
+  // 破边：删掉下摆若干三角
+  const idxArr = Array.from(geo.index!.array);
+  const keep: number[] = [];
+  for (let i = 0; i < idxArr.length; i += 3) {
+    const cy = (pos.getY(idxArr[i]) + pos.getY(idxArr[i + 1]) + pos.getY(idxArr[i + 2])) / 3;
+    const t = (h / 2 - cy) / h;
+    const cx = (pos.getX(idxArr[i]) + pos.getX(idxArr[i + 1]) + pos.getX(idxArr[i + 2])) / 3;
+    const bite = t > 0.9 && Math.sin(cx * 31 + seed * 7) > 0.55;
+    if (!bite) keep.push(idxArr[i], idxArr[i + 1], idxArr[i + 2]);
+  }
+  geo.setIndex(keep);
   geo.computeVertexNormals();
-  const cloth = new THREE.Mesh(geo, mat);
+  const cloth = new THREE.Mesh(geo, v.clothBanner);
   cloth.position.y = -h / 2 - 0.04;
   cloth.castShadow = true; cloth.receiveShadow = true;
   g.add(cloth);
@@ -186,8 +143,7 @@ export function buildFurniture(m: Materials): THREE.Group {
   const v = variants(m);
   applyWear(v.woodPlank, { kind: 'wood', seed: 31 });
   applyWear(v.woodBeam, { kind: 'wood', seed: 33 });
-  const drapeMat = m.cloth.clone();
-  drapeMat.vertexColors = true;
+  applyWear(v.clothLinen, { kind: 'cloth', center: [-4.52, -27.57], rimY: 1.17 });
   // 共享金属/织物实例（非 5.1 族类）：铜烛座与旗巾，便于按材质合批
   const bronze = new THREE.MeshStandardMaterial({ color: 0xa89060, roughness: 0.45, metalness: 1 });
   const wineCloth = new THREE.MeshPhysicalMaterial({ color: 0x5b1f24, roughness: 0.95, sheen: 0.5, sheenRoughness: 0.8, sheenColor: new THREE.Color(0x6a4a44) });
@@ -249,7 +205,7 @@ export function buildFurniture(m: Materials): THREE.Group {
         b.box(v.wallRough, hx, hz0 + 0.45, hx + 0.55, hz1 - 0.45, 0.16, 0.24); // 炉膛底
         // 尖拱券眉 + 托石 + 炉罩 mantel
         for (const sz of [-1, 1]) {
-          b.geo(v.wallTrim, tiledBox(0.8, 0.16, 0.14, 1), hx + 0.27, 1.32, -4.4 + sz * 0.42, 0, 0, sz * 0.35);
+          b.geo(v.wallTrim, tiledBox(0.16, 0.16, 0.85, 1), hx + 0.27, 1.32, -4.4 + sz * 0.42, -sz * 0.35, 0, 0);
           b.box(v.wallTrim, hx + 0.45, -4.4 + sz * 0.78 - 0.09, hx + 0.62, -4.4 + sz * 0.78 + 0.09, 1.34, 1.5);
         }
         b.box(v.wallTrim, hx, hz0 - 0.06, hx + 0.68, hz1 + 0.06, 1.5, 1.64); // mantel
@@ -387,12 +343,12 @@ export function buildFurniture(m: Materials): THREE.Group {
   }
 
   // —— 旗：东墙褪色酒红长旗 + 门房旗（统一燕尾破边） ——
-  const eastBanner = makeBanner(m, 0.95, 2.5, 171);
+  const eastBanner = makeBanner(m, v, 0.95, 2.5, 171);
   eastBanner.rotation.y = -HALF_PI;
   eastBanner.position.set(9.94, 4.1, -22.5);
   group.add(eastBanner);
-  const ghBanner = makeBanner(m, 0.85, 1.8, 293);
-  ghBanner.position.set(-1.6, 3.1, 7.94);
+  const ghBanner = makeBanner(m, v, 0.85, 1.8, 293);
+  ghBanner.position.set(-1.6, 3.1, 7.84);
   group.add(ghBanner);
 
   // 点缀：麻袋、跪凳
@@ -439,7 +395,7 @@ export function buildFurniture(m: Materials): THREE.Group {
   crateBox(b, v, -4.9, 27.2, -4.15, 27.95, 0, 0.7);
   crateBox(b, v, -4.72, 27.35, -4.3, 27.8, 0.7, 1.15);
   const drapeW = drapedCloth(-4.9, -27.95, 1.17, 0.75, 0.75, 0.5, 0.5);
-  b.geo(drapeMat, drapeW, 0, 0, 0);
+  b.geo(v.clothLinen, drapeW, 0, 0, 0);
   // 断柱与倒落的柱头
   b.geo(v.wallTrim, scaleUV(new THREE.CylinderGeometry(0.34, 0.38, 0.75, 12), 1), 7, 0.375, 24);
   b.geo(v.wallTrim, new THREE.CylinderGeometry(0.34, 0.34, 0.5, 12), 7.9, 0.34, 24.6, 0, 0, HALF_PI);
@@ -452,7 +408,7 @@ export function buildFurniture(m: Materials): THREE.Group {
   }
   // 东货箱搭布与额外麻袋
   const drapeE = drapedCloth(9.3, -10.2, 0.62, 0.7, 0.6, 0.26, 0.26);
-  b.geo(drapeMat, drapeE, 0, 0, 0);
+  b.geo(v.clothLinen, drapeE, 0, 0, 0);
   b.geo(m.cloth, new THREE.SphereGeometry(0.28, 9, 7), -9.3, 0.24, 8.6);
   b.geo(m.cloth, new THREE.SphereGeometry(0.24, 9, 7), -9.0, 0.2, 9.3);
   // 井旁空桶与篮筐（叙事物：打水的家伙什）
