@@ -150,8 +150,6 @@ export class Screens {
   private render(): void {
     const cur = this.stack[this.stack.length - 1];
     this.el.hidden = !cur;
-    // 标题/确认页把实际渲染压成月夜基调；校准页需要真实亮度，不压暗。
-    document.body.classList.toggle('ui-title', !!cur && (cur.id === 'title' || cur.id === 'confirmNew'));
     if (!cur) { this.el.innerHTML = ''; return; }
     this.el.className = cur.id === 'title' || cur.id === 'calibrate' || cur.id === 'confirmNew' ? 'title' : cur.id === 'toolbar' ? 'light' : '';
     this.el.innerHTML = this.html(cur.id, cur.arg);
