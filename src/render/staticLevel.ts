@@ -5,7 +5,7 @@ import { PROPS, RAISED_Y, WALLS, WELL } from '../sim/level';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { archHeader, archLeaf, Batch, gable } from './geom';
 import { buildFurniture } from './furniture';
-import { grassTexture, ivyLeafTexture, leafTexture, Materials, mossTexture, rustTexture, scaleUV, tiledBox, trackPending } from './materials';
+import { grassTexture, ivyLeafTexture, leadedGlass, leafTexture, Materials, mossTexture, rustTexture, scaleUV, tiledBox, trackPending } from './materials';
 
 const R = RAISED_Y;
 const HALF_PI = Math.PI / 2;
@@ -117,8 +117,18 @@ export function buildStaticLevel(m: Materials): StaticLevel {
   const b = new Batch();
   const merlonXf: MerlonXf[] = [];
   const rubbleXf: { x: number; y: number; z: number; s: number; r: number }[] = [];
-  const windowMat = new THREE.MeshStandardMaterial({ color: 0x1b2026, emissive: 0xa9c0d6, emissiveIntensity: 0.9, roughness: 0.4 });
-  const hearthWindowMat = new THREE.MeshStandardMaterial({ color: 0x1a1512, emissive: 0xff9a3c, emissiveIntensity: 1.2, roughness: 0.5 });
+  // 高窗：暗玻璃 + 铅条窗格。白天微弱冷天光（不再过曝成白洞），夜晚近乎全黑。
+  const coldGlass = leadedGlass(false);
+  const windowMat = new THREE.MeshStandardMaterial({
+    color: 0x2a3440, map: coldGlass.map, roughness: 0.22, metalness: 0.05,
+    emissive: 0x3a4a5c, emissiveMap: coldGlass.panes, emissiveIntensity: 0.45,
+  });
+  // 门房朝庭院的窗：炉火点着时透过铅条窗格透出琥珀暖光，是回程地标。
+  const warmGlass = leadedGlass(true);
+  const hearthWindowMat = new THREE.MeshStandardMaterial({
+    color: 0x3a2a1c, map: warmGlass.map, roughness: 0.3, metalness: 0.05,
+    emissive: 0xff9a3c, emissiveMap: warmGlass.panes, emissiveIntensity: 1.2,
+  });
 
   // 墙体：勒脚（加宽基座）+ 墙身 + 压顶。贴图 3.5 m 一格 → 砌块约 0.4 m 宽。
   for (const w of WALLS) {
