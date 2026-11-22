@@ -16,6 +16,11 @@ const PHASE_NAME: Record<string, string> = {
   tutorial: '清晨', day: '白天', dusk: '黄昏', night: '夜间', dawn: '晨曦', ended: '晨曦', failed: '夜间',
 };
 
+// 时段图标（装饰，不改变文字含义）：阴天圆盘 / 月牙 / 地平线半日。
+const PHASE_ICON: Record<string, string> = {
+  tutorial: 'dawn', day: 'day', dusk: 'dawn', night: 'night', dawn: 'dawn', ended: 'dawn', failed: 'night',
+};
+
 const DIRS = ['前方', '右前', '右侧', '右后', '后方', '左后', '左侧', '左前'];
 
 export function goalText(w: World): string {
@@ -86,7 +91,8 @@ export class Hud {
     if (w.phase === 'day') phase += ` · 距黄昏 ${fmtTime(PHASE.dayLength - w.clock)}`;
     else if (w.phase === 'dusk') phase += ` · 距入夜 ${fmtTime(PHASE.duskLength - w.clock)}`;
     else if (w.phase === 'night') phase += ` · 距晨曦 ${fmtTime(PHASE.nightLength - w.clock)}`;
-    this.set('phase', this.phase, phase);
+    const icon = PHASE_ICON[w.phase] ?? 'day';
+    this.set('phase', this.phase, `<svg class="ph-ic ${icon}" aria-hidden="true"><use href="#i-phase-${icon}"/></svg>${phase}`);
     this.set('goal', this.goal, goalText(w));
 
     // 状态条
@@ -110,8 +116,8 @@ export class Hud {
       + slot('iron', '铁件', `${inv.iron}`, inv.iron ? '' : 'empty')
       + slot('oil', '灯油', `${inv.oil}`, inv.oil ? '' : 'empty')
       + slot('meal', '热食', inv.meal ? `${inv.meal} <span class="key">${mouse ? '工具栏' : keyName(b.eat)}</span>` : '0', inv.meal ? '' : 'empty')
-      + slot('lantern', '提灯', !inv.hasLantern ? '无' : lan.on ? '点亮' : '熄灭', inv.hasLantern ? '' : 'empty')
-      + slot('clapper', '钟舌', w.quest.installed ? '已装' : inv.hasClapper ? '持有' : '未取', `task ${inv.hasClapper || w.quest.installed ? '' : 'empty'}`));
+      + slot('lantern', '提灯', !inv.hasLantern ? '无' : lan.on ? '点亮' : '熄灭', !inv.hasLantern ? 'empty' : lan.on ? 'lit' : '')
+      + slot('clapper', '钟舌', w.quest.installed ? '已装' : inv.hasClapper ? '持有' : '未取', `task ${inv.hasClapper || w.quest.installed ? 'held' : 'empty'}`));
 
     // 交互提示
     if (target) {
