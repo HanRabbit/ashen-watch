@@ -162,27 +162,35 @@ function prepHunter(gltf: GLTF): HunterAsset {
   }
   const mesh = scene.getObjectByProperty('type', 'SkinnedMesh') as THREE.SkinnedMesh | undefined;
   if (mesh && bones.head && bones.headTop) {
-    // 礼帽顶点：权重主要在 Head 且高于头顶中段的顶点，几乎完全塌缩到头骨中心（兜帽会盖住）。
+    // 头部圆柱区域（礼帽帽冠/帽檐 + 立领）整体塌缩到头骨中心，由兜帽与披肩遮盖，
+    // 避免后脑残留薄片（白天室内近景曾出现"黑球加翘片"）。
     const geo = mesh.geometry;
     const pos = geo.attributes.position as THREE.BufferAttribute;
     const si = geo.attributes.skinIndex as THREE.BufferAttribute;
     const sw = geo.attributes.skinWeight as THREE.BufferAttribute;
     const headJoint = (mesh.skeleton.bones as THREE.Bone[]).indexOf(bones.head);
+    const topJoint = (mesh.skeleton.bones as THREE.Bone[]).indexOf(bones.headTop);
     mesh.updateMatrixWorld(true);
     const headW = bones.head.getWorldPosition(new THREE.Vector3());
     const topW = bones.headTop.getWorldPosition(new THREE.Vector3());
-    const threshW = headW.y + (topW.y - headW.y) * 0.25;
     const headL = mesh.worldToLocal(headW.clone());
-    const threshL = mesh.worldToLocal(new THREE.Vector3(headW.x, threshW, headW.z)).y;
+    const topL = mesh.worldToLocal(topW.clone());
+    const range = Math.max(1e-4, topL.y - headL.y);
+    // 仅温和塌缩礼帽帽冠（Head 权重高且高于颅顶中段），保留头部体积与蒙皮权重，
+    // 由加大的兜帽罩住头骨与立领，避免后脑翘片。不做整柱收拢（会拉出尖锥）。
     if (headJoint >= 0) {
+      const crownL = headL.y + range * 0.25;
       for (let i = 0; i < pos.count; i++) {
         let wHead = 0;
-        for (let k = 0; k < 4; k++) if (si.getComponent(i, k) === headJoint) wHead += sw.getComponent(i, k);
-        if (wHead > 0.3 && pos.getY(i) > threshL) {
+        for (let k = 0; k < 4; k++) {
+          const j = si.getComponent(i, k);
+          if (j === headJoint || j === topJoint) wHead += sw.getComponent(i, k);
+        }
+        if (wHead > 0.5 && pos.getY(i) > crownL) {
           pos.setXYZ(i,
-            THREE.MathUtils.lerp(pos.getX(i), headL.x, 1.0),
-            THREE.MathUtils.lerp(pos.getY(i), headL.y, 1.0),
-            THREE.MathUtils.lerp(pos.getZ(i), headL.z, 1.0));
+            THREE.MathUtils.lerp(pos.getX(i), headL.x, 0.9),
+            THREE.MathUtils.lerp(pos.getY(i), headL.y + range * 0.1, 0.9),
+            THREE.MathUtils.lerp(pos.getZ(i), headL.z, 0.9));
         }
       }
       pos.needsUpdate = true;

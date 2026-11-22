@@ -3,6 +3,10 @@
 import * as THREE from 'three';
 import { GHOST } from '../config';
 import { groundY } from '../sim/level';
+
+/** 跨层贴地：优先用实体自身连续高度 y（B1/2F），回退到只看 x/z 的 groundY。 */
+type Grounded = { x: number; z: number; y?: number };
+const gy = (p: Grounded): number => p.y ?? groundY(p.x, p.z);
 import { World } from '../sim/state';
 import { clamp01 } from './geom';
 
@@ -202,14 +206,14 @@ export class Vfx {
     return k;
   }
 
-  update(w: World, pose: { x: number; z: number }, dt: number, time: number): void {
+  update(w: World, pose: Grounded, dt: number, time: number): void {
     this.soft.update(dt);
     this.glow.update(dt);
     this.ripples.update(dt);
     this.hurt = Math.max(0, this.hurt - dt * 4.5);
     if (!this.group.visible) { this.prevHp = w.player.hp; return; }
     const px = pose.x, pz = pose.z;
-    const py = groundY(px, pz);
+    const py = gy(pose);
     const p = w.player;
 
     // 脚步：石面灰尘 / 水洼水花，按步频触发
@@ -254,7 +258,7 @@ export class Vfx {
         if (d < bd) { bd = d; best = g; }
       }
       if (best && bd < 6.25) {
-        this.tmp.set(best.x, groundY(best.x, best.z) + 1.1, -best.z);
+        this.tmp.set(best.x, gy(best) + 1.1, -best.z);
         for (let i = 0; i < 10; i++) {
           this.soft.emit({ pos: this.tmp, vel: new THREE.Vector3(0, 0.5, 0), spread: 0.6, life: 0.65, size: 0.22, grow: 2.4, color: BLACK_SMOKE, drag: 2.5 });
         }
@@ -278,7 +282,7 @@ export class Vfx {
           const facing = (dx * sy + dz * cy) / Math.max(0.01, dist);
           const cowed = g.mode === 'recoil' || g.mode === 'flee';
           if ((dist < range && facing > 0.25) || cowed) {
-            this.tmp.set(g.x, groundY(g.x, g.z) + 1.2 + Math.random() * 0.5, -g.z);
+            this.tmp.set(g.x, gy(g) + 1.2 + Math.random() * 0.5, -g.z);
             this.soft.emit({ pos: this.tmp, vel: new THREE.Vector3(0, 0.8, 0), spread: 0.45, life: 0.8, size: 0.16, grow: 2.2, color: WHITE_SMOKE, drag: 1.6 });
           }
         }

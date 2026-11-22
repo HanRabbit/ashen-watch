@@ -6,6 +6,10 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { GHOST, PLAYER } from '../config';
 import { groundY } from '../sim/level';
+
+/** 跨层贴地：优先用实体自身连续高度 y（B1/2F），回退到只看 x/z 的 groundY。 */
+type Grounded = { x: number; z: number; y?: number };
+const gy = (p: Grounded): number => p.y ?? groundY(p.x, p.z);
 import { GhostState, World } from '../sim/state';
 import { CharTextures, HunterAsset, ReaperAsset, ghostRags, loadCharacterAssets, loadCharTextures } from './characterAssets';
 import { cyl, lerp, mesh, yawToRot } from './geom';
@@ -124,41 +128,37 @@ function mergeRags(list: THREE.BufferGeometry[]): THREE.BufferGeometry {
 
 function buildHood(cloakMat: THREE.Material, voidMat: THREE.Material): THREE.Group {
   const hood = new THREE.Group();
-  // 兜帽主壳：穹顶 + 径向褶皱与后中缝，开口朝前下
-  const shellGeo = new THREE.SphereGeometry(0.155, 28, 18, 0, Math.PI * 2, 0, 2.3);
+  // 兜帽主壳：饱满穹顶 + 径向褶皱与后中缝，开口朝前下；尺寸略大以罩住头部附件。
+  const shellGeo = new THREE.SphereGeometry(0.2, 28, 18, 0, Math.PI * 2, 0, 2.35);
   const sp = shellGeo.attributes.position as THREE.BufferAttribute;
   for (let i = 0; i < sp.count; i++) {
     const x = sp.getX(i), y = sp.getY(i), z = sp.getZ(i);
     const ang = Math.atan2(x, z);
-    const theta = Math.acos(Math.min(1, Math.max(-1, y / 0.155)));
-    const fold = 1 + 0.075 * Math.sin(ang * 6 + theta * 2.5) * (0.3 + theta / 2.3)
-      + 0.035 * Math.sin(ang * 13 + 1.7)
-      + 0.05 * Math.exp(-Math.pow(ang / 0.35, 2)) * (theta / 2.3);
+    const theta = Math.acos(Math.min(1, Math.max(-1, y / 0.2)));
+    const fold = 1 + 0.06 * Math.sin(ang * 6 + theta * 2.5) * (0.3 + theta / 2.35)
+      + 0.03 * Math.sin(ang * 13 + 1.7)
+      + 0.04 * Math.exp(-Math.pow(ang / 0.4, 2)) * (theta / 2.35);
     sp.setX(i, x * fold); sp.setZ(i, z * fold);
   }
   shellGeo.computeVertexNormals();
   const shell = mesh(shellGeo, cloakMat);
-  shell.scale.set(1, 1.14, 1.18);
-  shell.rotation.x = 0.52;
-  shell.position.set(0, 0.075, 0.015);
+  shell.scale.set(1.08, 1.55, 1.45);
+  shell.rotation.x = 0.46;
+  shell.position.set(0, 0.03, 0.06);
   // 颈侧垂布（前开口）
-  const cowl = mesh(new THREE.CylinderGeometry(0.14, 0.185, 0.16, 18, 1, true, -2.35, 4.7), cloakMat);
-  cowl.position.set(0, -0.045, 0.025);
+  const cowl = mesh(new THREE.CylinderGeometry(0.16, 0.21, 0.2, 18, 1, true, -2.35, 4.7), cloakMat);
+  cowl.position.set(0, -0.07, 0.03);
   cowl.rotation.x = 0.12;
   // 帽檐弧：框住脸部开口
-  const brow = mesh(new THREE.TorusGeometry(0.122, 0.022, 6, 16, Math.PI * 1.25), cloakMat);
+  const brow = mesh(new THREE.TorusGeometry(0.15, 0.026, 6, 16, Math.PI * 1.25), cloakMat);
   brow.rotation.z = -Math.PI * 0.125;
-  brow.rotation.x = -0.44;
-  brow.position.set(0, 0.065, -0.112);
+  brow.rotation.x = -0.46;
+  brow.position.set(0, 0.06, -0.15);
   // 脸部虚空
-  const voidFace = mesh(new THREE.SphereGeometry(0.108, 12, 9), voidMat, false);
+  const voidFace = mesh(new THREE.SphereGeometry(0.125, 12, 9), voidMat, false);
   voidFace.scale.set(0.95, 1.15, 0.9);
-  voidFace.position.set(0, 0.05, -0.055);
-  // 脑后垂尾（向下向后，不是竖起的尖耳）
-  const tail = mesh(new THREE.ConeGeometry(0.055, 0.2, 8), cloakMat);
-  tail.rotation.x = 2.75;
-  tail.position.set(0, -0.03, 0.15);
-  hood.add(shell, cowl, brow, voidFace, tail);
+  voidFace.position.set(0, 0.04, -0.075);
+  hood.add(shell, cowl, brow, voidFace);
   return hood;
 }
 
@@ -354,9 +354,9 @@ class ProceduralPlayer {
 
   triggerHurt(): void { this.hurt = 1; }
 
-  update(w: World, at: { x: number; z: number }, yaw: number, dt: number, time: number): void {
+  update(w: World, at: Grounded, yaw: number, dt: number, time: number): void {
     const p = w.player;
-    this.group.position.set(at.x, groundY(at.x, at.z), -at.z);
+    this.group.position.set(at.x, gy(at), -at.z);
     this.group.rotation.y = yawToRot(yaw);
     const speed = p.moving ? (p.sprinting ? 1.7 : 1) : 0;
     this.phase += dt * speed * 7.2;
@@ -460,11 +460,11 @@ class ProceduralGrey {
     for (const mat of mats) mat.opacity = (this.base.get(mat) ?? 1) * k;
   }
 
-  update(g: GhostState, at: { x: number; z: number }, dt: number, time: number): void {
+  update(g: GhostState, at: Grounded, dt: number, time: number): void {
     const m = this.grey;
     const root = m.root;
     root.visible = g.mode !== 'gone';
-    root.position.set(at.x, groundY(at.x, at.z), -at.z);
+    root.position.set(at.x, gy(at), -at.z);
     root.rotation.y = yawToRot(g.yaw);
     const alpha = g.mode === 'dissolve' ? Math.max(0, 1 - g.t / GHOST.dissolveSecs) : 1;
     this.fade(m.mats, alpha);
@@ -684,10 +684,10 @@ class RagWraith {
     this.root.visible = false;
   }
 
-  update(g: GhostState, at: { x: number; z: number }, dt: number, time: number): void {
+  update(g: GhostState, at: Grounded, dt: number, time: number): void {
     const root = this.root;
     root.visible = g.mode !== 'gone';
-    root.position.set(at.x, groundY(at.x, at.z), -at.z);
+    root.position.set(at.x, gy(at), -at.z);
     root.rotation.order = 'YXZ';
     root.rotation.y = yawToRot(g.yaw);
     const alpha = g.mode === 'dissolve' ? Math.max(0, 1 - g.t / GHOST.dissolveSecs) : 1;
@@ -791,14 +791,14 @@ export class PlayerModel {
     this.procedural.triggerHurt();
   }
 
-  update(w: World, at: { x: number; z: number }, yaw: number, dt: number, time: number): void {
+  update(w: World, at: Grounded, yaw: number, dt: number, time: number): void {
     if (!this.asset || !this.actions) {
       this.procedural.update(w, at, yaw, dt, time);
       return;
     }
     const a = this.asset;
     const p = w.player;
-    this.group.position.set(at.x, groundY(at.x, at.z), -at.z);
+    this.group.position.set(at.x, gy(at), -at.z);
     // 转身惯性：偏航平滑
     const target = yawToRot(yaw);
     if (this.rotS === null) this.rotS = target;
@@ -875,6 +875,7 @@ export class GhostModels {
   private reaper: ReaperAsset | null = null;
   private wraith: RagWraith;
   private eyes: THREE.Sprite[] = [];
+  private greyVoid: THREE.Mesh | null = null;
   private hemMist: THREE.Sprite[] = [];
   private greyTrail = new SoftParticles(140, false);
   private wraithTrail = new SoftParticles(140, false);
@@ -921,15 +922,16 @@ export class GhostModels {
     }
     a.root.add(mesh(mergeRags(rags), ragMat, false));
     // 兜帽暗腔 + 两点极暗冷光（≤0.3）
-    const voidHood = mesh(new THREE.SphereGeometry(0.14, 12, 9), new THREE.MeshBasicMaterial({ color: 0x0a0b0d }), false);
-    voidHood.scale.set(1.1, 1.2, 1.35);
-    voidHood.position.set(0.02, 1.86, -0.28);
+    const voidHood = mesh(new THREE.SphereGeometry(0.09, 12, 9), new THREE.MeshBasicMaterial({ color: 0x0a0b0d }), false);
+    voidHood.scale.set(1, 1.2, 1);
+    voidHood.position.set(0.02, 1.86, -0.16);
     a.root.add(voidHood);
+    this.greyVoid = voidHood;
     // 前腰垂布：遮住原模型腰间杂物（沙漏）
     const apron: THREE.BufferGeometry[] = [];
-    for (let i = 0; i < 5; i++) {
-      apron.push(placeRag(ragGeo(0.2 + r() * 0.05, 0.55 + r() * 0.15, 500 + i, 0.55 + r() * 0.35, 0.45),
-        -0.16 + i * 0.08, 1.18, -0.27 - r() * 0.03, 0.12, (r() - 0.5) * 0.2, (r() - 0.5) * 0.12));
+    for (let i = 0; i < 7; i++) {
+      apron.push(placeRag(ragGeo(0.23 + r() * 0.05, 0.58 + r() * 0.15, 500 + i, 0.55 + r() * 0.35, 0.45),
+        -0.21 + i * 0.07, 1.2, -0.31 - r() * 0.03, 0.12, (r() - 0.5) * 0.2, (r() - 0.5) * 0.12));
     }
     a.root.add(mesh(mergeRags(apron), ragMat, false));
     // 袍摆烟雾：下摆溶进烟里
@@ -944,14 +946,14 @@ export class GhostModels {
     const eyeTex = glowTexture();
     for (const x of [-0.04, 0.04]) {
       const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: eyeTex, color: 0x9fb4c8, transparent: true, opacity: 0.22, depthWrite: false, blending: THREE.AdditiveBlending }));
-      s.position.set(x, 1.88, -0.5);
-      s.scale.setScalar(0.04);
+      s.position.set(x, 1.88, -0.27);
+      s.scale.setScalar(0.05);
       a.root.add(s);
       this.eyes.push(s);
     }
   }
 
-  update(w: World, at: { x: number; z: number }[], dt: number, time: number): void {
+  update(w: World, at: Grounded[], dt: number, time: number): void {
     this.greyTrail.update(dt);
     this.wraithTrail.update(dt);
     this.wraithDebris.update(dt);
@@ -967,11 +969,11 @@ export class GhostModels {
     });
   }
 
-  private updateGrey(g: GhostState, at: { x: number; z: number }, dt: number, time: number): void {
+  private updateGrey(g: GhostState, at: Grounded, dt: number, time: number): void {
     const a = this.reaper!;
     const u = a.cloth;
     a.root.visible = g.mode !== 'gone';
-    a.root.position.set(at.x, groundY(at.x, at.z), -at.z);
+    a.root.position.set(at.x, gy(at), -at.z);
     a.root.rotation.y = yawToRot(g.yaw);
     const alpha = g.mode === 'dissolve' ? Math.max(0, 1 - g.t / GHOST.dissolveSecs) : 1;
     const moving = g.mode === 'patrol' || g.mode === 'investigate' || g.mode === 'chase' || g.mode === 'flee';
@@ -999,8 +1001,12 @@ export class GhostModels {
     u.uOpacity.value = alpha;
     u.uDissolve.value = 1 - alpha;
     a.root.position.y += lift + Math.sin(time * 1.7) * 0.03;
+    // 兜帽暗腔与冷光点跟随主体前倾剪切（头部高度 hh≈0.87；剪切在网格局部空间，世界方向取反）
+    const leanOff = -u.uLean.value * 0.886;
+    if (this.greyVoid) this.greyVoid.position.z = -0.16 + leanOff;
     for (const e of this.eyes) {
-      (e.material as THREE.SpriteMaterial).opacity = alpha * (0.16 + 0.1 * Math.sin(time * 2.3));
+      (e.material as THREE.SpriteMaterial).opacity = alpha * (0.22 + 0.08 * Math.sin(time * 2.3));
+      e.position.z = -0.27 + leanOff;
       e.visible = g.mode !== 'dissolve';
     }
     this.hemMist.forEach((sp, i) => {
@@ -1015,13 +1021,13 @@ export class GhostModels {
       while (this.trailAcc.grey > 1) {
         this.trailAcc.grey -= 1;
         const sy = Math.sin(g.yaw), cy = Math.cos(g.yaw);
-        this.tmpV.set(at.x - sy * 0.35, groundY(at.x, at.z) + 0.25 + Math.random() * 0.5, -(at.z - cy * 0.35));
+        this.tmpV.set(at.x - sy * 0.35, gy(at) + 0.25 + Math.random() * 0.5, -(at.z - cy * 0.35));
         this.greyTrail.emit({ pos: this.tmpV, vel: new THREE.Vector3(0, 0.18, 0), spread: 0.4, life: 1.1, size: 0.24, grow: 1.6, color: new THREE.Color(0x8b939c), drag: 1.2 });
       }
     }
   }
 
-  private wraithTrailEmit(g: GhostState, at: { x: number; z: number }, dt: number): void {
+  private wraithTrailEmit(g: GhostState, at: Grounded, dt: number): void {
     const moving = g.mode === 'patrol' || g.mode === 'investigate' || g.mode === 'chase' || g.mode === 'flee';
     const alpha = g.mode === 'dissolve' ? Math.max(0, 1 - g.t / GHOST.dissolveSecs) : 1;
     if (!moving || alpha <= 0.5) return;
@@ -1030,14 +1036,14 @@ export class GhostModels {
     this.trailAcc.wraith += dt * 14;
     while (this.trailAcc.wraith > 1) {
       this.trailAcc.wraith -= 1;
-      this.tmpV.set(at.x - sy * 0.5, groundY(at.x, at.z) + 0.2 + Math.random() * 0.4, -(at.z - cy * 0.5));
+      this.tmpV.set(at.x - sy * 0.5, gy(at) + 0.2 + Math.random() * 0.4, -(at.z - cy * 0.5));
       this.wraithTrail.emit({ pos: this.tmpV, vel: new THREE.Vector3(0, 0.15, 0), spread: 0.5, life: 0.9, size: 0.26, grow: 1.8, color: new THREE.Color(0x1c2128), drag: 1.4 });
     }
     // 黑色碎屑：小而短命，受重力下落
     this.trailAcc.debris += dt * 20;
     while (this.trailAcc.debris > 1) {
       this.trailAcc.debris -= 1;
-      this.tmpV.set(at.x - sy * 0.3 + (Math.random() - 0.5) * 0.6, groundY(at.x, at.z) + 0.5 + Math.random() * 0.7, -(at.z - cy * 0.3) + (Math.random() - 0.5) * 0.6);
+      this.tmpV.set(at.x - sy * 0.3 + (Math.random() - 0.5) * 0.6, gy(at) + 0.5 + Math.random() * 0.7, -(at.z - cy * 0.3) + (Math.random() - 0.5) * 0.6);
       this.wraithDebris.emit({ pos: this.tmpV, vel: new THREE.Vector3(0, 0.1, 0), spread: 0.3, life: 0.55, size: 0.035, grow: 0, color: new THREE.Color(0x0d0e10), gravity: -3.5, drag: 0.6 });
     }
   }
