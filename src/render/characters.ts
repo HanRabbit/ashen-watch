@@ -363,7 +363,7 @@ class ProceduralGhosts {
 const cloakFlutter = { uTime: { value: 0 }, uSway: { value: 0 } };
 
 function makeHoodAndCloak(m: Materials): { hood: THREE.Group; cloakPivot: THREE.Group; cloakMat: THREE.MeshStandardMaterial } {
-  const cloakMat = new THREE.MeshStandardMaterial({ color: 0x33302a, roughness: 1, side: THREE.DoubleSide });
+  const cloakMat = new THREE.MeshStandardMaterial({ color: 0x1a1712, roughness: 1, side: THREE.DoubleSide });
   cloakMat.onBeforeCompile = (sh) => {
     Object.assign(sh.uniforms, cloakFlutter);
     sh.vertexShader = sh.vertexShader
@@ -377,25 +377,32 @@ function makeHoodAndCloak(m: Materials): { hood: THREE.Group; cloakPivot: THREE.
   const faceShadow = new THREE.MeshStandardMaterial({ color: 0x0d0b09, roughness: 1 });
   // 兜帽（头 bone 本地：+Y 上，+Z 前）：开口朝前下的穹顶 + 兜帽尖 + 脸部虚空
   const hood = new THREE.Group();
-  const shell = mesh(new THREE.SphereGeometry(0.155, 16, 12, 0, Math.PI * 2, 0, 2.05), cloakMat);
-  shell.rotation.x = -0.5;
+  const shell = mesh(new THREE.SphereGeometry(0.158, 16, 12, 0, Math.PI * 2, 0, 1.78), cloakMat);
+  shell.rotation.x = 0.35;
   shell.position.set(0, 0.1, 0.0);
-  const tip = mesh(new THREE.ConeGeometry(0.05, 0.16, 6), cloakMat);
-  tip.position.set(0, 0.2, -0.1); tip.rotation.x = 0.6;
-  const voidFace = mesh(new THREE.SphereGeometry(0.112, 12, 9), faceShadow, false);
-  voidFace.position.set(0, 0.09, 0.05);
-  hood.add(shell, tip, voidFace);
+  shell.scale.set(1, 1.18, 1.12);
+  const drape = mesh(new THREE.CylinderGeometry(0.15, 0.2, 0.22, 12, 1, true, -1.2, 2.4), cloakMat);
+  drape.position.set(0, -0.06, 0.05);
+  const tip = mesh(new THREE.ConeGeometry(0.06, 0.2, 6), cloakMat);
+  tip.position.set(0, 0.24, 0.07); tip.rotation.x = -0.5;
+  const voidFace = mesh(new THREE.SphereGeometry(0.132, 12, 9), faceShadow, false);
+  voidFace.position.set(0, 0.08, -0.06);
+  hood.add(shell, tip, voidFace, drape);
   // 斗篷（胸椎 bone 本地）：背面披挂，波浪下摆
-  const cloakGeo = new THREE.CylinderGeometry(0.23, 0.4, 0.95, 16, 5, true, Math.PI - 1.35, 2.7);
+  const cloakGeo = new THREE.CylinderGeometry(0.165, 0.32, 0.78, 24, 6, true, -1.75, 3.5);
   const cp = cloakGeo.attributes.position as THREE.BufferAttribute;
   for (let i = 0; i < cp.count; i++) {
-    if (cp.getY(i) < -0.42) cp.setY(i, cp.getY(i) + Math.sin(cp.getX(i) * 9) * 0.05);
+    const x = cp.getX(i), y = cp.getY(i), z = cp.getZ(i);
+    const ang = Math.atan2(x, z);
+    const fold = 1 + Math.sin(ang * 7) * 0.05 * (0.4 + (0.39 - y) / 0.78);
+    cp.setX(i, x * fold); cp.setZ(i, z * fold);
+    if (y < -0.3) cp.setY(i, y + Math.sin(ang * 5) * 0.06);
   }
   cloakGeo.computeVertexNormals();
   const cloakPivot = new THREE.Group();
   const cloak = mesh(cloakGeo, cloakMat);
   cloakPivot.add(cloak);
-  cloakPivot.position.set(0, -0.42, -0.03);
+  cloakPivot.position.set(0, -0.36, -0.04);
   const collar = mesh(new THREE.TorusGeometry(0.145, 0.035, 8, 14), cloakMat);
   collar.rotation.x = Math.PI / 2;
   collar.position.set(0, 0.03, 0);
@@ -444,7 +451,7 @@ export class PlayerModel {
     a.headAnchor.add(hood);
     a.chestAnchor.add(cloakPivot);
     this.cloakPivot = cloakPivot;
-    this.clapper.position.set(-0.16, -0.42, -0.16);
+    this.clapper.position.set(-0.16, -0.42, 0.16);
     this.clapper.rotation.z = 0.5;
     a.chestAnchor.add(this.clapper);
   }
@@ -462,6 +469,11 @@ export class PlayerModel {
     const a = this.asset;
     const p = w.player;
     this.group.position.set(at.x, groundY(at.x, at.z), -at.z);
+    if (!(this as unknown as { dbg?: boolean }).dbg) {
+      (this as unknown as { dbg?: boolean }).dbg = true;
+      const wp = (o: THREE.Object3D): number[] => o.getWorldPosition(new THREE.Vector3()).toArray().map((n) => +n.toFixed(2));
+      console.log('[chrdbg]', JSON.stringify({ group: wp(this.group), head: wp(a.bones.head), headAnchor: wp(a.headAnchor), hand: wp(a.bones.handR), handAnchor: wp(a.handAnchor), lantern: wp(this.lantern.group), hips: wp(a.bones.hips), chest: wp(a.chestAnchor) }));
+    }
     // 转身惯性：偏航平滑
     const target = yawToRot(yaw);
     if (this.rotS === null) this.rotS = target;
@@ -486,12 +498,12 @@ export class PlayerModel {
     this.raise = lerp(this.raise, lan.raised ? 1 : 0, Math.min(1, dt * 9));
     const b = a.bones;
     if (w.inv.hasLantern && b.armR && b.foreArmR) {
-      this.tmpE.set(lerp(-0.12, -1.75, this.raise), 0, lerp(-0.1, 0, this.raise));
+      this.tmpE.set(lerp(-0.1, -1.55, this.raise), 0, lerp(0.06, 0.15, this.raise));
       this.tmpQ.setFromEuler(this.tmpE);
-      b.armR.quaternion.slerp(this.tmpQ, 0.85);
-      this.tmpE.set(lerp(-0.32, -0.2, this.raise), 0, 0);
+      b.armR.quaternion.multiply(this.tmpQ);
+      this.tmpE.set(lerp(-0.22, -0.1, this.raise), 0, 0);
       this.tmpQ.setFromEuler(this.tmpE);
-      b.foreArmR.quaternion.slerp(this.tmpQ, 0.85);
+      b.foreArmR.quaternion.multiply(this.tmpQ);
     }
     // 受击 flinch
     this.hurt = Math.max(0, this.hurt - dt * 3);
@@ -555,6 +567,7 @@ export class GhostModels {
   private reaper: ReaperAsset | null = null;
   private creature: CreatureAsset | null = null;
   private eyes: THREE.Sprite[] = [];
+  private hemMist: THREE.Sprite[] = [];
   private greyTrail = new SoftParticles(140, false);
   private wraithTrail = new SoftParticles(140, false);
   private trailAcc = { grey: 0, wraith: 0 };
@@ -562,6 +575,8 @@ export class GhostModels {
   private history: { t: number; p: THREE.Vector3 }[] = [];
   private tmpV = new THREE.Vector3();
   private tmpM = new THREE.Matrix4();
+  private tmpQ = new THREE.Quaternion();
+  private tmpE = new THREE.Euler();
   private idleAction: THREE.AnimationAction | null = null;
 
   constructor() {
@@ -576,6 +591,15 @@ export class GhostModels {
     this.creature = a.creature;
     this.group.add(a.reaper.root, a.creature.root);
     a.reaper.root.visible = a.creature.root.visible = false;
+    // 袍摆烟雾：下摆溶进烟里
+    const hemTex = smokeTexture();
+    for (let i = 0; i < 5; i++) {
+      const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: hemTex, color: 0x8b939c, transparent: true, opacity: 0.22, depthWrite: false }));
+      sp.scale.set(0.7, 0.4, 1);
+      sp.position.set(Math.cos(i * 1.9) * 0.32, 0.12 + (i % 2) * 0.1, Math.sin(i * 1.9) * 0.32);
+      a.reaper.root.add(sp);
+      this.hemMist.push(sp);
+    }
     // 兜帽内两点极暗冷光
     const eyeTex = glowTexture();
     for (const x of [-0.045, 0.045]) {
@@ -599,6 +623,14 @@ export class GhostModels {
       im.visible = false;
       this.group.add(im);
       this.echoes.push({ mesh: im, mat, age });
+    }
+    // 脊背棘刺（模型空间背部 = +Z）
+    const spikeMat = new THREE.MeshStandardMaterial({ color: 0x14171c, roughness: 0.9, emissive: 0x2c343c, emissiveIntensity: 0.4 });
+    for (let i = 0; i < 5; i++) {
+      const spike = mesh(new THREE.ConeGeometry(0.045, 0.24 - i * 0.025, 5), spikeMat, false);
+      spike.position.set(0, 0.62 + i * 0.16, 0.22 + i * 0.03);
+      spike.rotation.x = 0.5;
+      a.creature.root.add(spike);
     }
     // 静息烟雾团：给躯体体积感
     const mistTex = smokeTexture();
@@ -669,6 +701,12 @@ export class GhostModels {
       (e.material as THREE.SpriteMaterial).opacity = alpha * (0.4 + 0.2 * Math.sin(time * 2.3));
       e.visible = g.mode !== 'dissolve';
     }
+    this.hemMist.forEach((sp, i) => {
+      (sp.material as THREE.SpriteMaterial).opacity = alpha * (0.16 + 0.08 * Math.sin(time * 1.4 + i * 2.0));
+      sp.position.x = Math.cos(time * 0.6 + i * 1.9) * 0.34;
+      sp.position.z = Math.sin(time * 0.5 + i * 1.9) * 0.34;
+      sp.scale.setScalar(0.6 + (1 - alpha) * 1.4);
+    });
     // 身后烟雾拖尾
     if (moving && alpha > 0.5) {
       this.trailAcc.grey += dt * 16;
@@ -704,12 +742,22 @@ export class GhostModels {
     if (this.idleAction) this.idleAction.timeScale = g.mode === 'chase' ? 1.7 : 1;
     a.mixer.update(dt);
     const k = Math.min(1, dt * 10);
-    a.root.rotation.x = lerp(a.root.rotation.x, -0.16 + rear * 0.5, k);
+    a.root.rotation.x = lerp(a.root.rotation.x, -0.34 + rear * 0.6, k);
     a.root.scale.x = lerp(a.root.scale.x, flare, k);
     a.root.scale.y = lerp(a.root.scale.y, 1 + (flare - 1) * 0.6, k);
     a.root.scale.z = lerp(a.root.scale.z, flare, k);
     a.root.position.y += crouch + lift + (moving ? Math.abs(Math.sin(time * 9)) * 0.03 : 0);
     for (const s of a.spine) s.rotation.x = rear * 0.16;
+    const cb = a.bones;
+    const reach = g.mode === 'chase' ? 0.6 : g.mode === 'windup' ? 1.15 : g.mode === 'recover' ? 0.75 : 0.4;
+    for (const k of ['armL', 'armR'] as const) {
+      const bn = cb[k];
+      if (bn) { this.tmpE.set(-reach, 0, k === 'armL' ? 0.45 : -0.45); this.tmpQ.setFromEuler(this.tmpE); bn.quaternion.multiply(this.tmpQ); }
+    }
+    for (const k of ['foreArmL', 'foreArmR'] as const) {
+      const bn = cb[k];
+      if (bn) { this.tmpE.set(-0.35 - reach * 0.3, 0, 0); this.tmpQ.setFromEuler(this.tmpE); bn.quaternion.multiply(this.tmpQ); }
+    }
     u.uTime.value = time;
     u.uOpacity.value = alpha * 0.95;
     u.uErode.value = 0.22 + (1 - alpha) * 0.6;

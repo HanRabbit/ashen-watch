@@ -32,6 +32,7 @@ export interface CreatureAsset {
   mixer: THREE.AnimationMixer;
   idle: THREE.AnimationClip | null;
   spine: THREE.Bone[];
+  bones: Record<string, THREE.Bone>;
   skin: WraithUniforms;
 }
 
@@ -57,8 +58,10 @@ function normalize(scene: THREE.Object3D, targetH: number, faceFix: number): { w
   scene.position.z -= c.z;
   scene.position.y -= b2.min.y;
   const wrap = new THREE.Group();
-  wrap.add(scene);
-  wrap.rotation.y = faceFix;
+  const fix = new THREE.Group();
+  fix.rotation.y = faceFix;
+  fix.add(scene);
+  wrap.add(fix);
   return { wrap, scale: s };
 }
 
@@ -69,11 +72,15 @@ function findBone(root: THREE.Object3D, rx: RegExp): THREE.Bone | undefined {
 }
 
 /** 在 bone 下挂一个抵消归一化缩放的米制锚点。 */
-function meterAnchor(bone: THREE.Bone): THREE.Group {
+function meterAnchor(bone: THREE.Bone, alignTo: THREE.Object3D): THREE.Group {
   const g = new THREE.Group();
   bone.updateWorldMatrix(true, false);
+  alignTo.updateWorldMatrix(true, false);
   const ws = bone.getWorldScale(new THREE.Vector3());
   g.scale.setScalar(1 / Math.max(1e-6, ws.x));
+  const bq = bone.getWorldQuaternion(new THREE.Quaternion());
+  const aq = alignTo.getWorldQuaternion(new THREE.Quaternion());
+  g.quaternion.copy(bq).invert().multiply(aq);
   bone.add(g);
   return g;
 }
@@ -141,9 +148,9 @@ function prepHunter(gltf: GLTF): HunterAsset {
       }
     }
   });
-  const handAnchor = meterAnchor(bones.handR ?? bones.armR ?? scene);
-  const headAnchor = meterAnchor(bones.head ?? scene);
-  const chestAnchor = meterAnchor(bones.spine2 ?? bones.spine ?? scene);
+  const handAnchor = meterAnchor(bones.handR ?? bones.armR ?? scene, wrap);
+  const headAnchor = meterAnchor(bones.head ?? scene, wrap);
+  const chestAnchor = meterAnchor(bones.spine2 ?? bones.spine ?? scene, wrap);
 
   const mixer = new THREE.AnimationMixer(scene);
   const idle = gltf.animations[0] ?? new THREE.AnimationClip('idle', 1, []);
@@ -162,14 +169,16 @@ function authorLocomotion(bones: Record<string, THREE.Bone>): { walk: THREE.Anim
     const tracks: THREE.KeyframeTrack[] = [];
     const q = new THREE.Quaternion();
     const e = new THREE.Euler();
+    const rest = new THREE.Quaternion();
     const rotTrack = (key: string, fn: (ph: number) => [number, number, number]): void => {
       const b = bones[key];
       if (!b) return;
+      rest.copy(b.quaternion);
       const vals: number[] = [];
       for (const t of times) {
         const [x, y, z] = fn((t / cycle) * Math.PI * 2);
         e.set(x, y, z);
-        q.setFromEuler(e);
+        q.setFromEuler(e).premultiply(rest);
         vals.push(q.x, q.y, q.z, q.w);
       }
       tracks.push(new THREE.QuaternionKeyframeTrack(`${b.uuid}.quaternion`, times, vals));
@@ -263,7 +272,7 @@ export function ghostCloth(mat: THREE.MeshStandardMaterial, localHeight: number)
         totalEmissiveRadiance += uRimColor * rimF * uRim;
         float dn = awNoise(vLocal * 2.6 + vec3(0.0, uTime * 0.25, 0.0));
         float field = clamp(vLocal.y / uHeight * 0.72 + dn * 0.38, 0.0, 1.0);
-        float th = uDissolve * 1.15;
+        float th = uDissolve * 1.15 + 0.07;
         if (field < th - 0.12) discard;
         totalEmissiveRadiance += uRimColor * 1.6 * smoothstep(th, th - 0.12, field) * step(0.001, uDissolve);
         diffuseColor.a *= uOpacity;`);
@@ -297,7 +306,7 @@ export function wraithSkin(mat: THREE.MeshStandardMaterial): WraithUniforms {
       .replace('#include <common>', `#include <common>\nuniform float uTime, uRim, uOpacity, uErode;\nuniform vec3 uRimColor;\nvarying vec3 vLocal;\nvarying vec3 vWpos;\n${NOISE_GLSL}`)
       .replace('#include <map_fragment>', /* glsl */`#include <map_fragment>
         float lum = dot(diffuseColor.rgb, vec3(0.3333));
-        diffuseColor.rgb = mix(vec3(lum), diffuseColor.rgb, 0.22) * vec3(0.52, 0.56, 0.62);`)
+        diffuseColor.rgb = mix(vec3(lum), diffuseColor.rgb, 0.22) * vec3(0.42, 0.46, 0.52) + vec3(0.045, 0.055, 0.075);`)
       .replace('#include <emissivemap_fragment>', /* glsl */`#include <emissivemap_fragment>
         float ndv = saturate(dot(normalize(vViewPosition), normal));
         float rimF = pow(1.0 - ndv, 2.0);
@@ -338,8 +347,8 @@ function prepReaper(gltf: GLTF): ReaperAsset {
   const src = b.material as THREE.MeshStandardMaterial;
   const mat = new THREE.MeshStandardMaterial({
     map: src.map ?? null, normalMap: src.normalMap ?? null,
-    color: 0x767b80, roughness: 0.95, metalness: 0,
-    emissive: 0x39424c, emissiveIntensity: 0.14,
+    color: 0x63686e, roughness: 0.95, metalness: 0,
+    emissive: 0x39424c, emissiveIntensity: 0.1,
   });
   b.material = mat;
   const cloth = ghostCloth(mat, localHeight);
@@ -348,7 +357,7 @@ function prepReaper(gltf: GLTF): ReaperAsset {
 
 function prepCreature(gltf: GLTF): CreatureAsset {
   const scene = gltf.scene;
-  const { wrap } = normalize(scene, 1.55, 0);
+  const { wrap } = normalize(scene, 1.85, Math.PI);
   let mesh: THREE.SkinnedMesh | undefined;
   scene.traverse((o) => { if (!mesh && (o as THREE.SkinnedMesh).isSkinnedMesh) mesh = o as THREE.SkinnedMesh; });
   const m = mesh!;
@@ -358,14 +367,20 @@ function prepCreature(gltf: GLTF): CreatureAsset {
   const mat = new THREE.MeshStandardMaterial({
     map: src.map ?? null, normalMap: src.normalMap ?? null,
     color: 0xffffff, roughness: 0.9, metalness: 0,
-    emissive: 0x1a222c, emissiveIntensity: 0.55,
+    emissive: 0x2a3440, emissiveIntensity: 0.7,
   });
   m.material = mat;
   const skin = wraithSkin(mat);
   const spine: THREE.Bone[] = [];
-  scene.traverse((o) => { if ((o as THREE.Bone).isBone && /CATRigSpine[1-3]/.test(o.name)) spine.push(o as THREE.Bone); });
+  const bones: Record<string, THREE.Bone> = {};
+  const rx: Record<string, RegExp> = { armL: /LeftArm_/, armR: /RightArm_/, foreArmL: /LeftForeArm/, foreArmR: /RightForeArm/, upLegL: /LeftUpLeg/, upLegR: /RightUpLeg/ };
+  scene.traverse((o) => {
+    if (!(o as THREE.Bone).isBone) return;
+    if (/mixamorig:Spine/.test(o.name)) spine.push(o as THREE.Bone);
+    for (const [k, r] of Object.entries(rx)) if (!bones[k] && r.test(o.name)) bones[k] = o as THREE.Bone;
+  });
   const mixer = new THREE.AnimationMixer(scene);
-  return { root: wrap, mesh: m, mixer, idle: gltf.animations[0] ?? null, spine, skin };
+  return { root: wrap, mesh: m, mixer, idle: gltf.animations[0] ?? null, spine, bones, skin };
 }
 
 /** 并行加载三个模型；任一失败返回 null（调用方回退程序化模型）。单例：多处调用共享同一次加载。 */
