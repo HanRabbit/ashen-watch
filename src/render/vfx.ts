@@ -135,12 +135,52 @@ const SPLASH = new THREE.Color(0xb9c6cf);
 const BLACK_SMOKE = new THREE.Color(0x111419);
 const WHITE_SMOKE = new THREE.Color(0xcdd5da);
 
+/** 踩水涟漪：贴地 expanding 圆环，低透明冷灰，0.6s 内淡出（圣经 §10 水）。 */
+class Ripples {
+  readonly group = new THREE.Group();
+  private rings: { mesh: THREE.Mesh; mat: THREE.MeshBasicMaterial; t: number }[] = [];
+  private cursor = 0;
+
+  constructor() {
+    const geo = new THREE.RingGeometry(0.82, 1, 24);
+    geo.rotateX(-Math.PI / 2);
+    for (let i = 0; i < 6; i++) {
+      const mat = new THREE.MeshBasicMaterial({ color: 0xb9c6cf, transparent: true, opacity: 0, depthWrite: false });
+      const m = new THREE.Mesh(geo, mat);
+      m.visible = false;
+      this.group.add(m);
+      this.rings.push({ mesh: m, mat, t: 1 });
+    }
+  }
+
+  spawn(x: number, y: number, z: number): void {
+    const r = this.rings[this.cursor];
+    this.cursor = (this.cursor + 1) % this.rings.length;
+    r.t = 0;
+    r.mesh.visible = true;
+    r.mesh.position.set(x, y + 0.015, z);
+    r.mesh.scale.setScalar(0.12);
+  }
+
+  update(dt: number): void {
+    for (const r of this.rings) {
+      if (r.t >= 1) continue;
+      r.t = Math.min(1, r.t + dt / 0.6);
+      const k = r.t;
+      r.mesh.scale.setScalar(0.12 + k * 0.55);
+      r.mat.opacity = 0.3 * (1 - k) * (1 - k);
+      if (k >= 1) r.mesh.visible = false;
+    }
+  }
+}
+
 export class Vfx {
   readonly group = new THREE.Group();
   /** 受击红暗角强度（0..1），view 的调色 pass 读取。 */
   hurt = 0;
   private soft = new SoftParticles(320, false);
   private glow = new SoftParticles(160, true);
+  private ripples = new Ripples();
   private prevHp = 100;
   private stepPhase = 0;
   private stepSide = 1;
@@ -149,7 +189,7 @@ export class Vfx {
   private tmp = new THREE.Vector3();
 
   constructor() {
-    this.group.add(this.soft.points, this.glow.points);
+    this.group.add(this.soft.points, this.glow.points, this.ripples.group);
   }
 
   setQuality(q: 'high' | 'low'): void {
@@ -165,6 +205,7 @@ export class Vfx {
   update(w: World, pose: { x: number; z: number }, dt: number, time: number): void {
     this.soft.update(dt);
     this.glow.update(dt);
+    this.ripples.update(dt);
     this.hurt = Math.max(0, this.hurt - dt * 4.5);
     if (!this.group.visible) { this.prevHp = w.player.hp; return; }
     const px = pose.x, pz = pose.z;
@@ -183,6 +224,7 @@ export class Vfx {
       const inPuddle = PUDDLES.some(([x, z, r]) => (fx - x) ** 2 + (fz - z) ** 2 < r * r);
       this.tmp.set(fx, py + 0.04, -fz);
       if (inPuddle) {
+        this.ripples.spawn(fx, py, -fz);
         for (let i = 0; i < 9; i++) {
           this.glow.emit({ pos: this.tmp, vel: new THREE.Vector3(0, 1.4 + Math.random(), 0), spread: 0.22, life: 0.38, size: 0.05, color: SPLASH, gravity: -5.5, drag: 0.4 });
         }
