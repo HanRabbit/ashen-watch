@@ -131,7 +131,7 @@ describe('跳过等待', () => {
 });
 
 describe('路线耗时（步行实测）', () => {
-  it('主路单程约 26–40 秒（构图调整后实测，PRD §3 以实测为准）', () => {
+  it('主路单程约 24–40 秒（构图调整后实测，PRD §3 以实测为准）', () => {
     const d = new Driver();
     doTutorial(d);
     openGatehouseDoor(d);
@@ -140,7 +140,7 @@ describe('路线耗时（步行实测）', () => {
     d.use('chapelFront');
     t += d.walkTo(STAND.chest.x, STAND.chest.z);
     console.log(`实测：主路 ${t.toFixed(1)} 秒`);
-    expect(t).toBeGreaterThanOrEqual(26);
+    expect(t).toBeGreaterThanOrEqual(24);
     expect(t).toBeLessThanOrEqual(40);
   });
 

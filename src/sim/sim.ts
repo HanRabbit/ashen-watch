@@ -2,7 +2,7 @@
 import { BRAZIER, BRAZIER_NAME, BrazierId, GHOST, HEARTH, LANTERN, MEAL, PHASE, PLAYER, REPAIR_COST, REPAIR_NAME, RepairId, WALL_LAMP } from '../config';
 import { circleBlocked, circleOverlapsBox, cylsAt, findOpening, hasLineOfSight, moveCircle, solidBoxes } from './collision';
 import { dissolveGhosts, ghostThreatens, invalidatePaths, Noise, updateGhosts } from './ghosts';
-import { Box, DOORS, DoorId, FloorId, INTERACTS, InteractDef, InteractId, NODES, PROPS, regionAt, regionAt3, SPAWN, supportY } from './level';
+import { Box, DOORS, DoorId, FloorId, INTERACTS, InteractDef, InteractId, NODES, regionAt, regionAt3, SPAWN, supportY } from './level';
 import { cloneWorld, newGhost, SimEvent, UiRequest, World } from './state';
 
 export type Action =
@@ -415,7 +415,7 @@ function doorAssist(p: { x: number; z: number; y?: number }, x0: number, z0: num
   const push = Math.hypot(cx, cz);
   if (push < len * 0.8) return;
   const tx0 = x0 + dx, tz0 = z0 + dz;
-  for (const b of PROPS) if (circleOverlapsBox(tx0, tz0, PLAYER.radius, b)) return;
+  for (const b of boxes) if (b.kind === 'prop' && circleOverlapsBox(tx0, tz0, PLAYER.radius, b)) return;
   for (const c of cylsAt(p.y ?? 0)) if (Math.hypot(tx0 - c.x, tz0 - c.z) < c.r + PLAYER.radius) return;
   const nx = cx / push, nz = cz / push;
   const tx = nz, tz = -nx;

@@ -1,7 +1,8 @@
 // 双鬼：感知、门与灯的反应、共享攻击间隔、门闩与晨曦清场（对应验收 A05、A06、A10）。
 import { describe, expect, it } from 'vitest';
 import { BRAZIER, BrazierId, FIXED_DT, GHOST, PHASE, WALL_LAMP } from '../src/config';
-import { inZone } from '../src/sim/nav';
+import { hasLineOfSight } from '../src/sim/collision';
+import { inZone, node } from '../src/sim/nav';
 import { GhostKind, GhostState, newGhost, World } from '../src/sim/state';
 import { Driver, STAND } from './driver';
 
@@ -242,12 +243,18 @@ describe('门与栅门（A05）', () => {
   it('关闭的楼梯栅门截断视线和通行，打开后恢复', () => {
     const d = nightScene(22.5, 21.15, 4, '2F');
     d.w.repairs.gate = true; d.w.lantern.on = true;
-    const g = place(d.w, 'grey', 25.5, 21.15, 'patrol', 4, '2F');
+    // Use the upper landing, not a point suspended over the descending run.
+    const at = node('g_land');
+    const g = place(d.w, 'grey', at.x, at.z, 'patrol', at.y, at.floor);
+    const p = d.w.player;
+    const visible = () => hasLineOfSight(at.x, at.y + 1.5, at.z, p.x, p.y + 1.5, p.z, d.w.doors);
+    expect(visible()).toBe(false);
     d.wait(3);
     expect(g.canSee).toBe(false);
     expect(g.mode).toBe('patrol');
     d.w.doors.gate = true;
-    g.x = 25.5; g.z = 21.15; g.yaw = -Math.PI / 2; g.path = []; g.senseT = 0; g.mode = 'patrol';
+    expect(visible()).toBe(true);
+    Object.assign(g, { x: at.x, z: at.z, y: at.y, floor: at.floor, yaw: -Math.PI / 2, path: [], senseT: 0, mode: 'patrol' });
     d.wait(0.5);
     expect(g.canSee).toBe(true);
   });

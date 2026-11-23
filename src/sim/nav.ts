@@ -1,7 +1,7 @@
 // 房间节点 + 通道连接寻路（PRD 第 7 节）。节点带楼层；跨层只经楼梯边。
 // 门开合与亮区即时改变可达性；亮区按楼层生效。
 import { BRAZIER, BrazierId, LightZone, WALL_LAMP } from '../config';
-import { Box, Cylinder, EDGES, FloorId, floorCandidates, INTERACTS, NavNode, NODES, STAIRS } from './level';
+import { Box, Cylinder, EDGES, FloorId, floorCandidates, INTERACTS, NavNode, NODES, rampY, STAIRS } from './level';
 import { DoorOpen, segBoxT, solidBoxes, cylsAt } from './collision';
 import { World } from './state';
 
@@ -10,9 +10,7 @@ const ADJ = new Map<string, { to: string; door?: string; cost: number }[]>();
 for (const n of NODES) ADJ.set(n.id, []);
 for (const e of EDGES) {
   const a = NODE_BY_ID.get(e.a)!, b = NODE_BY_ID.get(e.b)!;
-  // S1's short cellar landing costs extra maneuvering; don't send marginal
-  // courtyard shortcuts down and back up through the basement.
-  const cost = Math.hypot(a.x - b.x, a.z - b.z, a.y - b.y) + (e.a === 'c_s1top' && e.b === 'b_land' ? 12 : 0);
+  const cost = Math.hypot(a.x - b.x, a.z - b.z, a.y - b.y);
   ADJ.get(e.a)!.push({ to: e.b, door: e.door, cost });
   ADJ.get(e.b)!.push({ to: e.a, door: e.door, cost });
 }
@@ -98,7 +96,7 @@ export function nearestNode(x: number, z: number, floor: FloorId, y: number, ctx
 }
 
 /** A*（启发为 3D 直线距离，可采纳）。 */
-export function findNodePath(from: string, to: string, ctx: NavCtx): string[] | null {
+export function findNodePath(from: string, to: string, ctx: NavCtx, stayOnFloor?: FloorId): string[] | null {
   if (from === to) return [from];
   const goal = NODE_BY_ID.get(to)!;
   const open = new Set<string>([from]);
@@ -123,6 +121,7 @@ export function findNodePath(from: string, to: string, ctx: NavCtx): string[] | 
     const cn = NODE_BY_ID.get(cur)!;
     for (const e of ADJ.get(cur)!) {
       const nn = NODE_BY_ID.get(e.to)!;
+      if (stayOnFloor && nn.floor !== stayOnFloor) continue;
       if (!nodeOpen(nn, ctx) || !edgeOpen(cn, nn, e.door, ctx)) continue;
       const ng = g.get(cur)! + e.cost;
       if (ng < (g.get(e.to) ?? Infinity)) {
@@ -172,9 +171,11 @@ export function findPath(
   let a = nearestNode(from.x, from.z, ff, fy, ctx) ?? nearestNode(from.x, from.z, ff, fy, ctx, false);
   // 起点在楼梯坡面上时，朝目标楼层的出口节点走，避免把身后端点加回导致振荡
   for (const st of STAIRS) {
-    if (st.runs.some((r) => from.x >= r.x0 && from.x <= r.x1 && from.z >= r.z0 && from.z <= r.z1)) {
+    if (st.runs.some((r) => from.x >= r.x0 && from.x <= r.x1 && from.z >= r.z0 && from.z <= r.z1
+      && Math.abs(fy - rampY(r, from.x, from.z)) < 0.18)) {
       const na = node(st.a), nb = node(st.b);
-      a = na.floor === tf ? na : nb;
+      if (tf === na.floor || tf === nb.floor) a = na.floor === tf ? na : nb;
+      else a = Math.hypot(na.x - from.x, na.z - from.z) < Math.hypot(nb.x - from.x, nb.z - from.z) ? na : nb;
       break;
     }
   }
@@ -182,7 +183,11 @@ export function findPath(
   const cylsT = cylsAt(ty);
   const b = nearestNode(to.x, to.z, tf, ty, ctx) ?? nearestNode(to.x, to.z, tf, ty, ctx, false);
   if (!a || !b) return null;
-  const ids = findNodePath(a.id, b.id, ctx);
+  // Do not divert a same-floor walk into a stairwell just because it is a few
+  // meters shorter. A cross-floor detour remains available if a door or light
+  // zone closes off the route on this floor.
+  const sameFloor = a.floor === b.floor ? findNodePath(a.id, b.id, ctx, a.floor) : null;
+  const ids = sameFloor ?? findNodePath(a.id, b.id, ctx);
   if (!ids) return null;
   const pts: PathPoint[] = ids.map((id) => { const n = NODE_BY_ID.get(id)!; return { x: n.x, z: n.z, y: n.y, floor: n.floor }; });
   while (pts.length > 1 && pts[0].floor === ff && pts[1].floor === ff && walkClear(from.x, from.z, pts[1].x, pts[1].z, boxesF, 0.3, cylsF)

@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import { hasLineOfSight } from '../src/sim/collision';
 import { DoorId, supportY, ceilingY, regionAt3 } from '../src/sim/level';
-import { findNodePath, findPath, reachableFrom } from '../src/sim/nav';
+import { findNodePath, findPath, node, reachableFrom } from '../src/sim/nav';
 import { newGhost, newWorld } from '../src/sim/state';
 import { Driver, STAND } from './driver';
 
@@ -117,12 +117,50 @@ describe('楼梯高度连续', () => {
   });
 
   it('ceilingY：B1 低拱顶、2F 步道开敞', () => {
-    expect(ceilingY(5.5, 13, 'B1')).toBeCloseTo(-0.6);
-    expect(ceilingY(12, 10.3, 'B1')).toBeCloseTo(-0.8);
+    expect(ceilingY(5.5, 13, 'B1')).toBeCloseTo(-0.75);
+    expect(ceilingY(12, 10.3, 'B1')).toBeCloseTo(-0.95);
     expect(ceilingY(9.2, 12, '2F')).toBe(Infinity);
     expect(regionAt3(5.5, 13, 'B1')).toBe('cellar');
     expect(regionAt3(9.2, 12, '2F')).toBe('walk');
   });
+});
+
+describe('Stair and landing routes', () => {
+  const ctx = { doors: OPEN, lit: [] };
+  it('leaves S2 for the courtyard without detouring through the cellar when the chapel is open', () => {
+    const from = { x: 15.146, z: 21.4, y: 0.45, floor: '1F' as const };
+    const candidate = findPath(from, { ...STAND.doorOut, floor: '1F' }, ctx);
+    expect(candidate?.at(-1)).toMatchObject(STAND.doorOut);
+    expect(candidate?.every((p) => p.floor === '1F')).toBe(true);
+  });
+
+  it('does not mistake the 2F walk for S1 underneath it', () => {
+    const from = { x: 9.43, z: 9.9, y: 4, floor: '2F' as const };
+    const path = findPath(from, node('g_gal2'), ctx);
+    expect(path?.at(-1)).toMatchObject({ x: 22.5, z: 21.15, floor: '2F' });
+    expect(path?.every((p) => p.floor === '2F')).toBe(true);
+  });
+
+  for (const [a, b] of [['b_s2b', 'v_s2'], ['c_s3bot', 'w_e1'], ['g_gal2', 'n_s4turn']] as const) {
+    for (const [start, end] of [[a, b], [b, a]]) {
+      it(`walks from ${start} to ${end} without clipping or snapping`, () => {
+        const d = new Driver();
+        d.w.phase = 'day'; d.w.doors = { ...OPEN };
+        const { x, z, y, floor } = node(start);
+        Object.assign(d.w.player, { x, z, y, floor });
+        let prevY = y, largestStep = 0;
+        d.onStep = ({ player }) => {
+          largestStep = Math.max(largestStep, Math.abs(prevY - player.y));
+          prevY = player.y;
+        };
+        const goal = node(end);
+        expect(d.walkTo(goal.x, goal.z, { floor: goal.floor, maxSecs: 12 })).toBeGreaterThan(0);
+        expect(d.w.player.floor).toBe(goal.floor);
+        expect(d.w.player.y).toBeCloseTo(goal.y, 1);
+        expect(largestStep).toBeLessThan(0.15);
+      });
+    }
+  }
 });
 
 describe('存档往返楼层', () => {

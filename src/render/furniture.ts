@@ -3,7 +3,7 @@
 // 外部 GLB（public/models/props，CC0/CC-BY 见 CREDITS.md）经 propAssets 归一到圣经第 5 节材质；加载失败回退程序化。
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-import { PROPS, RAISED_Y, WELL } from '../sim/level';
+import { BARRELS, PROPS, RAISED_Y, WELL } from '../sim/level';
 import { Batch } from './geom';
 import { Materials, scaleUV, tiledBox, trackPending } from './materials';
 import { applyWear, loadProp, mergeByMaterial, sackGeometry, sackTie } from './propAssets';
@@ -150,7 +150,7 @@ export function buildFurniture(m: Materials): THREE.Group {
   // 共享金属/织物实例（非 5.1 族类）：铜烛座与旗巾，便于按材质合批
   const bronze = new THREE.MeshStandardMaterial({ color: 0xa89060, roughness: 0.45, metalness: 1 });
   const wineCloth = new THREE.MeshPhysicalMaterial({ color: 0x5b1f24, roughness: 0.95, sheen: 0.5, sheenRoughness: 0.8, sheenColor: new THREE.Color(0x6a4a44) });
-  const barrelSlots: { x: number; z: number; y0: number; h: number; ry: number }[] = [];
+  const barrelSlots: { x: number; z: number; y0: number; h: number; ry: number; r?: number }[] = [];
 
   // —— 井台（hero）：GLB 石圈+木柱斜撑+木瓦顶+辘轳绳筒吊桶；程序化兜底 ——
   const wellFallback = new THREE.Group();
@@ -367,11 +367,12 @@ export function buildFurniture(m: Materials): THREE.Group {
   const addBarrel = (x: number, z: number, y0: number, h: number, ry = 0): void => {
     barrelSlots.push({ x, z, y0, h, ry });
   };
-  const buildBarrelFallback = (slot: { x: number; z: number; y0: number; h: number; ry: number }): THREE.Group => {
+  const buildBarrelFallback = (slot: { x: number; z: number; y0: number; h: number; ry: number; r?: number }): THREE.Group => {
     const { x, z, y0, h, ry } = slot;
+    const rad = (slot.r ?? 0.345) / 0.345;
     const g = new THREE.Group();
     const prof: THREE.Vector2[] = [];
-    const rp = (t: number): number => 0.26 + 0.085 * Math.sin(t * Math.PI);
+    const rp = (t: number): number => (0.26 + 0.085 * Math.sin(t * Math.PI)) * rad;
     for (let i = 0; i <= 8; i++) prof.push(new THREE.Vector2(rp(i / 8), (i / 8) * h));
     const body = new THREE.Mesh(new THREE.LatheGeometry(prof, 14), v.woodPlank);
     body.castShadow = body.receiveShadow = true;
@@ -390,8 +391,7 @@ export function buildFurniture(m: Materials): THREE.Group {
     group.add(g);
     return g;
   };
-  addBarrel(-6.7, 27.5, 0, 0.9, 0.4);
-  addBarrel(-5.85, 27.95, 0, 0.78, 1.3);
+  barrelSlots.push(...BARRELS.map((slot) => ({ ...slot, y0: 0 })));
   addBarrel(8.6, 21, 0, 0.85, 2.2);
   addBarrel(-9.35, 6.3, 0, 0.8, 0.9);
   addBarrel(-9.2, 9, 0, 0.8, 0.9);
@@ -455,10 +455,14 @@ export function buildFurniture(m: Materials): THREE.Group {
       const center = box.getCenter(new THREE.Vector3());
       barrelSlots.forEach((slot, i) => {
         const clone = src.clone(true);
-        const k = slot.h / size.y;
-        clone.scale.setScalar(k);
-        clone.position.set(slot.x - center.x * k, slot.y0 - box.min.y * k, -slot.z - center.z * k);
-        clone.rotation.y = slot.ry;
+        const ky = slot.h / size.y;
+        const kr = slot.r ? slot.r * 2 / Math.max(size.x, size.z) : ky;
+        const barrel = new THREE.Group();
+        clone.scale.set(kr, ky, kr);
+        clone.position.set(-center.x * kr, -box.min.y * ky, -center.z * kr);
+        barrel.position.set(slot.x, slot.y0, -slot.z);
+        barrel.rotation.y = slot.ry;
+        barrel.add(clone);
         const vr = (k: number): number => { const x = Math.sin((i + 1) * 77.7 + k * 13.1) * 43758.5453; return x - Math.floor(x); };
         clone.traverse((o) => {
           if ((o as THREE.Mesh).isMesh) {
@@ -478,7 +482,7 @@ export function buildFurniture(m: Materials): THREE.Group {
           }
         });
         mergeByMaterial(clone);
-        group.add(clone);
+        group.add(barrel);
         group.remove(barrelFallbacks[i]);
       });
       resolve();

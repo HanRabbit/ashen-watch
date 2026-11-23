@@ -17,6 +17,9 @@ export function solidBoxes(doors: DoorOpen, y = 0): Box[] {
   const out: Box[] = [];
   for (const b of WALLS) if (overlapsY(b, y)) out.push(b);
   for (const b of PROPS) if (overlapsY(b, y)) out.push(b);
+  // Low treads are walkable; a higher step body is solid when approached
+  // from below (for example, walking across the room beside a staircase).
+  for (const b of STAIR_MASS) if (b.h > y + 0.55 && overlapsY(b, y)) out.push(b);
   for (const id of DOOR_IDS) if (!doors[id] && overlapsY(DOORS[id].box, y)) out.push(DOORS[id].box);
   return out;
 }

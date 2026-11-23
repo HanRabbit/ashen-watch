@@ -5,7 +5,7 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { BRAZIER, BrazierId, HEARTH, LightZone, WALL_LAMP } from '../config';
 import { B1_Y, BELL_POS, BRAZIER_POS, DOORS, INTERACTS, LAMP_POS, PROPS, RAISED_Y } from '../sim/level';
 import { World } from '../sim/state';
-import { archLeaf, boxMesh, cyl, halfArchLeaf, lerp, mesh, put } from './geom';
+import { archLeaf, archPath, boxMesh, cyl, halfArchLeaf, lerp, mesh, put } from './geom';
 import { glowTexture, grimeTexture, Materials, smokeTexture } from './materials';
 import { findNode, loadProp, mergeByMaterial, sackGeometry, sackTie } from './propAssets';
 import { variants } from './materialVariants';
@@ -466,7 +466,8 @@ export class Props {
     this.gateClosedRot = DOORS.gate.axis === 'z' ? HALF_PI : 0;
     const gateBox = DOORS.gate.box;
     put(this.gate, gh.x, gateBox.y0 ?? 0, gh.z);
-    this.gate.scale.set((gateBox.z1 - gateBox.z0) / 1.8, (gateBox.h - (gateBox.y0 ?? 0)) / 2.95, 1);
+    const gateWidth = DOORS.gate.axis === 'z' ? gateBox.z1 - gateBox.z0 : gateBox.x1 - gateBox.x0;
+    this.gate.scale.set(gateWidth / 1.8, (gateBox.h - (gateBox.y0 ?? 0)) / 2.95, 1);
     this.gate.add(mesh(gateGeometry(), m.iron));
     const tipIron = m.iron.clone();
     tipIron.roughness = 0.4;
@@ -477,25 +478,49 @@ export class Props {
     this.gate.add(this.gateJam);
     g.add(this.gate);
 
-    // South wall: a barred, bricked-up arch, not a second interactable gate.
-    const grille = put(new THREE.Group(), 4.27, 0.18, 0.63);
+    // Decorative only: this stays in front of the solid south wall and has no
+    // DoorDef, target, or state. The dark masonry is recessed behind the iron.
+    const blockedArch = put(new THREE.Group(), 5.5, 0.16, 0.53);
+    blockedArch.name = 'blocked-south-grille';
+    const v = variants(m);
+    const infill = v.wallAshlar.clone();
+    infill.color.multiplyScalar(0.27);
+    infill.roughness = 1;
+    blockedArch.add(mesh(archLeaf(2.49, 2.12, 3.08, 0.07), infill));
+    const rimShape = archPath(new THREE.Shape(), 2.94, 2.18, 3.38);
+    const aperture = archPath(new THREE.Path(), 2.48, 2.12, 3.06);
+    // Raise the hole a hair above the outline to form a continuous toe stone.
+    const inner = new THREE.Path(aperture.getPoints(10).map((p) => p.add(new THREE.Vector2(0, 0.02))));
+    rimShape.holes.push(inner);
+    const rim = new THREE.ExtrudeGeometry(rimShape, { depth: 0.13, bevelEnabled: true, bevelSize: 0.018, bevelThickness: 0.018, bevelSegments: 1 });
+    rim.translate(0, 0, -0.14);
+    blockedArch.add(mesh(rim, v.wallTrim));
+    const sill = boxMesh(v.wallTrim, 2.98, 0.14, 0.25, 1.4);
+    sill.position.set(0, 0.015, -0.09);
+    blockedArch.add(sill);
+    const grille = new THREE.Group();
+    grille.position.set(-1.23, 0.06, -0.14);
     grille.scale.set(1.37, 1.03, 1);
     grille.add(mesh(gateGeometry(), m.iron), mesh(gateTipsGeometry(), tipIron));
-    g.add(grille);
+    blockedArch.add(grille);
+    g.add(blockedArch);
 
     // Chapel leaves follow the actual west-facing opening, at the simulated hinges.
     const front = DOORS.chapelFront;
-    put(this.frontL, front.hinge.x, R, front.box.z0);
-    put(this.frontR, front.hinge.x, R, front.box.z1);
+    const frontBase = front.box.y0 ?? 0;
+    const frontHalf = (front.box.z1 - front.box.z0) / 2;
+    const frontHeight = front.box.h - frontBase;
+    put(this.frontL, front.hinge.x, frontBase, front.box.z0);
+    put(this.frontR, front.hinge.x, frontBase, front.box.z1);
     this.frontL.rotation.y = HALF_PI;
     this.frontR.rotation.y = -HALF_PI;
     for (const d of [this.frontL, this.frontR]) {
-      d.add(mesh(halfArchLeaf(0.9, 2.2, 3.2, 0.1), m.wood));
+      d.add(mesh(halfArchLeaf(frontHalf, frontHeight * (2.2 / 3.2), frontHeight, 0.1), m.wood));
       for (const y of [0.5, 1.7]) {
-        const strap = boxMesh(m.iron, 0.7, 0.07, 0.12, 1); strap.position.set(0.38, y, 0);
+        const strap = boxMesh(m.iron, frontHalf * 0.78, 0.07, 0.12, 1); strap.position.set(frontHalf * 0.42, y, 0);
         d.add(strap);
       }
-      const ring = mesh(new THREE.TorusGeometry(0.08, 0.014, 5, 10), m.iron); ring.position.set(0.76, 1.15, 0);
+      const ring = mesh(new THREE.TorusGeometry(0.08, 0.014, 5, 10), m.iron); ring.position.set(frontHalf * 0.84, 1.15, 0);
       ring.scale.z = 4; d.add(ring);
     }
     g.add(this.frontL, this.frontR);

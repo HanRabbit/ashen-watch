@@ -2,7 +2,7 @@
 // 洞口护墙、庭院掩体、柱列与 B1 封门。材质全部经 variants(m)（圣经 5.1）。
 // 只读 sim 数据；可交互模型统一由 props.ts 绘制。
 import * as THREE from 'three';
-import { AREAS, B1_Y, COLUMNS, PROPS, RAISED_Y, SLABS, STAIRS, WALLS } from '../sim/level';
+import { AREAS, B1_CEILINGS, B1_Y, CHAPEL_SLABS, COLUMNS, DECK_SLABS, PLATFORM_SLAB, PROPS, RAISED_Y, S1_SHAFT, S2_SHAFT, STAIR_BODIES, STAIR_RAILS, STEP_RAMP, WALLS } from '../sim/level';
 import { World } from '../sim/state';
 import { Batch } from './geom';
 import { Materials, scaleUV, tiledBox } from './materials';
@@ -15,22 +15,6 @@ export interface Floors {
 
 const HALF_PI = Math.PI / 2;
 
-/**  stepped 梯段实体（视觉踏步）。 */
-function drawRun(b: Batch, mat: THREE.Material, r: { x0: number; z0: number; x1: number; z1: number; axis: 'x' | 'z'; from: number; to: number }, n: number): void {
-  const yBot = Math.min(r.from, r.to);
-  for (let i = 0; i < n; i++) {
-    const t1 = (i + 1) / n;
-    const yTop = r.from + (r.to - r.from) * t1;
-    if (r.axis === 'x') {
-      const xa = r.x0 + (r.x1 - r.x0) * (i / n), xb = r.x0 + (r.x1 - r.x0) * t1;
-      b.box(mat, xa, r.z0, xb, r.z1, yBot - 0.4, yTop, 1.2);
-    } else {
-      const za = r.z0 + (r.z1 - r.z0) * (i / n), zb = r.z0 + (r.z1 - r.z0) * t1;
-      b.box(mat, r.x0, za, r.x1, zb, yBot - 0.4, yTop, 1.2);
-    }
-  }
-}
-
 function boxY(b: Batch, mat: THREE.Material, x0: number, z0: number, x1: number, z1: number, y0: number, y1: number, tile = 2): void {
   b.box(mat, x0, z0, x1, z1, y0, y1, tile);
 }
@@ -40,7 +24,7 @@ export function buildFloors(m: Materials): Floors {
   const group = new THREE.Group();
   group.name = 'floors';
   const b = new Batch();
-  const b1 = new Batch(); // Keep B1 visible through both stair openings.
+  const b1 = new Batch(); // Separate batch, but keep the cellar visible through both stairs.
   const g1 = new THREE.Group(); g1.name = 'floors-B1';
 
   // —— 带 y0 的墙 / 护栏 / 垛墙 / 梯体护墙（staticLevel 跳过这些）——
@@ -73,30 +57,31 @@ export function buildFloors(m: Materials): Floors {
         if (alongX) boxY(b, v.wallTrim, c - mw / 2, w.z0, c + mw / 2, w.z1, w.h, w.h + mh, 1.4);
         else boxY(b, v.wallTrim, w.x0, c - mw / 2, w.x1, c + mw / 2, w.h, w.h + mh, 1.4);
       }
-    } else if (w.tag === 'stairMass') {
-      // 梯体由 drawRun 画，跳过
+    } else if (w.tag === 'slopeRail') {
+      // Draw the continuous rail below, not the collision approximation.
     } else {
       const isB1 = w.tag === 'cellar' || w.tag === 'passage' || w.tag === 'store';
       boxY(isB1 ? b1 : b, isB1 ? v.wallRough : v.wallTrim, w.x0, w.z0, w.x1, w.z1, y0, w.h, 2);
     }
   }
 
-  // —— 楼梯踏步 + 平台 ——
-  for (const s of STAIRS) {
+  for (const s of STAIR_BODIES) {
     const mat = s.id === 'S4' ? v.woodFloorOld : v.wallTrim;
-    for (const r of s.runs) drawRun(b, mat, r, s.id === 'S2' ? 12 : 20);
-    for (const l of s.landings) boxY(b, mat, l.x0, l.z0, l.x1, l.z1, l.y - 0.4, l.y, 1.4);
+    for (const step of s.boxes) boxY(b, mat, step.x0, step.z0, step.x1, step.z1, step.y0!, step.h, 1.2);
+  }
+  for (const r of STAIR_RAILS) {
+    const dx = r.x1 - r.x0, dy = r.to - r.from;
+    const n = Math.ceil(dx / 0.55);
+    for (let i = 0; i <= n; i++) {
+      const t = i / n;
+      b.geo(m.iron, scaleUV(new THREE.CylinderGeometry(0.029, 0.035, 1.09, 6), 1), r.x0 + dx * t, r.from + dy * t + 0.5, r.z);
+    }
+    for (const y of [0.18, 1.02]) b.geo(m.iron, tiledBox(Math.hypot(dx, dy), 0.065, 0.09, 1),
+      (r.x0 + r.x1) / 2, (r.from + r.to) / 2 + y, r.z, 0, 0, Math.atan2(dy, dx));
   }
 
-  // —— B1 拱顶（低筒拱）与地面 ——
-  // 地窖顶（挖 S1 洞）：用两段横拱
-  const s1 = STAIRS[0].runs[0];
-  boxY(b1, v.wallRough, AREAS.cellar.x0, AREAS.cellar.z0, s1.x0, AREAS.cellar.z1, -0.75, -0.6, 2);
-  boxY(b1, v.wallRough, s1.x1, AREAS.cellar.z0, AREAS.cellar.x1, AREAS.cellar.z1, -0.75, -0.6, 2);
-  boxY(b1, v.wallRough, s1.x0, AREAS.cellar.z0, s1.x1, s1.z0, -0.75, -0.6, 2);
-  boxY(b1, v.wallRough, s1.x0, s1.z1, s1.x1, AREAS.cellar.z1, -0.75, -0.6, 2);
-  // 通道顶
-  boxY(b1, v.wallRough, AREAS.passage.x0, AREAS.passage.z0, AREAS.passage.x1, AREAS.passage.z1, -0.95, -0.8, 2);
+  // The B1 ceiling pieces share the shaft cutout and collision bounds.
+  for (const c of B1_CEILINGS) boxY(b1, v.wallRough, c.x0, c.z0, c.x1, c.z1, c.y0!, c.h, 2);
   // B1 地面（泥地 + 踏道石板）
   boxY(b1, v.floorDirt, AREAS.cellar.x0, AREAS.cellar.z0, AREAS.cellar.x1, AREAS.cellar.z1, B1_Y - 0.3, B1_Y, 2);
   boxY(b1, v.floorDirt, AREAS.passage.x0, AREAS.passage.z0, AREAS.passage.x1, AREAS.passage.z1, B1_Y - 0.3, B1_Y, 2);
@@ -119,29 +104,15 @@ export function buildFloors(m: Materials): Floors {
   // 残烛（叙事光，克制）
   b1.geo(m.iron, scaleUV(new THREE.CylinderGeometry(0.03, 0.04, 0.3, 6), 1), 14.6, B1_Y + 0.15, 21.4);
 
-  // —— 1F 新地面：礼拜堂 + 平台（挖 S2 洞）， courtyard S1 洞侧壁 ——
-  const hole = { x0: 14.2, z0: 17.5, x1: 16.0, z1: 21.5 };
-  boxY(b, v.floorInterior, 13, 10.5, hole.x0, 22.5, 0.15, RAISED_Y, 2);
-  boxY(b, v.floorInterior, hole.x0, 10.5, hole.x1, hole.z0, 0.15, RAISED_Y, 2);
-  boxY(b, v.floorInterior, hole.x0, hole.z1, hole.x1, 22.5, 0.15, RAISED_Y, 2);
-  boxY(b, v.floorInterior, hole.x1, 10.5, 31, 22.5, 0.15, RAISED_Y, 2);
-  boxY(b, v.floorFlagWorn, 10.5, 11, 13, 22, 0.15, RAISED_Y, 2);
-  // 平台西侧台阶
-  for (let i = 0; i < 3; i++) boxY(b, v.wallTrim, 10.5 + i * 0.3, 11, 10.8 + i * 0.3, 22, 0, RAISED_Y * (i + 1) / 3, 1.4);
-  // S1 洞侧壁
-  boxY(b, v.wallTrim, s1.x0, s1.z0 - 0.2, s1.x1, s1.z0, -0.3, 0, 1.4);
-  boxY(b, v.wallTrim, s1.x0, s1.z1, s1.x1, s1.z1 + 0.2, -0.3, 0, 1.4);
-  boxY(b, v.wallTrim, s1.x1, s1.z0, s1.x1 + 0.3, s1.z1, -0.3, 0, 1.4);
-  // S2 洞侧壁
-  boxY(b, v.wallTrim, hole.x0 - 0.2, hole.z0, hole.x0, hole.z1, 0.15, RAISED_Y, 1.4);
-  boxY(b, v.wallTrim, hole.x1, hole.z0, hole.x1 + 0.2, 20.5, 0.15, RAISED_Y, 1.4);
-  boxY(b, v.wallTrim, hole.x0, hole.z0 - 0.2, hole.x1, hole.z0, 0.15, RAISED_Y, 1.4);
+  for (const s of CHAPEL_SLABS) boxY(b, v.floorInterior, s.x0, s.z0, s.x1, s.z1, s.y0!, s.h);
+  const p = PLATFORM_SLAB;
+  boxY(b, v.floorFlagWorn, p.x0, p.z0, p.x1, p.z1, p.y0!, p.h);
+  const r = STEP_RAMP, tread = (r.x1 - r.x0) / 3;
+  for (let i = 0; i < 3; i++) boxY(b, v.wallTrim, r.x0 + i * tread, r.z0, r.x0 + (i + 1) * tread, r.z1, -0.12, RAISED_Y * (i + 0.5) / 3, 1.4);
 
-  // —— 2F deck 面 + 上廊木地板 ——
-  for (const s of SLABS) {
-    if ((s.y0 ?? 0) < 3) continue;
-    const isGal = s.x0 >= 13.4 && s.z0 >= 20.2;
-    boxY(b, isGal ? v.woodFloorOld : v.floorFlagWorn, s.x0, s.z0, s.x1, s.z1, s.h - 0.12, s.h, 2);
+  for (const s of DECK_SLABS) {
+    const isGal = s.x0 >= 13.4 && s.z0 >= 20.0;
+    boxY(b, isGal ? v.woodFloorOld : v.floorFlagWorn, s.x0, s.z0, s.x1, s.z1, s.y0!, s.h);
   }
   // 券廊尖拱（视觉，墩间）
   const pierZ = [11.6, 14.0, 14.6, 18.4, 19.0, 21.4];
@@ -168,11 +139,15 @@ export function buildFloors(m: Materials): Floors {
       boxY(b, v.woodPlank, p.x0 + 0.7, p.z0 + 0.6, p.x1, p.z1, y0, y0 + 0.7, 1.2);
       boxY(b, v.woodPlank, p.x0 + 0.2, p.z0 + 0.2, p.x0 + 1.0, p.z0 + 1.0, y0 + 0.8, y0 + 1.5, 1.2);
     } else if (p.tag === 'wallStub') {
-      boxY(b, v.wallRubble, p.x0, p.z0, p.x1, p.z1, y0, y0 + 1.6, 2);
-      boxY(b, v.wallRough, p.x0, p.z0, p.x0 + 0.6, p.z1, y0 + 1.6, y0 + 2.1, 2);
-    } else if (p.tag === 'barrels') {
-      for (const [bx, bz] of [[-7.4, 27.2], [-6.6, 27.6], [-6.0, 27.0]]) b.geo(v.woodPlank, scaleUV(new THREE.CylinderGeometry(0.3, 0.26, 0.9, 10), 1), bx, y0 + 0.45, bz);
-      boxY(b, v.woodPlank, -7.0, 26.8, -6.0, 27.8, y0, y0 + 0.7, 1.2);
+      // Low fallen wall: tapered courses, exposed core and a jagged break.
+      const len = p.x1 - p.x0, depth = p.z1 - p.z0;
+      boxY(b, v.wallRubble, p.x0, p.z0, p.x1, p.z1, y0, y0 + 0.34, 1.5);
+      for (const [u, w, hf] of [[0.02, 0.27, 0.8], [0.29, 0.25, 1], [0.55, 0.22, 0.72], [0.79, 0.19, 0.5]]) {
+        boxY(b, v.wallRubble, p.x0 + len * u, p.z0 + depth * 0.1, p.x0 + len * (u + w), p.z1 - depth * 0.08, y0 + 0.33, y0 + hf * (p.h - y0), 1.5);
+      }
+      for (const [u, z, size, rot] of [[0.22, p.z0 + 0.08, 0.19, 1.2], [0.7, p.z1 - 0.13, 0.2, 0.6], [0.92, p.z0 + 0.16, 0.17, 1.8]]) {
+        b.geo(v.wallRough, scaleUV(new THREE.DodecahedronGeometry(size), 0.7), p.x0 + len * u, y0 + 0.11, z, rot);
+      }
     }
   }
   for (const c of COLUMNS) {
@@ -184,9 +159,20 @@ export function buildFloors(m: Materials): Floors {
   b1.build(g1, true); group.add(g1); // map: B1 子组
   group.traverse((o) => { const me = o as THREE.Mesh; if (me.isMesh) { me.castShadow = false; me.receiveShadow = true; } }); // map: 三层几何不投影，省 shadow pass（swiftshader 稳定+预算）
 
+  // Subtle local bounce makes the first few descending treads legible at
+  // their mouths without illuminating the whole cellar or changing AI light zones.
+  const fill1 = new THREE.PointLight(0xaebccd, 6.5, 6, 2);
+  fill1.position.set(S1_SHAFT.x0 + 2.4, -0.55, -(S1_SHAFT.z0 + S1_SHAFT.z1) / 2);
+  const fill2 = new THREE.PointLight(0xdeab7b, 4.2, 5.5, 2);
+  fill2.position.set((S2_SHAFT.x0 + S2_SHAFT.x1) / 2, -0.32, -(S2_SHAFT.z1 - 1.65));
+  group.add(fill1, fill2);
   return {
     group,
-    update(): void {},
+    update(w: World): void {
+      const daylight = w.phase === 'night' ? 0.32 : w.phase === 'dusk' ? 0.65 : 1;
+      fill1.intensity = 6.5 * daylight;
+      fill2.intensity = 4.2 * daylight;
+    },
   };
 }
 

@@ -69,8 +69,110 @@ export const AREAS = {
   northWalk: { x0: -10.0, z0: 27.0, x1: 10.0, z1: 28.5 },
   westWalk: { x0: -10.0, z0: 2.5, x1: -8.4, z1: 28.5 },
   bridge: { x0: 8.4, z0: 19.5, x1: 13.5, z1: 21.0 },
-  gallery: { x0: 13.5, z0: 20.3, x1: 24.0, z1: 22.0 },
+  gallery: { x0: 13.5, z0: 20.0, x1: 24.0, z1: 22.0 },
 } as const;
+
+// —— 楼梯（ENV-09）：坡面 + 平台，连续改变高度 ——
+export interface StairRun extends Rect { axis: 'x' | 'z'; from: number; to: number }
+export interface StairDef {
+  id: string;
+  runs: StairRun[];
+  landings: { x0: number; z0: number; x1: number; z1: number; y: number }[];
+  midY: number; lowFloor: FloorId; highFloor: FloorId;
+  a: string; b: string;
+}
+export const STAIRS: StairDef[] = [
+  {
+    id: 'S1', runs: [{ x0: 4.6, z0: 9.0, x1: 10.0, z1: 10.8, axis: 'x', from: 0, to: -3 }],
+    landings: [], midY: -1.5, lowFloor: 'B1', highFloor: '1F', a: 'c_s1top', b: 'b_land',
+  },
+  {
+    id: 'S2',
+    runs: [{ x0: 14.2, z0: 17.5, x1: 16.0, z1: 21.0, axis: 'z', from: -3, to: 0.45 }],
+    landings: [],
+    midY: -1.275, lowFloor: 'B1', highFloor: '1F', a: 's2top', b: 'b_s2b',
+  },
+  {
+    id: 'S3', runs: [{ x0: 3.8, z0: 0.5, x1: 9.0, z1: 2.3, axis: 'x', from: 0, to: 4 }],
+    landings: [{ x0: 9.0, z0: 0.5, x1: 10.0, z1: 2.5, y: F2_Y }],
+    midY: 2, lowFloor: '1F', highFloor: '2F', a: 'c_s3bot', b: 'w_s3t',
+  },
+  {
+    id: 'S4', runs: [{ x0: 24.6, z0: 20.4, x1: 29.3, z1: 22.0, axis: 'x', from: F2_Y, to: RAISED_Y }],
+    landings: [{ x0: 24.0, z0: 20.4, x1: 24.6, z1: 22.0, y: F2_Y }],
+    midY: 2.2, lowFloor: '1F', highFloor: '2F', a: 'n_s4bot', b: 'g_land',
+  },
+];
+
+// Descending shafts are open all the way through the slab and any ground dressing.
+export const [S1_SHAFT, S2_SHAFT] = [STAIRS[0].runs[0], STAIRS[1].runs[0]];
+
+/** Return the pieces of a rectangle outside a cutout, without degenerate edges. */
+export function cutRect(r: Rect, cut: Rect): Rect[] {
+  const { x0, z0, x1, z1 } = r;
+  const a = Math.max(x0, cut.x0), b = Math.min(x1, cut.x1);
+  const c = Math.max(z0, cut.z0), d = Math.min(z1, cut.z1);
+  if (a >= b || c >= d) return [r];
+  return [{ x0, z0, x1: a, z1 }, { x0: b, z0, x1, z1 },
+    { x0: a, z0, x1: b, z1: c }, { x0: a, z0: d, x1: b, z1 }]
+    .filter((p) => p.x0 < p.x1 && p.z0 < p.z1);
+}
+
+// Walking uses the smooth pitch. Treads are centered on that pitch and used as physical
+// solids for sightlines and cameras, so they do not intersect the view above the run.
+export const STAIR_BODIES = STAIRS.map((s) => {
+  const boxes: Box[] = [];
+  for (const r of s.runs) {
+    const n = Math.ceil(Math.abs(r.to - r.from) / 0.18);
+    const y0 = Math.min(r.from, r.to) - 0.3;
+    for (let i = 0; i < n; i++) {
+      const t0 = i / n, t1 = (i + 1) / n;
+      const h = r.from + (r.to - r.from) * (t0 + t1) / 2;
+      const dx = r.x1 - r.x0, dz = r.z1 - r.z0;
+      boxes.push(r.axis === 'x'
+        ? W(r.x0 + dx * t0, r.z0, r.x0 + dx * t1, r.z1, h, 'stairMass', y0)
+        : W(r.x0, r.z0 + dz * t0, r.x1, r.z0 + dz * t1, h, 'stairMass', y0));
+    }
+  }
+  const base = Math.min(...s.runs.flatMap((r) => [r.from, r.to])) - 0.3;
+  for (const l of s.landings) boxes.push(W(l.x0, l.z0, l.x1, l.z1, l.y, 'stairMass', base));
+  return { id: s.id, boxes };
+});
+export const STAIR_MASS = STAIR_BODIES.flatMap((s) => s.boxes);
+
+// Sloping rails keep players from dropping off the exposed sides. The collision is
+// split into short segments; the renderer uses the two endpoints of the same pitch.
+export const STAIR_RAILS = [
+  { x0: 3.8, x1: 9.0, z: 2.35, from: 0, to: F2_Y },
+  { x0: 9.0, x1: 10.0, z: 0.55, from: F2_Y, to: F2_Y },
+  { x0: 24.0, x1: 24.6, z: 20.35, from: F2_Y, to: F2_Y },
+  { x0: 24.6, x1: 29.3, z: 20.35, from: F2_Y, to: RAISED_Y },
+];
+const STAIR_RAIL_BOXES = STAIR_RAILS.flatMap((r) => {
+  const n = Math.ceil((r.x1 - r.x0) / 0.3);
+  return Array.from({ length: n }, (_, i) => {
+    const a = i / n, b = (i + 1) / n, y = r.from + (r.to - r.from) * (a + b) / 2;
+    return { ...W(r.x0 + (r.x1 - r.x0) * a, r.z - 0.05, r.x0 + (r.x1 - r.x0) * b, r.z + 0.05, y + 1.05, 'slopeRail', y - 0.12), los: false };
+  });
+});
+
+export const STEP_RAMP = { x0: 10.5, z0: 11, x1: 11.4, z1: 22 };
+const COURT_BOUNDS = { x0: -10.5, z0: 0, x1: 10.5, z1: 29 };
+export const COURTYARD_SLABS = cutRect(COURT_BOUNDS, S1_SHAFT)
+  .map((r) => SL(r.x0, r.z0, r.x1, r.z1, -0.3, 0));
+export const CHAPEL_SLABS = cutRect({ x0: 13, z0: 10.5, x1: 31, z1: 22.5 }, S2_SHAFT)
+  .map((r) => SL(r.x0, r.z0, r.x1, r.z1, 0.15, RAISED_Y));
+export const PLATFORM_SLAB = SL(STEP_RAMP.x1, STEP_RAMP.z0, 13, STEP_RAMP.z1, 0.15, RAISED_Y);
+export const B1_CEILINGS = [
+  ...cutRect(AREAS.cellar, S1_SHAFT).map((r) => SL(r.x0, r.z0, r.x1, r.z1, -0.75, -0.6)),
+  SL(AREAS.passage.x0, AREAS.passage.z0, AREAS.passage.x1, AREAS.passage.z1, -0.95, -0.8),
+];
+export const DECK_SLABS = [
+  SL(8.4, 2.5, 10.5, 28.5, 3.7, F2_Y), SL(-10.5, 26.9, 10.5, 29, 3.7, F2_Y),
+  SL(-10.5, 2.5, -8.4, 26.9, 3.7, F2_Y), SL(10.5, 19.5, 13.5, 21.0, 3.7, F2_Y),
+  SL(13.5, 20.0, 24.0, 22.0, 3.7, F2_Y),
+];
+export const SLABS = [...COURTYARD_SLABS, ...CHAPEL_SLABS, PLATFORM_SLAB, ...B1_CEILINGS, ...DECK_SLABS];
 
 export const WALLS: Box[] = [
   // —— 门房 ——
@@ -92,8 +194,8 @@ export const WALLS: Box[] = [
   W(13, 11, 13.5, 15.6, 7), W(13, 17.4, 13.5, 19.5, 7), W(13, 21.0, 13.5, 22, 7),
   W(30.5, 10.5, 31, 22.5, 7), W(13.5, 10.5, 31, 11, 7), W(13.5, 22, 31, 22.5, 7),
   // —— 门厅隔墙（x[17.5,17.9]，开口 z[11.7,13.7]；上廊跨越段拆分）——
-  W(17.5, 11, 17.9, 11.7, 4.5), W(17.5, 13.7, 17.9, 20.3, 4.5),
-  W(17.5, 20.3, 17.9, 22, 3.7, 'partitionLow'),
+  W(17.5, 11, 17.9, 11.7, 4.5), W(17.5, 13.7, 17.9, 20.0, 4.5),
+  W(17.5, 20.0, 17.9, 22, 3.7, 'partitionLow'),
   // —— 坍塌侧廊瓦砾（堵死，不可通行）——
   W(10.5, 2, 13, 11, 2.5, 'rubbleFill'),
   // —— B1 地窖 ——
@@ -109,16 +211,22 @@ export const WALLS: Box[] = [
   W(8.4, 2.5, 8.5, 27.0, 5.05, 'rail', 4), W(-8.5, 2.5, -8.4, 27.0, 5.05, 'rail', 4),
   W(-8.4, 26.9, 8.4, 27.0, 5.05, 'rail', 4), W(-10, 2.4, -8.4, 2.5, 5.05, 'rail', 4),
   W(10, 19.35, 13.5, 19.5, 5.05, 'rail', 4), W(10, 21.0, 13.5, 21.15, 5.05, 'rail', 4),
-  W(15.5, 20.3, 24.0, 20.4, 5.05, 'rail', 4),
-  // —— S3 外梯内侧分级护墙 / 外侧铁栏 ——
-  ...[0, 1, 2, 3].map((i) => W(3.8 + i * 1.2, 2.3, 5.0 + i * 1.2, 2.5, (i + 1) * 1.0 + 1, 'stairGuard')),
-  W(3.8, 0, 9.4, 0.5, 5.1, 'stairRail', 4.2),
+  W(13.5, 20.0, 24.0, 20.1, 5.05, 'rail', 4),
+  ...STAIR_RAIL_BOXES,
+  // Close off the under-stair mass at the two elevated entries, without plugging the upper treads.
+  W(24.0, 20.4, 24.1, 22.0, 4, 'stairEnd', RAISED_Y),
   // —— S1 洞口护墙（1F）——
   W(4.6, 8.8, 10.3, 9.0, 1.05, 'holeGuard'), W(4.6, 10.8, 10.3, 11.0, 1.05, 'holeGuard'),
   W(10.0, 8.8, 10.3, 11.0, 1.05, 'holeGuard'),
   // —— S2 洞口护墙（门厅）——
-  W(14.0, 17.5, 14.2, 21.5, 1.5, 'holeGuard', 0.45), W(16.0, 17.5, 16.2, 20.5, 1.5, 'holeGuard', 0.45),
+  W(14.0, 17.5, 14.2, S2_SHAFT.z1, 1.5, 'holeGuard', 0.45), W(16.0, 17.5, 16.2, S2_SHAFT.z1, 1.5, 'holeGuard', 0.45),
   W(14.2, 17.3, 16.0, 17.5, 1.5, 'holeGuard', 0.45),
+];
+
+export const BARRELS = [
+  { x: -7.5, z: 27.35, r: 0.36, h: 0.9, ry: 0.4 },
+  { x: -6.7, z: 27.7, r: 0.33, h: 0.82, ry: 1.3 },
+  { x: -5.95, z: 27.2, r: 0.31, h: 0.77, ry: 2.2 },
 ];
 
 export const PROPS: Box[] = [
@@ -131,7 +239,7 @@ export const PROPS: Box[] = [
   P(-10, 5, -9.2, 7.4, 1.9, 'shelf'),
   P(8.6, 12.4, 9.8, 13.6, 1.1, 'crates'),
   P(-8.6, 20.4, -7.4, 21.6, 0.9, 'rubble'),
-  P(-8, 26.6, -5.6, 28.2, 0.9, 'barrels'),
+  ...BARRELS.map((p) => P(p.x - p.r, p.z - p.r, p.x + p.r, p.z + p.r, p.h, 'barrel')),
   P(11.6, 20.2, 12.6, 21.0, 0.8, 'crate', false, RAISED_Y),
   P(14.4, 12.6, 15.2, 13.4, 0.86, 'flaskTable', false, B1_Y),
   P(28.7, 15.1, 30, 17.9, 1.1, 'altar', false, RAISED_Y),
@@ -146,12 +254,12 @@ export const PROPS: Box[] = [
   P(-4.8, 8.2, -2.2, 9.6, 1.6, 'cart', true),
   P(-8.2, 17.0, -6.4, 18.2, 2.3, 'scaffold', true),
   P(6.8, 3.0, 8.4, 4.6, 1.9, 'crateStack', true),
-  P(-5.6, 23.6, -3.6, 24.1, 2.1, 'wallStub', true),
+  P(-5.6, 25.4, -3.5, 26.0, 1.25, 'wallStub', true),
   // B1 石墩 / 储藏架
   P(4.3, 7.3, 4.9, 7.9, -0.6, 'pier', true, B1_Y),
   P(4.3, 12.9, 4.9, 13.5, -0.6, 'pier', true, B1_Y),
-  P(14.2, 15.0, 14.7, 16.2, 0.0, 'shelfB1', false, B1_Y),
-  P(14.2, 17.0, 14.7, 18.2, 0.0, 'shelfB1', false, B1_Y),
+  P(13.1, 15.0, 13.6, 16.2, -1.2, 'shelfB1', false, B1_Y),
+  P(13.1, 17.0, 13.6, 18.2, -1.2, 'shelfB1', false, B1_Y),
 ];
 
 /** 圆柱障碍（井台 + 礼拜堂柱列）。 */
@@ -168,90 +276,6 @@ export const DOORS: Record<DoorId, DoorDef> = {
   chapelFront: { id: 'chapelFront', box: W(13.12, 15.6, 13.38, 17.4, 3.65, undefined, RAISED_Y), hinge: { x: 13.25, z: 15.6 }, axis: 'z', label: '礼拜堂正门' },
 };
 
-// —— 楼梯（ENV-09）：坡面 + 平台，连续改变高度 ——
-export interface StairRun { x0: number; z0: number; x1: number; z1: number; axis: 'x' | 'z'; from: number; to: number }
-export interface StairDef {
-  id: string;
-  runs: StairRun[];
-  landings: { x0: number; z0: number; x1: number; z1: number; y: number }[];
-  midY: number; lowFloor: FloorId; highFloor: FloorId;
-  a: string; b: string;
-}
-export const STAIRS: StairDef[] = [
-  {
-    id: 'S1', runs: [{ x0: 4.6, z0: 9.0, x1: 10.0, z1: 10.8, axis: 'x', from: 0, to: -3 }],
-    landings: [], midY: -1.5, lowFloor: 'B1', highFloor: '1F', a: 'c_s1top', b: 'b_land',
-  },
-  {
-    id: 'S2',
-    runs: [{ x0: 14.2, z0: 17.5, x1: 16.0, z1: 21.5, axis: 'z', from: -3, to: 0.45 }],
-    landings: [],
-    midY: 0.4, lowFloor: 'B1', highFloor: '1F', a: 's2top', b: 'b_s2b',
-  },
-  {
-    id: 'S3', runs: [{ x0: 3.8, z0: 0.5, x1: 9.4, z1: 2.3, axis: 'x', from: 0, to: 4 }],
-    landings: [{ x0: 9.0, z0: 0.5, x1: 10.0, z1: 2.5, y: 4 }],
-    midY: 2, lowFloor: '1F', highFloor: '2F', a: 'c_s3bot', b: 'w_s3t',
-  },
-  {
-    id: 'S4', runs: [{ x0: 24.6, z0: 20.4, x1: 29.6, z1: 22.0, axis: 'x', from: 0.45, to: 4 }],
-    landings: [{ x0: 24.0, z0: 20.4, x1: 24.6, z1: 22.0, y: 4 }],
-    midY: 2.2, lowFloor: '1F', highFloor: '2F', a: 'n_s4bot', b: 'g_land',
-  },
-];
-
-// Descending shafts are open all the way through the slab and any ground dressing.
-export const [S1_SHAFT, S2_SHAFT] = [STAIRS[0].runs[0], STAIRS[1].runs[0]];
-
-/** Return the pieces of a rectangle outside a cutout, without degenerate edges. */
-export function cutRect(r: Rect, cut: Rect): Rect[] {
-  const { x0, z0, x1, z1 } = r;
-  const a = Math.max(x0, cut.x0), b = Math.min(x1, cut.x1);
-  const c = Math.max(z0, cut.z0), d = Math.min(z1, cut.z1);
-  if (a >= b || c >= d) return [r];
-  return [{ x0, z0, x1: a, z1 }, { x0: b, z0, x1, z1 },
-    { x0: a, z0, x1: b, z1: c }, { x0: a, z0: d, x1: b, z1 }]
-    .filter((p) => p.x0 < p.x1 && p.z0 < p.z1);
-}
-
-/** 梯体（坡面下方的实体，分级盒近似），阻止从下方走入梯段。 */
-export const STAIR_MASS: Box[] = [];
-for (const s of STAIRS) {
-  for (const r of s.runs) {
-    const n = 4;
-    for (let i = 0; i < n; i++) {
-      const t1 = (i + 1) / n;
-      const yTop = r.from + (r.to - r.from) * t1 - 0.05;
-      const yBot = Math.min(r.from, r.to);
-      if (yTop <= yBot + 0.05) continue;
-      if (r.axis === 'x') {
-        const xa = r.x0 + (r.x1 - r.x0) * (i / n), xb = r.x0 + (r.x1 - r.x0) * t1;
-        STAIR_MASS.push({ x0: xa, z0: r.z0, x1: xb, z1: r.z1, h: yTop, y0: yBot - 0.5, los: true, kind: 'wall', tag: 'stairMass' });
-      } else {
-        const za = r.z0 + (r.z1 - r.z0) * (i / n), zb = r.z0 + (r.z1 - r.z0) * t1;
-        STAIR_MASS.push({ x0: r.x0, z0: za, x1: r.x1, z1: zb, h: yTop, y0: yBot - 0.5, los: true, kind: 'wall', tag: 'stairMass' });
-      }
-    }
-  }
-  for (const l of s.landings) {
-    STAIR_MASS.push({ x0: l.x0, z0: l.z0, x1: l.x1, z1: l.z1, h: l.y - 0.05, y0: l.y - 3.5, los: true, kind: 'wall', tag: 'stairMass' });
-  }
-}
-
-// —— 楼板（挡视线 / 镜头）——
-export const SLABS: Box[] = [
-  // 庭院地面（挖 S1 洞）
-  SL(-10.5, 0, 4.6, 29, -0.3, 0), SL(4.6, 0, 10.5, 9.0, -0.3, 0),
-  SL(4.6, 10.8, 10.5, 29, -0.3, 0), SL(10.0, 9.0, 10.5, 10.8, -0.3, 0),
-  // 礼拜堂 + 平台地面（挖 S2 洞）
-  SL(13, 10.5, 14.2, 22.5, 0.15, RAISED_Y), SL(14.2, 10.5, 16, 17.5, 0.15, RAISED_Y),
-  SL(14.2, 21.5, 16, 22.5, 0.15, RAISED_Y), SL(16, 10.5, 31, 22.5, 0.15, RAISED_Y),
-  SL(10.5, 11, 13, 22, 0.15, RAISED_Y),
-  // 2F deck
-  SL(8.4, 2.5, 10.5, 28.5, 3.7, F2_Y), SL(-10.5, 26.9, 10.5, 29, 3.7, F2_Y),
-  SL(-10.5, 2.5, -8.4, 28.5, 3.7, F2_Y), SL(8.4, 19.5, 13.5, 21.0, 3.7, F2_Y),
-  SL(13.5, 20.3, 24.0, 22.0, 3.7, F2_Y),
-];
 // —— 导航节点 ——
 const N = (id: string, x: number, z: number, y: number, floor: FloorId, region: Region): NavNode => ({ id, x, z, y, floor, region });
 export const NODES: NavNode[] = [
@@ -262,29 +286,33 @@ export const NODES: NavNode[] = [
   N('c_e', 7, 16.5, 0, '1F', 'courtyard'), N('c_arc', 8.6, 16.5, 0, '1F', 'courtyard'),
   N('c_nw', -6, 23, 0, '1F', 'courtyard'), N('c_n', 0, 23, 0, '1F', 'courtyard'),
   N('c_ne', 6.5, 23, 0, '1F', 'courtyard'), N('c_s1top', 4.0, 9.9, 0, '1F', 'courtyard'),
-  N('c_s1south', 3.9, 8, 0, '1F', 'courtyard'),
+  N('c_s1west', 1.0, 9.9, 0, '1F', 'courtyard'), N('c_s1south', 3.9, 8, 0, '1F', 'courtyard'),
   N('c_s3bot', 3.4, 1.4, 0, '1F', 'courtyard'),
   N('p_m', 12, 16.5, RAISED_Y, '1F', 'platform'), N('p_d', 12.6, 16.5, RAISED_Y, '1F', 'platform'),
   N('v_d', 14.4, 16.5, RAISED_Y, '1F', 'chapel'), N('v_o', 15.8, 16.5, RAISED_Y, '1F', 'chapel'),
-  N('v_s', 16.5, 12.7, RAISED_Y, '1F', 'chapel'), N('v_s2', 16.8, 21.0, RAISED_Y, '1F', 'chapel'),
-  N('v_e', 16.8, 16.5, RAISED_Y, '1F', 'chapel'), N('s2top', 15.1, 21.4, 0.36, '1F', 'chapel'),
+  N('v_s', 16.5, 12.7, RAISED_Y, '1F', 'chapel'), N('v_s2', 16.65, 21.5, RAISED_Y, '1F', 'chapel'),
+  N('v_e', 16.8, 16.5, RAISED_Y, '1F', 'chapel'), N('s2top', 15.1, 21.5, RAISED_Y, '1F', 'chapel'),
   N('n_x', 18.8, 12.7, RAISED_Y, '1F', 'chapel'), N('n_w', 18.9, 16.5, RAISED_Y, '1F', 'chapel'),
   N('n_e', 25.6, 16.5, RAISED_Y, '1F', 'chapel'), N('n_c', 24, 16.5, RAISED_Y, '1F', 'chapel'),
   N('n_alt', 28.0, 16.5, RAISED_Y, '1F', 'chapel'),
   N('n_s1', 20, 12.5, RAISED_Y, '1F', 'chapel'), N('n_s2', 24, 12.5, RAISED_Y, '1F', 'chapel'), N('n_s3', 25.4, 12.5, RAISED_Y, '1F', 'chapel'),
-  N('n_n1', 19.2, 21.2, RAISED_Y, '1F', 'chapel'), N('n_n2', 24, 21.2, RAISED_Y, '1F', 'chapel'), N('n_n3', 25.4, 21.2, RAISED_Y, '1F', 'chapel'),
-  N('n_s4bot', 29.0, 21.2, RAISED_Y, '1F', 'chapel'),
+  N('n_n1', 19.2, 21.2, RAISED_Y, '1F', 'chapel'), N('n_n2', 23.1, 21.2, RAISED_Y, '1F', 'chapel'), N('n_n3', 25.4, 19.85, RAISED_Y, '1F', 'chapel'),
+  N('n_s4turn', 29.85, 19.8, RAISED_Y, '1F', 'chapel'),
+  N('n_s4bot', 29.85, 21.15, RAISED_Y, '1F', 'chapel'),
   N('b_land', 10.2, 9.9, B1_Y, 'B1', 'cellar'), N('b_cs', 5.5, 7.6, B1_Y, 'B1', 'cellar'),
+  N('b_land_s', 9.92, 8.48, B1_Y, 'B1', 'cellar'), N('b_land_n', 9.92, 11.7, B1_Y, 'B1', 'cellar'),
+  N('b_south', 5.5, 8.48, B1_Y, 'B1', 'cellar'), N('b_ws', 3.5, 8.48, B1_Y, 'B1', 'cellar'),
+  N('b_wn', 3.5, 11.7, B1_Y, 'B1', 'cellar'), N('b_north', 5.5, 11.7, B1_Y, 'B1', 'cellar'),
   N('b_cn', 5.5, 13.2, B1_Y, 'B1', 'cellar'), N('b_pw', 11.5, 10.3, B1_Y, 'B1', 'passage'),
   N('b_pe', 12.3, 10.3, B1_Y, 'B1', 'passage'), N('b_pe2', 12.5, 12.2, B1_Y, 'B1', 'passage'), N('b_pg', 13.6, 12.0, B1_Y, 'B1', 'store'), N('b_sw0', 16.0, 12.2, B1_Y, 'B1', 'store'), N('b_sw', 16.2, 14.5, B1_Y, 'B1', 'store'),
-  N('b_se', 20, 16, B1_Y, 'B1', 'store'), N('b_s2b', 15.1, 17.5, B1_Y, 'B1', 'store'),
-  N('w_s3t', 9.2, 1.5, F2_Y, '2F', 'walk'), N('w_e1', 9.2, 6, F2_Y, '2F', 'walk'),
-  N('w_e2', 9.2, 12, F2_Y, '2F', 'walk'), N('w_br', 9.2, 20.25, F2_Y, '2F', 'walk'),
+  N('b_se', 20, 16, B1_Y, 'B1', 'store'), N('b_s2b', 15.1, 17.1, B1_Y, 'B1', 'store'),
+  N('w_s3t', 9.45, 1.4, F2_Y, '2F', 'walk'), N('w_s3turn', 9.45, 3, F2_Y, '2F', 'walk'), N('w_e1', 9.2, 6, F2_Y, '2F', 'walk'),
+  N('w_e2', 9.2, 12, F2_Y, '2F', 'walk'), N('w_br', 9.2, 20.55, F2_Y, '2F', 'walk'),
   N('w_e3', 9.2, 24, F2_Y, '2F', 'walk'), N('w_ne', 9.2, 27.7, F2_Y, '2F', 'walk'),
   N('w_n', 0, 27.7, F2_Y, '2F', 'walk'), N('w_nw', -9.2, 27.7, F2_Y, '2F', 'walk'),
   N('w_w1', -9.2, 20, F2_Y, '2F', 'walk'), N('w_w2', -9.2, 14, F2_Y, '2F', 'walk'),
   N('w_w3', -9.2, 8, F2_Y, '2F', 'walk'), N('w_ws', -9.2, 3, F2_Y, '2F', 'walk'),
-  N('g_br', 11.5, 20.25, F2_Y, '2F', 'bridge'), N('g_brx', 13.2, 20.25, F2_Y, '2F', 'bridge'), N('g_gal', 16, 21.15, F2_Y, '2F', 'gallery'),
+  N('g_br', 11.5, 20.55, F2_Y, '2F', 'bridge'), N('g_brx', 13.1, 20.55, F2_Y, '2F', 'bridge'), N('g_entry', 14.15, 20.55, F2_Y, '2F', 'gallery'), N('g_gal', 16, 21.15, F2_Y, '2F', 'gallery'),
   N('g_gal2', 22.5, 21.15, F2_Y, '2F', 'gallery'), N('g_land', 24.5, 21.15, F2_Y, '2F', 'gallery'),
 ];
 
@@ -292,7 +320,8 @@ export const EDGES: NavEdge[] = [
   { a: 'gh_mid', b: 'gh_in' }, { a: 'gh_in', b: 'c_s', door: 'gatehouse' },
   { a: 'c_s', b: 'c_sw' }, { a: 'c_s', b: 'c_se' }, { a: 'c_s', b: 'c_s3bot' },
   { a: 'c_sw', b: 'c_w' },
-  { a: 'c_s1top', b: 'c_s1south' }, { a: 'c_s1south', b: 'c_se' },
+  { a: 'c_s', b: 'c_s1west' }, { a: 'c_wellw', b: 'c_s1west' },
+  { a: 'c_s1west', b: 'c_s1top' }, { a: 'c_s1top', b: 'c_s1south' }, { a: 'c_s1south', b: 'c_se' },
 
   { a: 'c_w', b: 'c_wellw' }, { a: 'c_w', b: 'c_nw' },
   { a: 'c_wellw', b: 'c_nw' }, { a: 'c_welle', b: 'c_e' },
@@ -303,21 +332,22 @@ export const EDGES: NavEdge[] = [
   { a: 'v_s', b: 'n_x' }, { a: 'n_x', b: 'n_w' }, { a: 'n_w', b: 'n_c' },
   { a: 'n_x', b: 'n_s1' }, { a: 'n_s1', b: 'n_s2' }, { a: 'n_s2', b: 'n_s3' }, { a: 'n_s3', b: 'n_e' },
   { a: 'n_e', b: 'n_c' }, { a: 'n_c', b: 'n_alt' }, { a: 'n_e', b: 'n_alt' },
-  { a: 'n_n1', b: 'n_w' }, { a: 'n_n1', b: 'n_n2' }, { a: 'n_n2', b: 'n_n3' }, { a: 'n_n3', b: 'n_e' },
-  { a: 'n_n2', b: 'n_s4bot' },
+  { a: 'n_n1', b: 'n_w' }, { a: 'n_n1', b: 'n_n2' }, { a: 'n_n3', b: 'n_e' },
+  { a: 'n_n3', b: 'n_s4turn' }, { a: 'n_s4turn', b: 'n_s4bot' },
   // 楼梯跨层边
   { a: 'c_s1top', b: 'b_land' }, { a: 's2top', b: 'b_s2b' },
   { a: 'c_s3bot', b: 'w_s3t' }, { a: 'n_s4bot', b: 'g_land' },
   // B1 环
-  { a: 'b_land', b: 'b_cs' }, { a: 'b_land', b: 'b_cn' }, { a: 'b_cs', b: 'b_cn' },
+  { a: 'b_land', b: 'b_land_s' }, { a: 'b_land_s', b: 'b_south' },
+  { a: 'b_land', b: 'b_land_n' }, { a: 'b_land_n', b: 'b_north' }, { a: 'b_cs', b: 'b_south' }, { a: 'b_south', b: 'b_ws' }, { a: 'b_ws', b: 'b_wn' }, { a: 'b_wn', b: 'b_north' }, { a: 'b_north', b: 'b_cn' },
   { a: 'b_land', b: 'b_pw' }, { a: 'b_pw', b: 'b_pe' }, { a: 'b_pe', b: 'b_pe2' }, { a: 'b_pe2', b: 'b_pg' }, { a: 'b_pg', b: 'b_sw0' }, { a: 'b_sw0', b: 'b_sw' },
   { a: 'b_sw', b: 'b_se' }, { a: 'b_se', b: 'b_s2b' }, { a: 'b_sw', b: 'b_s2b' },
   // 2F 环 + 桥 + 上廊
-  { a: 'w_s3t', b: 'w_e1' }, { a: 'w_e1', b: 'w_e2' }, { a: 'w_e2', b: 'w_br' },
+  { a: 'w_s3t', b: 'w_s3turn' }, { a: 'w_s3turn', b: 'w_e1' }, { a: 'w_e1', b: 'w_e2' }, { a: 'w_e2', b: 'w_br' },
   { a: 'w_br', b: 'w_e3' }, { a: 'w_e3', b: 'w_ne' }, { a: 'w_ne', b: 'w_n' },
   { a: 'w_n', b: 'w_nw' }, { a: 'w_nw', b: 'w_w1' }, { a: 'w_w1', b: 'w_w2' },
   { a: 'w_w2', b: 'w_w3' }, { a: 'w_w3', b: 'w_ws' },
-  { a: 'w_br', b: 'g_br' }, { a: 'g_br', b: 'g_brx' }, { a: 'g_brx', b: 'g_gal' }, { a: 'g_gal', b: 'g_gal2' },
+  { a: 'w_br', b: 'g_br' }, { a: 'g_br', b: 'g_brx' }, { a: 'g_brx', b: 'g_entry' }, { a: 'g_entry', b: 'g_gal' }, { a: 'g_gal', b: 'g_gal2' },
   { a: 'g_gal2', b: 'g_land', door: 'gate' },
 ];
 
@@ -387,17 +417,10 @@ export function regionAt3(x: number, z: number, floor: FloorId): Region {
 // —— 支撑面（地面 + 坡面 + 平台）——
 interface Surface { x0: number; z0: number; x1: number; z1: number; y: number; floor: FloorId }
 const GROUND: Surface[] = [
-  // 1F 庭院（挖 S1 洞）
-  { x0: -10.5, z0: 0, x1: 4.6, z1: 29, y: 0, floor: '1F' },
-  { x0: 4.6, z0: 0, x1: 10.5, z1: 9.0, y: 0, floor: '1F' },
-  { x0: 4.6, z0: 10.8, x1: 10.5, z1: 29, y: 0, floor: '1F' },
+  ...[...CHAPEL_SLABS, PLATFORM_SLAB].map((s) => ({ ...s, y: s.h, floor: '1F' as const })),
+  // The substrate behind S1's end rail is not a walkable destination above B1.
+  ...cutRect(COURT_BOUNDS, { ...S1_SHAFT, x1: COURT_BOUNDS.x1 }).map((s) => ({ ...s, y: 0, floor: '1F' as const })),
   { x0: -3.5, z0: -8.5, x1: 3.5, z1: 0, y: 0, floor: '1F' },
-  // 1F 平台 + 礼拜堂（挖 S2 洞）；平台西侧台阶用坡面
-  { x0: 11.4, z0: 11, x1: 13.5, z1: 22, y: RAISED_Y, floor: '1F' },
-  { x0: 13, z0: 10.5, x1: 14.2, z1: 22.5, y: RAISED_Y, floor: '1F' },
-  { x0: 14.2, z0: 10.5, x1: 16, z1: 17.5, y: RAISED_Y, floor: '1F' },
-  { x0: 14.2, z0: 21.5, x1: 16, z1: 22.5, y: RAISED_Y, floor: '1F' },
-  { x0: 16, z0: 10.5, x1: 31, z1: 22.5, y: RAISED_Y, floor: '1F' },
   // B1
   { x0: 2.5, z0: 6.5, x1: 10.6, z1: 15.5, y: B1_Y, floor: 'B1' },
   { x0: 10.6, z0: 9.0, x1: 14.0, z1: 13.0, y: B1_Y, floor: 'B1' },
@@ -407,12 +430,11 @@ const GROUND: Surface[] = [
   { x0: -10.0, z0: 27.0, x1: 10.0, z1: 28.5, y: F2_Y, floor: '2F' },
   { x0: -10.0, z0: 2.5, x1: -8.4, z1: 28.5, y: F2_Y, floor: '2F' },
   { x0: 8.4, z0: 19.5, x1: 13.5, z1: 21.0, y: F2_Y, floor: '2F' },
-  { x0: 13.5, z0: 20.3, x1: 24.0, z1: 22.0, y: F2_Y, floor: '2F' },
+  { x0: 13.5, z0: 20.0, x1: 24.0, z1: 22.0, y: F2_Y, floor: '2F' },
 ];
 // 平台西侧台阶坡面（x10.5→11.4 升 0.45）
-const STEP_RAMP: Surface = { x0: 10.5, z0: 11, x1: 11.4, z1: 22, y: 0, floor: '1F' };
 
-function rampY(r: StairRun, x: number, z: number): number {
+export function rampY(r: StairRun, x: number, z: number): number {
   const t = r.axis === 'x' ? (x - r.x0) / (r.x1 - r.x0) : (z - r.z0) / (r.z1 - r.z0);
   return r.from + (r.to - r.from) * Math.max(0, Math.min(1, t));
 }
@@ -424,7 +446,7 @@ function inRect(s: { x0: number; z0: number; x1: number; z1: number }, x: number
 export function surfacesAt(x: number, z: number): { y: number; floor: FloorId }[] {
   const out: { y: number; floor: FloorId }[] = [];
   for (const g of GROUND) if (inRect(g, x, z)) out.push({ y: g.y, floor: g.floor });
-  if (inRect(STEP_RAMP, x, z)) out.push({ y: ((x - 10.5) / 0.9) * RAISED_Y, floor: '1F' });
+  if (inRect(STEP_RAMP, x, z)) out.push({ y: rampY({ ...STEP_RAMP, axis: 'x', from: 0, to: RAISED_Y }, x, z), floor: '1F' });
   for (const s of STAIRS) {
     for (const r of s.runs) if (inRect(r, x, z)) {
       const y = rampY(r, x, z);
@@ -456,10 +478,9 @@ export function groundY(x: number, z: number): number {
 /** 天花高度（镜头避障）。开敞处返回 +Infinity。 */
 export function ceilingY(x: number, z: number, floor: FloorId): number {
   if (floor === 'B1') {
-    if (inArea(AREAS.cellar, x, z)) return -0.6;
-    if (inArea(AREAS.passage, x, z)) return -0.8;
-    if (inArea(AREAS.store, x, z)) return 0.15;
-    return -0.6;
+    if (inRect(S1_SHAFT, x, z)) return Infinity;
+    if (inRect(S2_SHAFT, x, z)) return DECK_SLABS.find((s) => inRect(s, x, z))?.y0 ?? 9.3;
+    return B1_CEILINGS.find((s) => inRect(s, x, z))?.y0 ?? 0.15;
   }
   if (floor === '2F') {
     if (inArea(AREAS.gallery, x, z)) return 9.3;
