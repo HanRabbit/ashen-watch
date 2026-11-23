@@ -54,6 +54,7 @@ npm run typecheck                  # 类型检查
 npm test                           # 模拟层单元测试（不需要浏览器）
 npm run verify:step2               # 第二步浏览器矩阵（需先启动 preview）
 npm run verify:browser             # 浏览器内验收：需要先 npm run preview
+npm run verify:route               # 真实键鼠实走 B1 / 1F / 2F 和四条楼梯
 node tools/smoke.mjs chrome        # 浏览器冒烟
 node tools/shots.mjs chrome        # 重拍 docs/verification/ 下的实机截图
 node tools/perf.mjs chrome         # 夜间性能取样：主路往返的帧率与掉帧位置
@@ -62,7 +63,7 @@ node tools/feel.mjs chrome         # 手感测量：行走是否匀速、原地�
 
 浏览器脚本通过 `playwright-core` 驱动本机已安装的 Chrome 或 Edge（第一个参数写 `chrome` 或 `msedge`），不会下载浏览器。加 `--headless` 可无窗口运行。默认访问 `http://localhost:4173/`，可用环境变量 `AW_URL` 改地址。
 
-验收结果见 [docs/VERIFICATION.md](docs/VERIFICATION.md)，仍在使用占位资源的项目见 [docs/PLACEHOLDERS.md](docs/PLACEHOLDERS.md)，美术强化_pass 见 [docs/ART-PASS.md](docs/ART-PASS.md)。
+本轮三层地图、光照和角色动画的合并状态见 [集成检查点](docs/INTEGRATION-CHECKPOINT.md)。历史验收结果见 [docs/VERIFICATION.md](docs/VERIFICATION.md)，仍在使用占位资源的项目见 [docs/PLACEHOLDERS.md](docs/PLACEHOLDERS.md)，美术强化_pass 见 [docs/ART-PASS.md](docs/ART-PASS.md)。
 
 ## 目录
 
