@@ -2,7 +2,7 @@
 // 洞口护墙、庭院掩体、柱列与 B1 封门。材质全部经 variants(m)（圣经 5.1）。
 // 只读 sim 数据；可交互模型统一由 props.ts 绘制。
 import * as THREE from 'three';
-import { AREAS, B1_CEILINGS, B1_Y, CHAPEL_SLABS, COLUMNS, DECK_SLABS, PLATFORM_SLAB, PROPS, RAISED_Y, S1_SHAFT, S2_SHAFT, STAIR_BODIES, STAIR_RAILS, STEP_RAMP, WALLS } from '../sim/level';
+import { AREAS, B1_CEILINGS, B1_FOUNDATION_BACKING, B1_Y, CHAPEL_SLABS, COLUMNS, DECK_SLABS, PLATFORM_SLAB, PROPS, RAISED_Y, S1_SHAFT, S2_SHAFT, STAIR_BODIES, STAIR_RAILS, STEP_RAMP, WALLS } from '../sim/level';
 import { World } from '../sim/state';
 import { Batch } from './geom';
 import { Materials, scaleUV, tiledBox } from './materials';
@@ -79,6 +79,8 @@ export function buildFloors(m: Materials): Floors {
     for (const y of [0.18, 1.02]) b.geo(m.iron, tiledBox(Math.hypot(dx, dy), 0.065, 0.09, 1),
       (r.x0 + r.x1) / 2, (r.from + r.to) / 2 + y, r.z, 0, 0, Math.atan2(dy, dx));
   }
+
+  for (const w of B1_FOUNDATION_BACKING) boxY(b1, v.wallRough, w.x0, w.z0, w.x1, w.z1, w.y0!, w.h);
 
   // The B1 ceiling pieces share the shaft cutout and collision bounds.
   for (const c of B1_CEILINGS) boxY(b1, v.wallRough, c.x0, c.z0, c.x1, c.z1, c.y0!, c.h, 2);

@@ -1,13 +1,13 @@
 // 碰撞与视线：圆对轴对齐盒（带竖向范围）、圆对圆柱、3D 线段遮挡。
 // 墙、关闭的门、楼板各有独立碰撞；按实体高度过滤，三层互不干扰（PRD 9.6）。
-import { Box, COLUMNS, Cylinder, DOORS, DoorId, PROPS, SLABS, STAIR_MASS, WALLS, WELL } from './level';
+import { B1_FOUNDATION_BACKING, Box, COLUMNS, Cylinder, DOORS, DoorId, PROPS, SLABS, STAIR_MASS, WALLS, WELL } from './level';
 
 export type DoorOpen = Record<DoorId, boolean>;
 
 const DOOR_IDS = Object.keys(DOORS) as DoorId[];
 // Camera clearance includes decorative merlons (0.5 m) and a margin for the
 // foreground silhouette. Keep this separate from the walk and sight blockers.
-const CAMERA_WALLS = WALLS.map((b) => b.tag === 'parapet' ? { ...b, h: b.h + 0.85 } : b);
+const CAMERA_WALLS = [...WALLS.map((b) => b.tag === 'parapet' ? { ...b, h: b.h + 0.85 } : b), ...B1_FOUNDATION_BACKING];
 
 /** 实体竖向占用范围 [y+0.1, y+1.7] 与盒 [y0, h] 是否重叠。 */
 function overlapsY(b: Box, y: number): boolean {

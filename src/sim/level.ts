@@ -177,6 +177,13 @@ export const DECK_SLABS = [
 ];
 export const SLABS = [...COURTYARD_SLABS, ...CHAPEL_SLABS, PLATFORM_SLAB, ...B1_CEILINGS, ...DECK_SLABS];
 
+// Close the exposed foundation at the end of the B1 return and the far corner
+// of the storeroom. Outside the walkable footprint: render and camera only.
+export const B1_FOUNDATION_BACKING: readonly Box[] = [
+  W(AREAS.passage.x1, 8.6, AREAS.passage.x1 + 0.40, 11.5, -0.8, 'passage', B1_Y - 0.3),
+  W(12.6, AREAS.store.z1, 13.6, AREAS.store.z1 + 0.4, 0.15, 'store', B1_Y - 0.3),
+];
+
 export const WALLS: Box[] = [
   // —— 门房 ——
   W(-3.5, -8.5, 3.5, -8, 3.6, 'gh'), W(-3.5, -8.5, -3, 0.5, 3.6, 'gh'), W(3, -8.5, 3.5, 0.5, 3.6, 'gh'),

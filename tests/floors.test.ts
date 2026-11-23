@@ -1,6 +1,6 @@
 // 三层新增验收：跨层导航、楼板阻断视线、楼梯高度连续、存档往返楼层、修复组合撤退路线、跨层噪声。
 import { describe, expect, it } from 'vitest';
-import { hasLineOfSight } from '../src/sim/collision';
+import { cameraClearT, hasLineOfSight } from '../src/sim/collision';
 import { DoorId, supportY, ceilingY, regionAt3 } from '../src/sim/level';
 import { findNodePath, findPath, node, reachableFrom } from '../src/sim/nav';
 import { newGhost, newWorld } from '../src/sim/state';
@@ -55,6 +55,12 @@ describe('跨层导航', () => {
       expect(r.has('b_sw') || r.has('c_s'), `mask ${mask} 撤退`).toBe(true);
     }
   });
+});
+
+it('keeps the B1 foundation in view when turning at the passage return without sealing the store entry', () => {
+  expect(cameraClearT(12.4, 10, -1.5, 15.2, 10, -1.5, OPEN)).toBeLessThan(1);
+  expect(cameraClearT(13.3, 20, -1.5, 13.3, 22.6, -1.5, OPEN)).toBeLessThan(1);
+  expect(cameraClearT(12.4, 12, -1.5, 14.5, 12.5, -1.5, OPEN)).toBe(1);
 });
 
 describe('楼板阻断视线 / 逼退 / 攻击', () => {
