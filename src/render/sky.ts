@@ -15,6 +15,9 @@ varying vec3 vDir;
 void main() {
   vDir = normalize(position);
   gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+  #ifdef AW_SKY_AT_FAR_PLANE
+    gl_Position.z = gl_Position.w;
+  #endif
 }`;
 
 const SKY_FRAG = /* glsl */`
