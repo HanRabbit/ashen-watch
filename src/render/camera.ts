@@ -1,28 +1,32 @@
-// 越肩镜头（art pass 2 / 任务 B）：从 view.ts 抽出的防穿墙扫描 + 弹簧阻尼跟随。
-// FOV 55° 基准，移动 +3°，冲刺拉远；转身横向延迟跟随；受击短促冲击（<0.15s）。
-// fixedCam 供验收截图机位使用，逻辑与原来一致。
+// 越肩镜头：用位移驱动焦段与跟拍距离，用物理净空限制构图。
+// 55° 基准，移动最多 +3°，只有确实跑起来才拉远。fixedCam 仅用于验收机位。
 import * as THREE from 'three';
+import { PLAYER } from '../config';
 import { cameraClearT } from '../sim/collision';
-import { ceilingY, groundY } from '../sim/level'; // map:
+import { ceilingY, groundY } from '../sim/level';
 import { World } from '../sim/state';
-import { lerp } from './geom';
+import { clamp01, lerp } from './geom';
 
-const CAM = { dist: 3.4, shoulder: 0.78, pivotY: 1.62, minDist: 0.35, fov: 55 };
+const CAM = { dist: 3.4, shoulder: 0.78, pivotY: 1.62, fov: 55, margin: 0.25 };
+const damp = (from: number, to: number, rate: number, dt: number): number =>
+  lerp(from, to, -Math.expm1(-rate * dt));
 const FAN = { n: 12, step: (3 * Math.PI) / 180 };
 
 export class CameraRig {
   fixedCam: { pos: [number, number, number]; look: [number, number, number] } | null = null;
   private camDist = CAM.dist;
   private camShoulder = CAM.shoulder;
-  private yawS: number | null = null;
+  private yawS = 0;
   private pitchS = 0;
   private fov = CAM.fov;
-  private moveBlend = 0;
-  private sprintBlend = 0;
+  private speed = 0;
+  private prevX = 0;
+  private prevZ = 0;
   private kickT = 0;
   private kickSeed = 0;
   private springPos = new THREE.Vector3();
   private springVel = new THREE.Vector3();
+  private springOffset = new THREE.Vector3();
   private sprung = false;
   private world: World | null = null;
   private tmp = new THREE.Vector3();
@@ -62,7 +66,7 @@ export class CameraRig {
   }
 
   /** 返回镜头距离（view 用它决定玩家模型可见性，避免贴脸穿模）。 */
-  update(w: World, p: { x: number; z: number; y?: number }, yaw: number, pitch: number, dt: number): number { // map:
+  update(w: World, p: { x: number; z: number; y?: number }, yaw: number, pitch: number, dt: number): number {
     if (this.fixedCam) {
       const f = this.fixedCam;
       this.camera.position.set(f.pos[0], f.pos[1], -f.pos[2]);
@@ -71,55 +75,67 @@ export class CameraRig {
       this.sprung = false;
       return 10;
     }
-    if (this.world !== w) {
+    const travel = Math.hypot(p.x - this.prevX, p.z - this.prevZ);
+    // A fresh world or a return from a fixed camera must not inherit lens, kick or pose lag.
+    if (this.world !== w || !this.sprung || travel > 1.25) {
       this.world = w;
       this.sprung = false;
       this.camDist = CAM.dist;
       this.camShoulder = CAM.shoulder;
       this.yawS = yaw;
       this.pitchS = pitch;
+      this.speed = 0;
+      this.fov = CAM.fov;
+      this.kickT = 0;
+    } else if (dt > 0) {
+      // player.moving is the input intent, including when a wall has stopped the player.
+      this.speed = damp(this.speed, Math.min(PLAYER.sprintSpeed, travel / dt), 7, dt);
     }
-    const moving = w.player.moving;
-    const sprinting = moving && w.player.sprinting;
-    this.moveBlend = lerp(this.moveBlend, moving ? 1 : 0, Math.min(1, dt * 4));
-    this.sprintBlend = lerp(this.sprintBlend, sprinting ? 1 : 0, Math.min(1, dt * 4));
+    this.prevX = p.x;
+    this.prevZ = p.z;
 
-    // 转身惯性：镜头偏航临界阻尼滞后于角色偏航
-    if (this.yawS === null) this.yawS = yaw;
-    let dy = yaw - this.yawS;
-    dy = Math.atan2(Math.sin(dy), Math.cos(dy));
-    this.yawS += dy * Math.min(1, dt * 8.5);
-    this.pitchS = lerp(this.pitchS, pitch, Math.min(1, dt * 12));
+    const dy = yaw - this.yawS;
+    this.yawS += damp(0, Math.atan2(Math.sin(dy), Math.cos(dy)), 10, dt);
+    this.pitchS = damp(this.pitchS, pitch, 14, dt);
     const cyaw = this.yawS, cpitch = this.pitchS;
-
-    const dist = CAM.dist + this.sprintBlend * 0.5;
+    const stride = clamp01(this.speed / PLAYER.walkSpeed);
+    const sprint = clamp01((this.speed - PLAYER.walkSpeed) / (PLAYER.sprintSpeed - PLAYER.walkSpeed));
+    const dist = CAM.dist + sprint * 0.42;
     const sy = Math.sin(cyaw), cy = Math.cos(cyaw), cp = Math.cos(cpitch), sp = Math.sin(cpitch);
-    const py = (p.y ?? groundY(p.x, p.z)) + CAM.pivotY; // map:
+    const footY = p.y ?? groundY(p.x, p.z);
+    const py = footY + CAM.pivotY;
     const reach = CAM.shoulder + 0.3;
     const side = this.sweep(p.x, p.z, py, cyaw + Math.PI / 2, reach, py, w.doors);
     const shHard = Math.max(0, Math.min(CAM.shoulder, side[0] * reach - 0.3));
     const shWant = Math.max(0, Math.min(CAM.shoulder, side[1] * reach - 0.3));
-    this.camShoulder = Math.min(shHard, shWant < this.camShoulder ? shWant : lerp(this.camShoulder, shWant, Math.min(1, dt * 6)));
+    this.camShoulder = Math.min(shHard, shWant < this.camShoulder ? shWant : damp(this.camShoulder, shWant, 6, dt));
     const sh = this.camShoulder;
     const ax = p.x + cy * sh, az = p.z - sy * sh;
     const back = this.sweep(ax, az, py, cyaw + Math.PI, cp * dist, py + sp * dist, w.doors);
-    let hard = Math.max(CAM.minDist, back[0] * dist - 0.25);
-    const top = ceilingY(p.x, p.z, w.player.floor); // map:
-    if (sp > 0.01) hard = Math.min(hard, Math.max(CAM.minDist, (top - py) / sp));
-    if (sp < -0.01) hard = Math.min(hard, Math.max(CAM.minDist, (py - 0.25 - (p.y ?? groundY(p.x, p.z))) / -sp)); // map:
-    const want = Math.min(hard, Math.max(CAM.minDist, back[1] * dist - 0.25));
-    this.camDist = Math.min(hard, want < this.camDist ? want : lerp(this.camDist, want, Math.min(1, dt * 5)));
+    // Zero is safer than an artificial minimum boom in a tight doorway/stair throat.
+    let hard = Math.max(0, back[0] * dist - CAM.margin);
+    const top = ceilingY(p.x, p.z, w.player.floor);
+    if (sp > 0.01) hard = Math.min(hard, Math.max(0, (top - CAM.margin - py) / sp));
+    if (sp < -0.01) hard = Math.min(hard, (CAM.pivotY - CAM.margin) / -sp);
+    const want = Math.min(hard, Math.max(0, back[1] * dist - CAM.margin));
+    this.camDist = Math.min(hard, want < this.camDist ? want : damp(this.camDist, want, 4.5, dt));
     const d = this.camDist;
 
     const target = this.tmp.set(ax - sy * cp * d, py + sp * d, -(az - cy * cp * d));
-    // 临界阻尼弹簧平滑最终机位（无抖动、无过冲）
-    if (!this.sprung) { this.springPos.copy(target); this.springVel.set(0, 0, 0); this.sprung = true; }
-    const omega = 20;
-    const step = Math.min(dt, 1 / 30);
-    this.springVel.x += (omega * omega * (target.x - this.springPos.x) - 2 * omega * this.springVel.x) * step;
-    this.springVel.y += (omega * omega * (target.y - this.springPos.y) - 2 * omega * this.springVel.y) * step;
-    this.springVel.z += (omega * omega * (target.z - this.springPos.z) - 2 * omega * this.springVel.z) * step;
-    this.springPos.addScaledVector(this.springVel, step);
+    // Closed-form critically damped spring. Unlike clamped Euler steps this handles
+    // a missed frame and reaches the same pose for a held target at 30 or 120 Hz.
+    if (!this.sprung) {
+      this.springPos.copy(target);
+      this.springVel.set(0, 0, 0);
+      this.sprung = true;
+    } else {
+      const omega = 22;
+      const decay = Math.exp(-omega * dt);
+      const offset = this.springOffset.subVectors(this.springPos, target);
+      const impulse = this.springVel.addScaledVector(offset, omega);
+      this.springPos.copy(target).addScaledVector(offset, decay).addScaledVector(impulse, dt * decay);
+      this.springVel.multiplyScalar((1 - omega * dt) * decay).addScaledVector(offset, -omega * decay);
+    }
     // The target boom is collision-tested, but its spring can still lag across
     // a wall or the lip of a staircase when the player turns while descending.
     // Clip the resulting boom too, so smoothing never moves the view through stone.
@@ -142,9 +158,8 @@ export class CameraRig {
     }
     this.camera.lookAt(ax + sy * cp * 6 + kx, py - sp * 6 + ky, -(az + cy * cp * 6));
 
-    // FOV：移动轻微前移，冲刺再拉一点
-    const fovWant = CAM.fov + 3 * this.moveBlend + 1.2 * this.sprintBlend;
-    this.fov = lerp(this.fov, fovWant, Math.min(1, dt * 5));
+    // Keep the lens quiet: walking and running share the moving FOV.
+    this.fov = damp(this.fov, CAM.fov + 3 * stride, 6, dt);
     if (Math.abs(this.camera.fov - this.fov) > 0.01) {
       this.camera.fov = this.fov;
       this.camera.updateProjectionMatrix();

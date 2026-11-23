@@ -38,3 +38,52 @@ describe('2F rampart camera', () => {
     expect(camera.position.x).toBeLessThan(10);
   });
 });
+
+describe('movement-driven framing', () => {
+  const setup = () => {
+    const camera = new PerspectiveCamera(55, 16 / 9, 0.08, 610);
+    const rig = new CameraRig(camera);
+    const w = newWorld();
+    Object.assign(w.player, { x: 0, y: 0, z: 13, floor: '1F' });
+    rig.update(w, w.player, 0, 0.12, 1 / 60);
+    return { camera, rig, w };
+  };
+
+  it('does not zoom out merely because the player holds sprint against a wall', () => {
+    const { rig, camera, w } = setup();
+    const start = camera.position.clone();
+    Object.assign(w.player, { moving: true, sprinting: true });
+    for (let i = 0; i < 60; i++) rig.update(w, w.player, 0, 0.12, 1 / 60);
+    expect(camera.fov).toBeCloseTo(55);
+    expect(camera.position.distanceTo(start)).toBeLessThan(0.001);
+
+    for (let i = 0; i < 60; i++) {
+      w.player.z += 3.1 / 60;
+      rig.update(w, w.player, 0, 0.12, 1 / 60);
+    }
+    expect(camera.fov).toBeGreaterThan(57.8);
+    for (let i = 0; i < 120; i++) rig.update(w, w.player, 0, 0.12, 1 / 60);
+    expect(camera.fov).toBeCloseTo(55, 1);
+  });
+
+  it('lands on the same held boom target after a long frame or several short frames', () => {
+    const held = (steps: number[]) => {
+      const { camera, rig, w } = setup();
+      w.player.x += 0.48;
+      for (const dt of steps) rig.update(w, w.player, 0, 0.12, dt);
+      return camera.position.clone();
+    };
+    expect(held([0.1]).distanceTo(held(Array(12).fill(1 / 120)))).toBeLessThan(0.00001);
+  });
+
+  it('returns from a fixed shot without sweeping through the world to the player', () => {
+    const { rig, camera, w } = setup();
+    const follow = camera.position.clone();
+    rig.fixedCam = { pos: [40, 50, 60], look: [0, 0, 0] };
+    rig.update(w, w.player, 0, 0.12, 1 / 60);
+    expect(camera.position.distanceTo(follow)).toBeGreaterThan(50);
+    rig.fixedCam = null;
+    rig.update(w, w.player, 0, 0.12, 1 / 60);
+    expect(camera.position.distanceTo(follow)).toBeLessThan(0.00001);
+  });
+});
