@@ -14,6 +14,7 @@ import type { Quality } from '../view';
 import { LightGlowShader, MAX_GLOW_LIGHTS } from './glow';
 import { FarSoftShader } from './farsoft';
 import { fillLUT, makeLUT, GradeParams, VignetteGrainShader } from './grade';
+import { configureWetReflections } from './wetReflections';
 
 export interface PostHooks {
   /** SSR 反射接收面（地面/积水） */
@@ -28,6 +29,8 @@ export interface PostRig {
   bloom: number; vignette: number; grain: number;
   glowStrength: number; scatter: number; ssrWet: number;
   fog: [number, number, number];
+  /** Integrate height fog in screen space. When enabled, disable the separate surface height fog. */
+  volumeFog?: boolean;
   grade: GradeParams;
   /** 受击暗角强度 0..1（vfx.hurt） */
   hurt: number;
@@ -89,6 +92,7 @@ export class PostPipeline {
     const glu = this.glow.uniforms;
     glu.uStrength.value = r.glowStrength;
     glu.uScatter.value = r.scatter;
+    glu.uVolumeFog.value = r.volumeFog ? 1 : 0;
     glu.uHiThresh.value = r.hiThresh;
     glu.uHiKneeCool.value = r.hiKneeCool;
     glu.uHiKneeWarm.value = r.hiKneeWarm;
@@ -104,6 +108,8 @@ export class PostPipeline {
 
   render(time: number): void {
     this.grade.uniforms.uTime.value = time;
+    this.glow.uniforms.uAirTime.value = time;
+    if (this.scene.fog) this.glow.uniforms.uAirColor.value.copy(this.scene.fog.color);
     this.updateGlowLights();
     this.composer.render();
   }
@@ -120,7 +126,8 @@ export class PostPipeline {
     this.ssr = null;
     if (this.quality === 'cinematic') {
       // SSR 自带 beauty 渲染，放在链首替代 RenderPass；只让地面/积水接收反射
-      this.ssr = new SSRPass({ renderer: this.renderer, scene: this.scene, camera: this.camera, width: size.x, height: size.y, selects: this.hooks.ground(), groundReflector: null });
+      const pools = this.hooks.ground().filter((mesh) => !Array.isArray(mesh.material) && mesh.material.userData.aw?.uAwPool?.value > 0);
+      this.ssr = new SSRPass({ renderer: this.renderer, scene: this.scene, camera: this.camera, width: size.x, height: size.y, selects: pools, groundReflector: null });
       this.ssr.beautyRenderTarget.samples = 4;
       this.ssr.opacity = 0.25;
       this.ssr.maxDistance = 8;
@@ -128,13 +135,7 @@ export class PostPipeline {
       this.ssr.fresnel = true;
       this.ssr.distanceAttenuation = true;
       this.ssr.blur = true;
-      // 管线端能量钳制：反射采样亮度封顶，湿地倒影不被单点亮源拉成纯白
-      const sm = this.ssr.ssrMaterial;
-      sm.fragmentShader = sm.fragmentShader.replace(
-        'vec4 reflectColor=texture2D(tDiffuse,uv);',
-        'vec4 reflectColor=texture2D(tDiffuse,uv);\n{ float rl=dot(reflectColor.rgb,vec3(0.2126,0.7152,0.0722)); reflectColor.rgb*=min(1.0,2.2/max(rl,1e-4)); }',
-      );
-      sm.needsUpdate = true;
+      configureWetReflections(this.ssr, this.camera);
       this.composer.addPass(this.ssr);
     } else {
       this.composer.addPass(new RenderPass(this.scene, this.camera));

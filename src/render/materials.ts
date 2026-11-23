@@ -2,6 +2,8 @@
 // （颜色 + 法线 + 粗糙度，见 public/textures/CREDITS.md），加载前或离线时回退到画布程序化贴图。
 // 锻铁、破布、残旗、纸张等仍程序化生成。贴图在画布上生成，不依赖构建期资源。
 import * as THREE from 'three';
+import { STONE_POOL_GLSL } from './stoneWater';
+export { PUDDLE_CENTERS } from './stoneWater';
 
 function rng(seed: number): () => number {
   let s = seed >>> 0;
@@ -538,8 +540,6 @@ export interface AwUniforms {
   uAwPool: { value: number };
   /** 浅灰砂浆占比大的乱石扫描贴图需要单独做灰缝校正。 */
   uAwRubble: { value: number };
-  /** 积水洼地中心（世界 xz）+ 半径 + 强度，与 vfx.ts 的 PUDDLES 保持一致。 */
-  uAwPuddles: { value: THREE.Vector4[] };
   /** 主路↔边缘混合过渡（5.1 反重复第 4 条）：第二套贴图 + 世界 x 噪声遮罩，仅庭院地面启用。 */
   uAwBlendAlbedo: { value: THREE.Texture };
   uAwBlendNormal: { value: THREE.Texture };
@@ -551,9 +551,6 @@ export interface AwUniforms {
   /** 抹灰剥落露石（礼拜堂室内），1 启用。 */
   uAwPeel: { value: number };
 }
-
-/** 庭院积水洼地（模拟坐标 x,z,r），与 vfx.ts PUDDLES 完全一致；着色器里 z 取负转到世界坐标。 */
-export const PUDDLE_CENTERS: [number, number, number][] = [[-4, 8, 1.1], [3.5, 18, 1.3], [-2, 24, 0.9], [6, 12, 0.8]];
 
 /** 被磨亮的区域（井沿、台阶中央）：xz 中心 + 半径 + 强度，石材着色器共用。 */
 const AW_WEAR = { value: [
@@ -581,7 +578,6 @@ export function awUniforms(floor: number, wet: number, desat: number, tint: [num
     uAwStreakBand: { value: new THREE.Vector2(band[0], band[1]) },
     uAwPool: { value: 0 },
     uAwRubble: { value: 0 },
-    uAwPuddles: { value: PUDDLE_CENTERS.map(([x, z, r]) => new THREE.Vector4(x, -z, r, 0.9)) },
     uAwBlendAlbedo: { value: AW_FALLBACK_HEIGHT },
     uAwBlendNormal: { value: AW_FALLBACK_HEIGHT },
     uAwBlendRough: { value: AW_FALLBACK_HEIGHT },
@@ -620,20 +616,13 @@ uniform float uAwSteps, uAwFloor, uAwWet, uAwDesat, uAwHeightScale, uAwHasDisp, 
 uniform float uAwHasBlend, uAwBlendHalf, uAwBlendBand, uAwPeel;
 uniform vec2 uAwStreakBand;
 uniform vec4 uAwWear[3];
-uniform vec4 uAwPuddles[4];
 float awPolish;
 uniform vec3 uAwTint;
 uniform sampler2D uAwHeightMap;
 uniform sampler2D uAwBlendAlbedo, uAwBlendNormal, uAwBlendRough, uAwBlendDisp;
 vec2 awUv;
 float awWet, awMoss, awPuddle, awBlend;
-float awHash(vec2 p) { p = fract(p * vec2(123.34, 456.21)); p += dot(p, p + 45.32); return fract(p.x * p.y); }
-float awNoise(vec2 p) {
-  vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
-  float a = awHash(i), b = awHash(i + vec2(1, 0)), c = awHash(i + vec2(0, 1)), d = awHash(i + vec2(1, 1));
-  return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
-}
-float awFbm(vec2 p) { return 0.6 * awNoise(p) + 0.3 * awNoise(p * 2.13 + 7.7) + 0.1 * awNoise(p * 4.7 + 3.1); }
+${STONE_POOL_GLSL}
 float awHeight(vec2 uv) {
   float h = texture2D(uAwHeightMap, uv).r;
   if (uAwHasBlend > 0.5) h = mix(h, texture2D(uAwBlendDisp, uv).r, awBlend);
@@ -733,12 +722,7 @@ const AW_MAP_BLOCK = /* glsl */`
   awWet = uAwWet * mix(awBase, smoothstep(0.16, 0.8, awMacro2), uAwFloor);
   awPuddle = 0.0;
   if (uAwPool > 0.0 && uAwHasDisp > 0.5 && awCourtY * awUp > 0.0) {
-    float ruffle = (awFbm(awW * 4.5) - 0.5) * 0.23;
-    for (int i = 0; i < 4; i++) {
-      vec4 p = uAwPuddles[i];
-      float rim = distance(awW, p.xy) / p.z + ruffle;
-      awPuddle = max(awPuddle, (1.0 - smoothstep(0.61, 0.97, rim)) * p.w);
-    }
+    awPuddle = awPoolFootprint(awW);
     // Higher stone crests break the meniscus; the depression retains water in the joints.
     awPuddle *= awUp * awCourtY * uAwPool * (1.0 - 0.75 * smoothstep(0.75, 0.93, awHeight(awUv)));
   }
@@ -753,7 +737,7 @@ if (awBlend > 0.001) roughnessFactor = mix(roughnessFactor, texture2D(uAwBlendRo
 roughnessFactor = mix(0.58, 1.0, roughnessFactor);
 roughnessFactor -= 0.12 * awWet + 0.10 * awPolish;
 roughnessFactor = mix(roughnessFactor, 0.94, awMoss * 0.35);
-roughnessFactor = mix(roughnessFactor, 0.14, awPuddle);
+roughnessFactor = mix(roughnessFactor, 0.23, awPuddle);
 `;
 
 const AW_NORMAL_BLOCK = /* glsl */`
@@ -779,7 +763,13 @@ export function stoneShader(mat: THREE.MeshStandardMaterial, u: AwUniforms): voi
       .replace('#include <map_fragment>', AW_MAP_BLOCK)
       .replace('#include <roughnessmap_fragment>', THREE.ShaderChunk.roughnessmap_fragment.replaceAll('vRoughnessMapUv', 'awUv') + AW_ROUGH_BLOCK)
       .replace('#include <normal_fragment_maps>', THREE.ShaderChunk.normal_fragment_maps.replaceAll('vNormalMapUv', 'awUv') + AW_NORMAL_BLOCK)
-      .replace('#include <aomap_fragment>', THREE.ShaderChunk.aomap_fragment.replaceAll('vAoMapUv', 'awUv'));
+      .replace('#include <aomap_fragment>', THREE.ShaderChunk.aomap_fragment.replaceAll('vAoMapUv', 'awUv'))
+      .replace('#include <lights_physical_fragment>', /* glsl */`
+        #include <lights_physical_fragment>
+        // Water IOR ≈ 1.33: F0 ≈ 0.02, versus 0.04 for the base dielectric stone.
+        material.specularColor = mix(material.specularColor, vec3(0.02), awPuddle);
+        material.specularColorBlended = mix(material.specularColorBlended, vec3(0.02), awPuddle);
+      `);
   };
   mat.customProgramCacheKey = () => 'aw-stone';
 }
@@ -821,10 +811,20 @@ export function enhance(mat: THREE.MeshStandardMaterial, name: string, normalSca
   grab('nor', false, (t) => { mat.normalMap = t; mat.normalScale.set(normalScale, normalScale); });
   grab('rough', false, (t) => { mat.roughnessMap = t; });
   grab('ao', false, (t) => { mat.aoMap = t; mat.aoMapIntensity = 1.0; });
-  grab('disp', false, (t) => {
-    const u = mat.userData.aw as AwUniforms | undefined;
-    if (u) { u.uAwHeightMap.value = t; u.uAwHasDisp.value = 1; }
-  });
+  const u = mat.userData.aw as AwUniforms | undefined;
+  if (u && u.uAwHeightScale.value > 0) grab('disp', false, (t) => { u.uAwHeightMap.value = t; u.uAwHasDisp.value = 1; });
+}
+
+/** Unvarnished timber stays matte even when its scan contains very dark roughness texels. */
+export function weatheredWoodRoughness(mat: THREE.MeshStandardMaterial): void {
+  const baseCompile = mat.onBeforeCompile;
+  const baseKey = mat.customProgramCacheKey();
+  mat.onBeforeCompile = (shader, renderer) => {
+    baseCompile.call(mat, shader, renderer);
+    shader.fragmentShader = shader.fragmentShader.replace('#include <roughnessmap_fragment>',
+      '#include <roughnessmap_fragment>\nroughnessFactor = mix(0.68, 1.0, roughnessFactor);');
+  };
+  mat.customProgramCacheKey = () => `aw-weathered-wood:${baseKey}`;
 }
 
 /** 所有外部贴图加载完成（含失败回退）后兑现。供截图工具等待，避免拍到未加载的兜底贴图。 */
@@ -942,6 +942,8 @@ export function makeMaterials(): Materials {
       }`);
   };
   m.woodFloor.customProgramCacheKey = () => 'aw-woodfloor';
+  weatheredWoodRoughness(m.woodFloor);
+  weatheredWoodRoughness(m.wood);
 
   // 外部 CC0 贴图增强（石、木、瓦、碎石），2K：颜色/法线/粗糙度/AO/高度。
   enhance(m.stone, 'castle_wall_varriation', 0.73, pending);

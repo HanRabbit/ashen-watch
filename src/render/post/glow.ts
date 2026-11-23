@@ -2,6 +2,7 @@
 // 按深度遮挡做径向 in-scatter 近似：灯被墙挡住时晕消失，灯在湿夜空气里拉出琥珀光晕。
 // 深度复用 GTAOPass 的深度纹理，不额外渲染一遍场景。
 import * as THREE from 'three';
+import { AIR_VOLUME_GLSL } from './airVolume';
 
 export const MAX_GLOW_LIGHTS = 6;
 
@@ -17,6 +18,7 @@ export const LightGlowShader = {
     uNear: { value: 0.1 }, uFar: { value: 320 },
     uAspect: { value: 1 }, uStrength: { value: 0.5 },
     // 雾内 in-scatter（解析近似）：uFog = (heightDensity, falloff, base)
+    uVolumeFog: { value: 0 }, uAirColor: { value: new THREE.Color() }, uAirTime: { value: 0 },
     uScatter: { value: 0.4 }, uFog: { value: new THREE.Vector3(0.012, 0.1, 0) },
     uTanHalfFov: { value: new THREE.Vector2(1, 1) },
     uInvView: { value: new THREE.Matrix4() }, uCamPos: { value: new THREE.Vector3() },
@@ -31,7 +33,8 @@ export const LightGlowShader = {
   fragmentShader: /* glsl */`
     uniform sampler2D tDiffuse, tDepth;
     uniform float uHasDepth, uNear, uFar, uAspect, uStrength, uScatter, uHiThresh, uHiKneeCool, uHiKneeWarm;
-    uniform vec3 uFog, uCamPos;
+    uniform float uVolumeFog, uAirTime;
+    uniform vec3 uFog, uCamPos, uAirColor;
     uniform vec2 uTanHalfFov;
     uniform mat4 uInvView;
     uniform int uCount;
@@ -43,9 +46,10 @@ export const LightGlowShader = {
       // 透视深度 [0,1] → 正的视空间距离
       return -( uNear * uFar ) / ( ( uFar - uNear ) * d - uFar );
     }
+    ${AIR_VOLUME_GLSL}
     // Integrate a finite, softened inverse-square point light along the visible ray.
     // A surface endpoint far past the emitter (including sky) still sees the lit air in front of it.
-    float pointScatter(vec3 ray, float rayEnd, vec3 lightPos, float radius, float worldRayY) {
+    float pointScatter(vec3 ray, float rayEnd, vec3 lightPos, float radius, vec3 worldRay) {
       float along = dot(ray, lightPos);
       vec3 offset = lightPos - ray * along;
       float perpendicular2 = dot(offset, offset);
@@ -66,8 +70,10 @@ export const LightGlowShader = {
       float cosTheta = delta * inversesqrt(perpendicular2 + delta * delta + core * core);
       const float g = 0.42;
       float phase = (1.0 - g * g) / (12.566 * pow(1.0 + g * g - 2.0 * g * cosTheta, 1.5));
-      float y = uCamPos.y + worldRayY * center;
-      float density = uFog.x * exp(-uFog.y * max(y - uFog.z, 0.0));
+      vec3 world = uCamPos + worldRay * center;
+      // A hearth can light a little indoor dust even with almost no incoming courtyard mist.
+      float shelter = uVolumeFog > 0.5 ? max(0.32, awExposureToAir(world)) : 1.0;
+      float density = uFog.x * awAirDensity(world, shelter);
       return max(0.0, integral) * density * phase;
     }
     void main() {
@@ -75,7 +81,11 @@ export const LightGlowShader = {
       float here = uHasDepth > 0.5 ? viewDepth(texture2D(tDepth, vUv).x) : uFar;
       vec3 viewRay = normalize(vec3((vUv * 2.0 - 1.0) * uTanHalfFov, -1.0));
       float rayEnd = here / -viewRay.z;
-      float worldRayY = (uInvView * vec4(viewRay, 0.0)).y;
+      vec3 worldRay = (uInvView * vec4(viewRay, 0.0)).xyz;
+      if (uHasDepth > 0.5 && uVolumeFog > 0.5 && uFog.x > 0.0) {
+        float atmosphere = awAtmosphere(uCamPos, worldRay, rayEnd);
+        c = mix(c, uAirColor, atmosphere);
+      }
       for (int i = 0; i < ${MAX_GLOW_LIGHTS}; i++) {
         if (i >= uCount) break;
         vec4 L = uLights[i];
@@ -95,7 +105,7 @@ export const LightGlowShader = {
         c += uLightCols[i] * halo * att * occ * foreground * min(1.0, L.w / 22.0) * uStrength;
         if (uScatter > 0.001 && uHasDepth > 0.5) {
           vec3 lightPos = vec3((L.xy * 2.0 - 1.0) * uTanHalfFov * L.z, -L.z);
-          float haze = pointScatter(viewRay, rayEnd, lightPos, uLightRadius[i], worldRayY);
+          float haze = pointScatter(viewRay, rayEnd, lightPos, uLightRadius[i], worldRay);
           c += uLightCols[i] * (uScatter * L.w * haze * occ);
         }
       }
