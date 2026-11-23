@@ -106,6 +106,9 @@ export const STAIRS: StairDef[] = [
 
 // Descending shafts are open all the way through the slab and any ground dressing.
 export const [S1_SHAFT, S2_SHAFT] = [STAIRS[0].runs[0], STAIRS[1].runs[0]];
+// Clip near-surface substrate (such as gravel and landscape) at source. The
+// chapel slab, not the terrain, forms the ceiling over the B1 storeroom.
+export const SUBGRADE_GROUND_CUTOUTS: readonly Rect[] = [S1_SHAFT, S2_SHAFT, AREAS.store];
 
 /** Return the pieces of a rectangle outside a cutout, without degenerate edges. */
 export function cutRect(r: Rect, cut: Rect): Rect[] {
@@ -351,6 +354,8 @@ export const EDGES: NavEdge[] = [
   { a: 'g_gal2', b: 'g_land', door: 'gate' },
 ];
 
+export const BELL_POS = { x: 1.36, y: 1.6, z: 1.04 };
+
 export const INTERACTS: InteractDef[] = [
   { id: 'lantern', x: 1.8, y: 0.95, z: -6.3, floor: '1F' },
   { id: 'board', x: 2.95, y: 1.5, z: -1.6, floor: '1F' },
@@ -360,7 +365,7 @@ export const INTERACTS: InteractDef[] = [
   { id: 'woodpile', x: -2.2, y: 0.6, z: -6.45, floor: '1F' },
   { id: 'ghDoor', x: -0.35, y: 1.2, z: 0.25, floor: '1F', ownDoor: 'gatehouse' },
   { id: 'bolt', x: 0.5, y: 1.25, z: -0.1, floor: '1F', ownDoor: 'gatehouse' },
-  { id: 'bell', x: 2.2, y: 1.6, z: 1.1, floor: '1F' },
+  { id: 'bell', ...BELL_POS, floor: '1F' },
   { id: 'shelf', x: -9.2, y: 1.1, z: 6.2, floor: '1F' },
   { id: 'lamp', x: -5, y: 1.9, z: 28.65, floor: '1F' },
   { id: 'gate', x: 24.0, y: 5.2, z: 21.2, floor: '2F', ownDoor: 'gate' },
@@ -375,7 +380,6 @@ export const INTERACTS: InteractDef[] = [
 ];
 
 export const SPAWN = { x: 0, z: -5.5, yaw: 0 };
-export const BELL_POS = { x: 2.2, z: 1.1 };
 export const LAMP_POS = { x: -5, y: 2.7, z: 28.8 };
 export const BRAZIER_POS = { chapel: { x: 27, y: 1.0 + RAISED_Y, z: 18.5 }, side: { x: -9.2, y: F2_Y + 1.0, z: 14 } };
 

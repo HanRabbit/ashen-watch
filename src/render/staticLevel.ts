@@ -1,7 +1,7 @@
 // 静态建筑：墙、地面、屋顶、地标与不随状态变化的陈设。按材质合并为少量网格。
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-import { cutRect, DOORS, inArea, PROPS, Rect, S1_SHAFT, S2_SHAFT, WALLS, WELL } from '../sim/level';
+import { cutRect, DOORS, inArea, PROPS, Rect, S1_SHAFT, SUBGRADE_GROUND_CUTOUTS, WALLS, WELL } from '../sim/level';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { archHeader, archLeaf, archRib, Batch, gable } from './geom';
 import { buildFurniture } from './furniture';
@@ -242,9 +242,9 @@ export function buildStaticLevel(m: Materials): StaticLevel {
   archFrame(b, v.wallTrim, 0, ghDoor.hinge.z, ghWidth, 1.9, ghDoor.box.h, 0);
 
   // Cut every ground layer before batching. In particular the huge exterior
-  // gravel box used to cap both stairways even after the visible floor was cut.
+  // gravel box used to cap both stairways and show through the B1 ceiling.
   const ground = (mat: THREE.Material, rect: Rect, y0: number, h: number, tile: number): void => {
-    const pieces = cutRect(rect, S1_SHAFT).flatMap((r) => cutRect(r, S2_SHAFT));
+    const pieces = SUBGRADE_GROUND_CUTOUTS.reduce((slabs, cut) => slabs.flatMap((r) => cutRect(r, cut)), [rect]);
     // Preserve UV scale and phase across the split, instead of visibly retiling each piece.
     for (const p of pieces) boxOff(mat, p.x0, p.z0, p.x1, p.z1, y0, h, tile,
       ((p.x0 + p.x1) - (rect.x0 + rect.x1)) / (2 * tile),

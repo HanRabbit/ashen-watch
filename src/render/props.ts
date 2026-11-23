@@ -444,8 +444,11 @@ export class Props {
     const tex = this.glowTex;
 
     // 门房门与门闩（PRP-04）
-    put(this.ghDoor, -0.8, 0, 0.25);
-    const leaf = mesh(archLeaf(1.6, 1.9, 2.6, 0.09, true), m.wood);
+    const gatehouse = DOORS.gatehouse;
+    const ghBase = gatehouse.box.y0 ?? 0;
+    put(this.ghDoor, gatehouse.hinge.x, ghBase, gatehouse.hinge.z);
+    this.ghDoor.name = 'gatehouse-leaf';
+    const leaf = mesh(archLeaf(gatehouse.box.x1 - gatehouse.box.x0, 1.9, gatehouse.box.h - ghBase, 0.09, true), m.wood);
     this.ghDoor.add(leaf);
     for (const y of [0.45, 1.75]) {
       const strap = boxMesh(m.iron, 1.1, 0.07, 0.11, 1); strap.position.set(0.58, y, 0);
@@ -458,16 +461,18 @@ export class Props {
     this.boltBar = cyl(m.iron, 0.028, 0.028, 0.72, 7); this.boltBar.rotation.z = HALF_PI; this.boltBar.position.set(1.05, 1.25, 0.085);
     this.boltKnob = mesh(new THREE.SphereGeometry(0.045, 7, 6), m.iron); this.boltKnob.position.set(0.7, 1.25, 0.12);
     this.ghDoor.add(bracketFixed, this.boltBracket, this.boltBar, this.boltKnob);
-    const keeper = put(boxMesh(m.iron, 0.12, 0.16, 0.07, 1), 0.88, 1.25, 0.07);
+    const keeper = put(boxMesh(m.iron, 0.12, 0.16, 0.07, 1), gatehouse.box.x1 + 0.08, ghBase + 1.25, gatehouse.box.z0 - 0.05);
     g.add(this.ghDoor, keeper);
 
     // 尖拱铁栅门（PRP-03）：位置/朝向读 DOORS.gate，布局调整时自动跟随
     const gh = DOORS.gate.hinge;
     this.gateClosedRot = DOORS.gate.axis === 'z' ? HALF_PI : 0;
     const gateBox = DOORS.gate.box;
-    put(this.gate, gh.x, gateBox.y0 ?? 0, gh.z);
+    const gateBase = gateBox.y0 ?? 0;
+    put(this.gate, gh.x, gateBase, gh.z);
+    this.gate.name = 'S4-stair-gate';
     const gateWidth = DOORS.gate.axis === 'z' ? gateBox.z1 - gateBox.z0 : gateBox.x1 - gateBox.x0;
-    this.gate.scale.set(gateWidth / 1.8, (gateBox.h - (gateBox.y0 ?? 0)) / 2.95, 1);
+    this.gate.scale.set(gateWidth / 1.8, (gateBox.h - gateBase) / 2.95, 1);
     this.gate.add(mesh(gateGeometry(), m.iron));
     const tipIron = m.iron.clone();
     tipIron.roughness = 0.4;
@@ -477,6 +482,25 @@ export class Props {
     this.gateJam.add(wedge, chain);
     this.gate.add(this.gateJam);
     g.add(this.gate);
+
+    // Fit the hinge to the existing rail end, and socket the latch into the
+    // opposite jamb. Fixed iron stays at the threshold as the leaf swings.
+    const gateFrame = put(new THREE.Group(), gh.x, gateBase, gh.z);
+    gateFrame.rotation.y = this.gateClosedRot;
+    for (const y of [0.24, 0.93]) {
+      const socket = boxMesh(m.iron, 0.10, 0.09, 0.10, 1);
+      socket.position.set(-0.055, y, 0);
+      const pin = cyl(m.iron, 0.033, 0.033, 0.15, 8);
+      pin.position.y = y;
+      const strap = boxMesh(tipIron, 0.21, 0.051, 0.046, 1);
+      strap.position.set(0.083, y / this.gate.scale.y, 0);
+      gateFrame.add(socket, pin);
+      this.gate.add(strap);
+    }
+    const strike = boxMesh(m.iron, 0.055, 0.19, 0.16, 1);
+    strike.position.set(gateWidth, 1.05, 0);
+    gateFrame.add(strike);
+    g.add(gateFrame);
 
     // Decorative only: this stays in front of the solid south wall and has no
     // DoorDef, target, or state. The dark masonry is recessed behind the iron.
@@ -669,7 +693,9 @@ export class Props {
     g.add(chest);
 
     // 晨钟（PRP-05）：GLB 铜钟（CC-BY，铜绿只在凹处），钟架/绳/钟舌程序化
-    put(this.bell, BELL_POS.x, 3.0, BELL_POS.z);
+    const bellPivotY = 3;
+    put(this.bell, BELL_POS.x, bellPivotY, BELL_POS.z);
+    this.bell.name = 'morning-bell';
     const bellGlb = loadProp({
       name: 'bell', size: 0.62, hide: /Wood3|RustMetal/,
       norm: { Bell: { color: 0x8a7a55, roughness: 0.5, metalness: 1, wear: { kind: 'iron', seed: 26 } } },
@@ -678,10 +704,33 @@ export class Props {
     this.bell.add(bellGlb);
     this.bellClapper = makeClapper(m); this.bellClapper.position.y = -0.42;
     this.bell.add(this.bellClapper);
-    const rope = cyl(m.cloth, 0.015, 0.015, 0.95, 5); rope.position.y = -1.15;
-    this.bell.add(rope);
-    const yoke = put(cyl(m.iron, 0.03, 0.03, 0.2, 6), BELL_POS.x, 3.06, BELL_POS.z);
-    g.add(this.bell, yoke);
+    const knotY = BELL_POS.y - bellPivotY;
+    const ropeTop = -0.66;
+    const rope = cyl(m.cloth, 0.015, 0.015, ropeTop - knotY, 5);
+    rope.position.y = (ropeTop + knotY) / 2;
+    const knot = put(cyl(m.cloth, 0.027, 0.024, 0.08, 6), 0, knotY, 0);
+    this.bell.add(rope, knot);
+
+    // A fixed yoke on two braced arms carries the bell; only the bell and rope swing.
+    const mount = put(new THREE.Group(), BELL_POS.x, bellPivotY, BELL_POS.z);
+    const wallZ = BELL_POS.z - 0.5; // local +Z is toward the courtyard's south wall
+    const crossbar = boxMesh(v.woodBeam, 0.82, 0.14, 0.14, 1.2);
+    crossbar.position.y = 0.08;
+    const pin = cyl(m.iron, 0.034, 0.034, 0.18, 8);
+    pin.position.y = 0.025;
+    mount.add(crossbar, pin);
+    for (const side of [-1, 1]) {
+      const x = side * 0.32;
+      const tail = boxMesh(v.woodBeam, 0.11, 0.17, wallZ + 0.17, 1);
+      tail.position.set(x, 0.08, (wallZ - 0.07) / 2);
+      const strut = boxMesh(v.woodBeam, 0.09, 0.09, Math.hypot(wallZ, 0.35), 1);
+      strut.position.set(x, -0.175, wallZ / 2);
+      strut.rotation.x = Math.atan2(0.35, wallZ);
+      const plate = boxMesh(m.iron, 0.15, 0.54, 0.045, 1);
+      plate.position.set(x, -0.11, wallZ - 0.012);
+      mount.add(tail, strut, plate);
+    }
+    g.add(this.bell, mount);
 
     // 任务板与补油台（PRP-08）
     const board = put(boxMesh(m.wood, 0.06, 1.0, 1.2, 1), 2.96, 1.5, -1.6);
