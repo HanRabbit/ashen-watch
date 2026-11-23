@@ -9,8 +9,8 @@ type Grounded = { x: number; z: number; y?: number };
 const gy = (p: Grounded): number => p.y ?? groundY(p.x, p.z);
 import { World } from '../sim/state';
 import { clamp01 } from './geom';
-
-const PUDDLES: [number, number, number][] = [[-4, 8, 1.1], [3.5, 18, 1.3], [-2, 24, 0.9], [6, 12, 0.8]];
+import type { RenderedFootPlant, WatchmanFootPlants } from './characters';
+import { PUDDLE_CENTERS } from './stoneWater';
 
 export interface EmitOpts {
   pos: THREE.Vector3;
@@ -142,7 +142,7 @@ const WHITE_SMOKE = new THREE.Color(0xcdd5da);
 /** 踩水涟漪：贴地 expanding 圆环，低透明冷灰，0.6s 内淡出（圣经 §10 水）。 */
 class Ripples {
   readonly group = new THREE.Group();
-  private rings: { mesh: THREE.Mesh; mat: THREE.MeshBasicMaterial; t: number }[] = [];
+  private rings: { mesh: THREE.Mesh; mat: THREE.MeshBasicMaterial; t: number; reach: number }[] = [];
   private cursor = 0;
 
   constructor() {
@@ -153,17 +153,18 @@ class Ripples {
       const m = new THREE.Mesh(geo, mat);
       m.visible = false;
       this.group.add(m);
-      this.rings.push({ mesh: m, mat, t: 1 });
+      this.rings.push({ mesh: m, mat, t: 1, reach: 0 });
     }
   }
 
-  spawn(x: number, y: number, z: number): void {
+  spawn(x: number, y: number, z: number, reach: number): void {
     const r = this.rings[this.cursor];
     this.cursor = (this.cursor + 1) % this.rings.length;
     r.t = 0;
+    r.reach = reach;
     r.mesh.visible = true;
     r.mesh.position.set(x, y + 0.015, z);
-    r.mesh.scale.setScalar(0.12);
+    r.mesh.scale.setScalar(r.reach * 0.18);
   }
 
   update(dt: number): void {
@@ -171,8 +172,8 @@ class Ripples {
       if (r.t >= 1) continue;
       r.t = Math.min(1, r.t + dt / 0.6);
       const k = r.t;
-      r.mesh.scale.setScalar(0.12 + k * 0.55);
-      r.mat.opacity = 0.3 * (1 - k) * (1 - k);
+      r.mesh.scale.setScalar(r.reach * (0.18 + k * 0.82));
+      r.mat.opacity = 0.23 * (1 - k) * (1 - k);
       if (k >= 1) r.mesh.visible = false;
     }
   }
@@ -183,21 +184,21 @@ export class Vfx {
   /** 受击红暗角强度（0..1），view 的调色 pass 读取。 */
   hurt = 0;
   private soft = new SoftParticles(320, false);
-  private glow = new SoftParticles(160, true);
   private ripples = new Ripples();
   private prevHp = 100;
-  private stepPhase = 0;
-  private stepSide = 1;
+  private stepWorld: World | null = null;
+  private lastFeet: WatchmanFootPlants | null = null;
   private repelAcc = 0;
   private kickPending = false;
   private tmp = new THREE.Vector3();
 
   constructor() {
-    this.group.add(this.soft.points, this.glow.points, this.ripples.group);
+    this.group.add(this.soft.points, this.ripples.group);
   }
 
   setQuality(q: 'high' | 'low'): void {
     this.group.visible = q === 'high';
+    if (!this.group.visible) this.lastFeet = null;
   }
 
   consumeKick(): boolean {
@@ -206,9 +207,8 @@ export class Vfx {
     return k;
   }
 
-  update(w: World, pose: Grounded, dt: number, time: number): void {
+  update(w: World, pose: Grounded, dt: number, feet: WatchmanFootPlants | null): void {
     this.soft.update(dt);
-    this.glow.update(dt);
     this.ripples.update(dt);
     this.hurt = Math.max(0, this.hurt - dt * 4.5);
     if (!this.group.visible) { this.prevHp = w.player.hp; return; }
@@ -216,32 +216,14 @@ export class Vfx {
     const py = gy(pose);
     const p = w.player;
 
-    // 脚步：石面灰尘 / 水洼水花，按步频触发
-    const rate = p.sprinting ? 3.3 : 2.2;
-    const before = Math.floor(this.stepPhase);
-    this.stepPhase += dt * rate * (p.moving ? 1 : 0);
-    if (Math.floor(this.stepPhase) > before && p.moving) {
-      this.stepSide *= -1;
-      const sy = Math.sin(p.yaw), cy = Math.cos(p.yaw);
-      const fx = px + cy * 0.16 * this.stepSide + sy * 0.1;
-      const fz = pz - sy * 0.16 * this.stepSide + cy * 0.1;
-      const inPuddle = PUDDLES.some(([x, z, r]) => (fx - x) ** 2 + (fz - z) ** 2 < r * r);
-      this.tmp.set(fx, py + 0.04, -fz);
-      if (inPuddle) {
-        this.ripples.spawn(fx, py, -fz);
-        for (let i = 0; i < 9; i++) {
-          this.glow.emit({ pos: this.tmp, vel: new THREE.Vector3(0, 1.4 + Math.random(), 0), spread: 0.22, life: 0.38, size: 0.05, color: SPLASH, gravity: -5.5, drag: 0.4 });
-        }
-        for (let i = 0; i < 3; i++) {
-          this.soft.emit({ pos: this.tmp, vel: new THREE.Vector3(0, 0.5, 0), spread: 0.25, life: 0.45, size: 0.14, grow: 2, color: SPLASH, drag: 2 });
-        }
-      } else {
-        const n = p.sprinting ? 6 : 4;
-        for (let i = 0; i < n; i++) {
-          this.soft.emit({ pos: this.tmp, vel: new THREE.Vector3(0, 0.3, 0), spread: 0.16, life: 0.55, size: 0.09, grow: 2.4, color: DUST, drag: 2.2 });
-        }
-      }
+    // Set down on the same frame and at the same point as the rendered sole.
+    // Initial poses, airborne feet, and held input at a wall don't trigger a puff.
+    if (feet && this.lastFeet && w === this.stepWorld) {
+      if (feet.left.planted && feet.left.plantId > this.lastFeet.left.plantId) this.touchdown(w, feet.left);
+      if (feet.right.planted && feet.right.plantId > this.lastFeet.right.plantId) this.touchdown(w, feet.right);
     }
+    this.lastFeet = feet;
+    this.stepWorld = w;
 
     // 受击：黑烟爆散 + 红暗角脉冲 + 镜头冲击请求
     if (w.player.hp < this.prevHp - 0.5) {
@@ -288,6 +270,28 @@ export class Vfx {
         }
       }
     }
-    void time;
+  }
+
+  private touchdown(w: World, sole: RenderedFootPlant): void {
+    let wet = 0;
+    // StoneWater shapes the exact feathered edge in the shader. Stay inside
+    // its persistent core, and never project a courtyard puddle onto B1/2F.
+    if (w.player.floor === '1F' && Math.abs(sole.y) < 0.12) {
+      for (const [x, z, r] of PUDDLE_CENTERS) wet = Math.max(wet, r * 0.72 - Math.hypot(sole.x - x, sole.z + z));
+    }
+    this.tmp.set(sole.x, sole.y + 0.023, sole.z);
+    if (wet > 0.025) {
+      this.ripples.spawn(sole.x, sole.y, sole.z, Math.min(0.43, wet));
+      for (let i = 0; i < 7; i++) {
+        this.soft.emit({ pos: this.tmp, vel: new THREE.Vector3(0, 0.8 + Math.random() * 0.5, 0),
+          spread: 0.095, life: 0.31, size: 0.033, color: SPLASH, gravity: -5.5, drag: 0.5 });
+      }
+    } else {
+      const n = w.player.sprinting ? 4 : 2;
+      for (let i = 0; i < n; i++) {
+        this.soft.emit({ pos: this.tmp, vel: new THREE.Vector3(0, 0.25, 0),
+          spread: 0.13, life: 0.36, size: 0.065, grow: 2.1, color: DUST, drag: 2.2 });
+      }
+    }
   }
 }

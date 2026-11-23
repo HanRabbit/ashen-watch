@@ -313,7 +313,7 @@ export class SceneView {
     this.props.update(w, dt, time);
     this.player.update(w, pose, yaw, dt, time);
     this.ghosts.update(w, pose.ghosts, dt, time);
-    this.vfx.update(w, pose, dt, time);
+    this.vfx.update(w, pose, dt, this.player.readFootPlants());
     if (this.vfx.consumeKick()) this.camRig.kick(1);
     const camD = this.camRig.update(w, pose, yaw, pitch, dt);
     this.player.group.visible = camD > 0.85;
