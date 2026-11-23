@@ -24,6 +24,8 @@ export interface PostHooks {
   /** 参与屏幕空间光晕/散射的点光源 */
   lights(): THREE.PointLight[];
   key?(): THREE.DirectionalLight;
+  doors?(): THREE.Vector2;
+  skyIrradiance?(): THREE.Color;
 }
 
 export interface PostRig {
@@ -228,12 +230,18 @@ export class PostPipeline {
   /** 把点光源投影到屏幕，供光晕 pass 做深度遮挡散射与雾内 in-scatter。 */
   private updateGlowLights(): void {
     const u = this.glow.uniforms;
+    const doors = this.hooks.doors?.();
+    if (doors) u.uAirDoors.value.copy(doors);
     this.camera.updateMatrixWorld();
     this.camera.matrixWorldInverse.copy(this.camera.matrixWorld).invert();
     let n = 0;
     for (const L of this.hooks.lights()) {
       if (n >= MAX_GLOW_LIGHTS) break;
       if (L.intensity <= 0.05) continue;
+      if (!this.camera.layers.test(L.layers)) continue;
+      let drawn = true;
+      for (let o: THREE.Object3D | null = L; o; o = o.parent) if (!o.visible) { drawn = false; break; }
+      if (!drawn) continue;
       const v = this.glowV;
       L.getWorldPosition(v);
       v.applyMatrix4(this.camera.matrixWorldInverse);
@@ -262,6 +270,9 @@ export class PostPipeline {
     u.uHasDepth.value = depth ? 1 : 0;
     if (this.volume) {
       const v = this.volume.uniforms;
+      v.uAirDoors.value.copy(u.uAirDoors.value);
+      const sky = this.hooks.skyIrradiance?.();
+      if (sky) v.uWindowIrradiance.value.copy(sky);
       v.tDepth.value = depth ?? null;
       v.uWorld.value.copy(this.camera.matrixWorld); v.uOrigin.value.copy(this.camera.position);
       v.uTan.value.copy(u.uTanHalfFov.value); v.uClip.value.set(this.camera.near, this.camera.far);

@@ -86,7 +86,20 @@ export const FilmOutputShader = {
     }
     void main() {
       gl_FragColor = vec4(texture2D(tDiffuse, vUv).rgb, 1.0);
+      // The fitted ACES curve goes negative for very small *positive* inputs.
+      // A bounded, luminance-preserving toe resolves real weak radiance without
+      // a black offset. At its intersection the ordinary ACES shoulder takes over.
+      #ifdef TONE_MAPPING
+        vec3 exposed = max(gl_FragColor.rgb * toneMappingExposure, vec3(0.0));
+        vec3 toeWeights = vec3(0.2126, 0.7152, 0.0722);
+        float sceneY = dot(exposed, toeWeights);
+      #endif
       #include <tonemapping_fragment>
+      #ifdef TONE_MAPPING
+        float filmY = dot(gl_FragColor.rgb, toeWeights);
+        float toeY = 2.15 * sceneY / (1.0 + 2.15 * sceneY / 0.014);
+        gl_FragColor.rgb += exposed * (max(toeY - filmY, 0.0) / max(sceneY, 1e-8));
+      #endif
       #include <colorspace_fragment>
       vec3 coord = (clamp(gl_FragColor.rgb, 0.0, 1.0) * (uLutSize - 1.0) + 0.5) / uLutSize;
       vec3 c = texture(uLut, coord).rgb;

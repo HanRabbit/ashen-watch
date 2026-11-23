@@ -2,11 +2,12 @@
 // 火焰用程序化着色器面片，火星用粒子柱（VFX-01/02）；低画质关闭火星。
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { BRAZIER, BrazierId, HEARTH, LightZone, WALL_LAMP } from '../config';
+import { BRAZIER, BrazierId, HEARTH, WALL_LAMP } from '../config';
 import { B1_Y, BAILEY_SHELF, BELL_POS, BRAZIER_POS, DOORS, INTERACTS, LAMP_POS, PROPS, RAISED_Y } from '../sim/level';
 import { World } from '../sim/state';
 import { archLeaf, archPath, boxMesh, cyl, lerp, mesh, put } from './geom';
 import { glowTexture, grimeTexture, Materials, smokeTexture } from './materials';
+import { installLocalLightTransport, LocalLightDoors } from './localLightTransport';
 import { mountOilFlask } from './oilFlaskAsset';
 import { findNode, heroFinish, heroOutline, heroSolid, loadProp, mergeByMaterial, sackGeometry, sackTie } from './propAssets';
 import { variants } from './materialVariants';
@@ -64,6 +65,7 @@ function flameMaterial(phase: number): THREE.ShaderMaterial {
 
 function flame(tex: THREE.Texture, size: number, phase = Math.random() * 10): THREE.Group {
   const g = new THREE.Group();
+  g.visible = false;
   const mat = flameMaterial(phase);
   const geo = new THREE.PlaneGeometry(size * 0.8, size);
   for (const ry of [0, HALF_PI]) {
@@ -73,7 +75,7 @@ function flame(tex: THREE.Texture, size: number, phase = Math.random() * 10): TH
     card.renderOrder = 2;
     g.add(card);
   }
-  const glow = glowSprite(tex, 0xff7020, size * 1.0);
+  const glow = glowSprite(tex, 0xff7020, Math.min(size, 0.5));
   glow.material.opacity = 0.1;
   glow.position.y = size * 0.45;
   g.add(glow);
@@ -130,6 +132,7 @@ class Embers {
     this.points = new THREE.Points(geo, mat);
     this.points.position.set(x, y, -z);
     this.points.frustumCulled = false;
+    this.points.visible = false;
   }
   update(dt: number, time: number, active: boolean): void {
     this.points.visible = active;
@@ -233,6 +236,7 @@ export function makeLantern(m: Materials, tex: THREE.Texture): { group: THREE.Gr
   mergeByMaterial(posts);
   const glow = glowSprite(tex, 0xffa848, 0.55);
   glow.position.y = -0.1;
+  glow.visible = false;
   // 次序保持 base,body,hood,ring,posts,glow（拾取件按 children[5] 隐藏光斑）
   group.add(base, body, hood, ring, posts, glow);
   const trim = new THREE.Group();
@@ -377,18 +381,19 @@ function gateTipsGeometry(): THREE.BufferGeometry {
   return mergeGeometries(gateTipParts.map((p) => (p.index ? p.toNonIndexed() : p)), false)!;
 }
 
-function zoneDisc(zn: LightZone, tex: THREE.Texture, y: number): THREE.Mesh {
-  const geo = new THREE.CircleGeometry(zn.r, 40);
-  const pos = geo.attributes.position as THREE.BufferAttribute;
-  for (let i = 0; i < pos.count; i++) {
-    pos.setXY(i, Math.max(zn.x0, Math.min(zn.x1, zn.x + pos.getX(i))) - zn.x, Math.max(zn.z0, Math.min(zn.z1, zn.z + pos.getY(i))) - zn.z);
-  }
-  const disc = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ map: tex, color: 0xffa040, transparent: true, opacity: 0.4, depthWrite: false, blending: THREE.AdditiveBlending }));
-  disc.rotation.x = -HALF_PI;
-  return put(disc, zn.x, y, zn.z);
+const BRAZIER_IDS = Object.keys(BRAZIER.zones) as BrazierId[];
+
+const HEARTH_FIRE = { x: -2.72, y: 0.36, z: -4.4 };
+
+function coalMaterial(): THREE.MeshStandardMaterial {
+  return new THREE.MeshStandardMaterial({ color: 0x2b2420, roughness: 0.92, emissive: 0xff5822, emissiveIntensity: 0 });
 }
 
-const BRAZIER_IDS = Object.keys(BRAZIER.zones) as BrazierId[];
+function localPoint(name: string, color: number, reach: number, decay: number): THREE.PointLight {
+  const light = new THREE.PointLight(color, 0, reach, decay);
+  light.name = name;
+  return light;
+}
 
 function chapelOak(m: Materials): THREE.MeshStandardMaterial {
   return heroFinish(variants(m).woodPlank, 'chapel-oak', /* glsl */`
@@ -522,10 +527,13 @@ function buildChapelLeaf(
 
 export class Props {
   readonly group = new THREE.Group();
-  readonly hearthLight = new THREE.PointLight(0xff9a48, 0, 16, 1.6);
-  readonly windowLight = new THREE.PointLight(0xff9a48, 0, 9, 1.8);
-  readonly lampLight = new THREE.PointLight(0xffb25e, 0, 16, 1.9);
-  readonly brazierLight = new THREE.PointLight(0xff9440, 0, 15, 1.5);
+  readonly hearthLight = localPoint('hearth flame', 0xff9a48, 10, 1.6);
+  readonly lampLight = localPoint('courtyard wall lamp flame', 0xffb25e, 12, 1.9);
+  readonly brazierLights = {
+    chapel: localPoint('chapel brazier flame', 0xff9440, 9, 1.7),
+    side: localPoint('wall-walk brazier flame', 0xff9440, 7, 1.7),
+  };
+  readonly localLights = [this.lampLight, this.hearthLight, this.brazierLights.chapel, this.brazierLights.side];
   readonly lampDebugRing: THREE.Mesh;
 
   private glowTex = glowTexture();
@@ -539,14 +547,14 @@ export class Props {
   private gateJam = new THREE.Group();
   private frontL = new THREE.Group();
   private frontR = new THREE.Group();
+  private readonly lightDoors = new LocalLightDoors(this.ghDoor, this.frontL, this.frontR);
   private open = { gatehouse: 0, gate: 0, chapelFront: 0 };
   private boltAmt = 0;
   private lampArm = new THREE.Group();
   private lampStub: THREE.Mesh;
   private lampFlame: THREE.Group;
   private lampGlass: THREE.MeshStandardMaterial;
-  private sconces: { glass: THREE.MeshStandardMaterial; glow: THREE.Sprite; light: THREE.PointLight; flame: THREE.Group }[] = [];
-  private braziers: { id: BrazierId; flame: THREE.Group; coals: THREE.Mesh; ground: THREE.Mesh; embers: Embers }[] = [];
+  private braziers: { id: BrazierId; flame: THREE.Group; coals: THREE.MeshStandardMaterial; embers: Embers }[] = [];
   private pickLantern: THREE.Group;
   private shelfItems = new THREE.Group();
   private crateItems = new THREE.Group();
@@ -565,17 +573,16 @@ export class Props {
   private bellSwing = 0;
   private bellT = 0;
   private flames: THREE.Group[] = [];
-  private embers: THREE.Mesh;
+  private readonly hearthCoals = coalMaterial();
   private hearthEmbers: Embers;
   private lampEmbers: Embers;
   private chimneySmoke: THREE.Sprite[] = [];
-  private potGlow: THREE.Sprite;
-  private benchGlow: THREE.Sprite;
   private quality: Quality = 'high';
 
   constructor(m: Materials) {
     const g = this.group;
     const tex = this.glowTex;
+    installLocalLightTransport();
 
     // 门房门与门闩（PRP-04）
     const gatehouse = DOORS.gatehouse;
@@ -688,6 +695,7 @@ export class Props {
     buildChapelLeaf(this.frontL, frontHalf, frontHeight, -1, doorOak, strapIron, handIron);
     buildChapelLeaf(this.frontR, frontHalf, frontHeight, 1, doorOak, strapIron, handIron);
     g.add(this.frontL, this.frontR);
+    this.lightDoors.update();
 
     // 庭院壁灯（PRP-02）：卷草锻铁挂臂 + 悬挂六角铁灯笼（玻璃 + 顶盖），对标概念图
     // 朝向由所在墙推断（西/东/北/南），布局移动 LAMP_POS 时自动跟随
@@ -712,34 +720,31 @@ export class Props {
       link.rotation.y = HALF_PI;
       this.lampArm.add(link);
     }
-    this.lampFlame = flame(tex, 0.16); this.lampFlame.position.set(lx, ly - 0.09, 0);
-    this.lampArm.add(this.lampFlame);
+    const wick = new THREE.Group();
+    wick.position.set(lx, ly - 0.09, 0);
+    this.lampFlame = flame(tex, 0.16);
+    this.lampLight.position.y = 0.067;
+    this.lampEmbers = new Embers(0, 0.045, 0, 10, 0.15, 0xffb060, 0.04);
+    wick.add(this.lampFlame, this.lampLight, this.lampEmbers.points);
+    this.lampArm.add(wick);
+    this.lampArm.visible = false;
     lamp.add(this.lampStub, this.lampArm);
     g.add(lamp);
-    put(this.lampLight, LAMP_POS.x + ln[0] * 0.75, LAMP_POS.y - 0.3, LAMP_POS.z + ln[1] * 0.75);
-    g.add(this.lampLight);
-    // 西墙装饰烛灯（概念图左墙藤幕中的挂灯）：入夜自燃，暖琥珀小光池
-    for (const [sx, sy] of [[-0.6, 2.9], [-8.6, 2.6]]) {
-      const sc = put(new THREE.Group(), sx, sy, 28.48);
+
+    // Decorative fixtures have no fuel or lighting state. Keep the iron and glass cold.
+    for (const [sx, sy, sz] of [[2.37, 2.9, 27.30], [-8.6, 2.6, 28.48]]) {
+      const sc = put(new THREE.Group(), sx, sy, sz);
       sc.rotation.y = -HALF_PI;
       sc.add(scrollArm(m));
       const glass = new THREE.MeshStandardMaterial({
-        color: 0x3a2a16, emissive: 0xffb25e, emissiveIntensity: 0, roughness: 0.2,
-        transparent: true, opacity: 0.55, side: THREE.DoubleSide, roughnessMap: grimeTexture(),
+        color: 0x3a2a16, roughness: 0.2, transparent: true, opacity: 0.55,
+        side: THREE.DoubleSide, roughnessMap: this.lampGlass.roughnessMap,
       });
       const body = hexLantern(m, glass);
       body.position.set(0.6, -0.26, 0);
       body.scale.setScalar(0.9);
       sc.add(body);
-      const fl = flame(tex, 0.12); fl.position.set(0.6, -0.34, 0); fl.visible = false;
-      sc.add(fl);
-      const glow = glowSprite(tex, 0xffb25e, 0.7); glow.position.set(0.6, -0.26, 0); glow.material.opacity = 0;
-      sc.add(glow);
-      const light = new THREE.PointLight(0xffb25e, 0, 10, 1.9);
-      light.position.set(0.6, -0.26, 0);
-      sc.add(light);
       g.add(sc);
-      this.sconces.push({ glass, glow, light, flame: fl });
     }
     const zn = WALL_LAMP.zone;
     // 地面暖光交给真实点光（lampLight），不再贴圆形光斑贴花
@@ -748,12 +753,10 @@ export class Props {
     put(this.lampDebugRing, zn.x, 0.06, zn.z);
     this.lampDebugRing.visible = false;
     g.add(this.lampDebugRing);
-    this.lampEmbers = new Embers(LAMP_POS.x + ln[0] * 0.43, LAMP_POS.y + 0.06, LAMP_POS.z + ln[1] * 0.43, 10, 0.7, 0xffb060, 0.06);
-    g.add(this.lampEmbers.points);
 
     // 火盆：锻铁三足架 + GLB 铁笼火盆（CC-BY，见 CREDITS.md）
     for (const id of BRAZIER_IDS) {
-      const at = BRAZIER_POS[id], bz = BRAZIER.zones[id];
+      const at = BRAZIER_POS[id];
       const floor = at.y - 1.0;
       const stand = put(new THREE.Group(), at.x, floor, at.z);
       for (let i = 0; i < 3; i++) {
@@ -772,15 +775,17 @@ export class Props {
       });
       bowl.position.y = 0.64;
       stand.add(bowl);
-      const coals = mesh(new THREE.CylinderGeometry(0.17, 0.17, 0.04, 10), new THREE.MeshBasicMaterial({ color: 0x24201c }), false); coals.position.y = 0.86;
+      const coals = coalMaterial();
+      const bed = mesh(new THREE.CylinderGeometry(0.17, 0.17, 0.04, 10), coals, false);
+      bed.position.y = 0.86;
       const fl = flame(tex, 0.42); fl.position.y = 0.9;
-      stand.add(coals, fl);
-      const ground = zoneDisc(bz, tex, floor + 0.03);
-      const embers = new Embers(at.x, at.y - 0.05, at.z, 16, 1.1, 0xff9040, 0.08);
-      g.add(stand, ground, embers.points);
-      this.braziers.push({ id, flame: fl, coals, ground, embers });
+      const light = this.brazierLights[id];
+      light.position.y = fl.position.y + 0.14;
+      stand.add(bed, fl, light);
+      const embers = new Embers(at.x, floor + fl.position.y, at.z, 16, 1.1, 0xff9040, 0.08);
+      g.add(stand, embers.points);
+      this.braziers.push({ id, flame: fl, coals, embers });
     }
-    g.add(this.brazierLight);
 
     // 拾取件（PRP-01、PRP-06、PRP-09）
     this.pickLantern = put(makeLantern(m, tex).group, 1.8, 0.88, -6.3);
@@ -880,37 +885,35 @@ export class Props {
     const spout = put(cyl(m.iron, 0.012, 0.02, 0.22, 5), 2.5, 1.22, -4.3); spout.rotation.z = 0.9;
     const funnel = put(mesh(new THREE.ConeGeometry(0.08, 0.12, 8, 1, true), m.iron), 2.5, 1.01, -4.75); funnel.rotation.x = Math.PI;
     const rag = put(boxMesh(m.cloth, 0.3, 0.02, 0.24, 1), 2.45, 0.96, -5.2);
-    this.benchGlow = glowSprite(tex, 0xffa040, 0.5); put(this.benchGlow, 2.75, 1.15, -3.75);
     const stub = put(cyl(m.paper, 0.03, 0.035, 0.12, 6), 2.75, 1.01, -3.75);
-    g.add(board, sheet, can, spout, funnel, rag, this.benchGlow, stub);
+    g.add(board, sheet, can, spout, funnel, rag, stub);
 
     // 炉火套件（PRP-07）：GLB 壁炉炉膛内的柴与火，锅在炉旁吊臂下
-    this.embers = put(boxMesh(m.ember, 0.4, 0.05, 0.9, 1), -2.72, 0.3, -4.4);
-    this.embers.castShadow = false;
-    g.add(this.embers);
+    const { x: hx, y: hy, z: hz } = HEARTH_FIRE;
+    const bed = put(boxMesh(this.hearthCoals, 0.4, 0.05, 0.9, 1), hx, 0.30, hz);
+    bed.castShadow = false;
+    g.add(bed);
     for (const [dz, s] of [[-0.22, 0.6], [0.22, 0.72]]) {
-      const f = put(flame(tex, s), -2.72, 0.36, -4.4 + dz);
+      const f = put(flame(tex, s), hx, hy, hz + dz);
       this.flames.push(f); g.add(f);
     }
-    this.hearthEmbers = new Embers(-2.72, 0.5, -4.4, 22, 1.5, 0xffa050, 0.09);
+    this.hearthEmbers = new Embers(hx, hy + 0.14, hz, 22, 1.5, 0xffa050, 0.09);
     g.add(this.hearthEmbers.points);
-    put(this.hearthLight, -2.4, 0.8, -4.4);
-    put(this.windowLight, -2.0, 1.9, 1.4);
-    g.add(this.hearthLight, this.windowLight);
-    // 锅体由 furniture.ts 的 cauldron GLB 承担，这里只留锅下暖光
-    this.potGlow = glowSprite(tex, 0xff7a28, 0.7); put(this.potGlow, -2.72, 0.45, -4.4);
+    // One source centred between the two flame tongues. Window spill follows the aperture.
+    put(this.hearthLight, hx, hy + 0.22, hz);
+    g.add(this.hearthLight);
     this.food = put(new THREE.Group(), -2.05, 0, -2.2);
     const sack = mesh(sackGeometry(5, 0.16, 0.3, 0.45), variants(m).clothLinen);
     const tie = mesh(sackTie(0.16, 0.3), variants(m).clothLinen);
     sack.add(tie);
     const root = cyl(m.paper, 0.03, 0.05, 0.16, 6); root.position.set(0.05, 0.33, 0); root.rotation.z = 0.4;
     this.food.add(sack, root);
-    g.add(this.potGlow, this.food);
+    g.add(this.food);
     // 热食碗：备餐完成后出现在锅旁，冒热气
     const ceramic = new THREE.MeshStandardMaterial({ color: 0x9c8a72, roughness: 0.6 });
     this.mealBowl = put(new THREE.Group(), -2.05, 0.32, -2.55);
     const bowl = mesh(new THREE.CylinderGeometry(0.11, 0.07, 0.09, 10), ceramic); bowl.position.y = 0.045;
-    const stew = mesh(new THREE.CylinderGeometry(0.095, 0.095, 0.02, 10), new THREE.MeshStandardMaterial({ color: 0x7a4a22, roughness: 0.5, emissive: 0x3a1a08, emissiveIntensity: 0.3 })); stew.position.y = 0.085;
+    const stew = mesh(new THREE.CylinderGeometry(0.095, 0.095, 0.02, 10), new THREE.MeshStandardMaterial({ color: 0x7a4a22, roughness: 0.5 })); stew.position.y = 0.085;
     this.mealBowl.add(bowl, stew);
     this.mealSteam = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.smokeTex, color: 0xd8d2c8, transparent: true, opacity: 0.3, depthWrite: false }));
     this.mealSteam.scale.set(0.3, 0.5, 1); this.mealSteam.position.y = 0.3;
@@ -921,6 +924,7 @@ export class Props {
       const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.smokeTex, color: 0x8a8a8a, transparent: true, opacity: 0, depthWrite: false }));
       s.position.set(-2.72, 3.5 + i * 0.5, -4.4);
       s.scale.setScalar(0.7 + i * 0.4);
+      s.visible = false;
       this.chimneySmoke.push(s); g.add(s);
     }
   }
@@ -936,7 +940,7 @@ export class Props {
 
   update(w: World, dt: number, time: number): void {
     for (const fm of FLAME_MATS) fm.uniforms.uTime.value = time;
-    const hi = this.quality === 'high';
+    const hi = this.quality !== 'low';
     const k = Math.min(1, dt * 3.2);
     const o = this.open;
     o.gatehouse = lerp(o.gatehouse, w.doors.gatehouse ? 1 : 0, k);
@@ -948,6 +952,7 @@ export class Props {
     this.gateJam.visible = !w.repairs.gate;
     this.frontL.rotation.y = HALF_PI * (1 - o.chapelFront * 0.95);
     this.frontR.rotation.y = -HALF_PI * (1 - o.chapelFront * 0.95);
+    this.lightDoors.update();
 
     this.boltAmt = lerp(this.boltAmt, w.bolted ? 1 : 0, Math.min(1, dt * 8));
     this.boltBar.visible = this.boltKnob.visible = w.repairs.bolt;
@@ -957,45 +962,26 @@ export class Props {
     this.boltBracket.position.y = w.repairs.bolt ? 1.25 : 1.17;
 
     // 壁灯
-    const lit = w.lampBurn > 0;
+    const lit = w.repairs.lamp && w.lampBurn > 0;
     const flick = 0.88 + 0.08 * Math.sin(time * 11.3) + 0.06 * Math.sin(time * 23.7 + 1.3);
     this.lampArm.visible = w.repairs.lamp;
     this.lampStub.visible = !w.repairs.lamp;
     this.lampFlame.visible = lit;
     const fade = lit ? Math.min(1, w.lampBurn / 12) : 0;
     this.lampGlass.emissiveIntensity = lit ? 1.8 * fade * flick : 0;
-    const candle = w.phase === 'night' || w.phase === 'dawn' ? flick : 0;
-    for (const sc of this.sconces) {
-      sc.glass.emissiveIntensity = 1.5 * candle;
-      sc.glow.material.opacity = 0.22 * candle;
-      sc.light.intensity = 10 * candle;
-      sc.flame.visible = candle > 0;
-    }
     this.lampLight.intensity = 4.5 * fade * flick;
     this.lampFlame.scale.setScalar(0.6 + 0.4 * fade * flick);
     this.lampEmbers.update(dt, time, lit && hi);
 
     // 火盆
-    let near: BrazierId | null = null, nearD = Infinity;
     for (const b of this.braziers) {
-      const burn = w.braziers[b.id];
-      const on = burn > 0;
-      const f = on ? Math.min(1, burn / 12) : 0;
-      b.flame.visible = on;
+      const f = Math.min(1, Math.max(0, w.braziers[b.id] / 12));
+      b.flame.visible = f > 0;
       b.flame.scale.setScalar(0.55 + 0.45 * f * flick);
-      (b.coals.material as THREE.MeshBasicMaterial).color.setHex(on ? 0xff9040 : 0x24201c);
-      b.ground.visible = on;
-      (b.ground.material as THREE.MeshBasicMaterial).opacity = 0.36 * f * flick;
-      b.embers.update(dt, time, on && hi);
-      const at = BRAZIER_POS[b.id];
-      const d = Math.hypot(at.x - w.player.x, at.z - w.player.z);
-      if (on && d < nearD) { near = b.id; nearD = d; }
+      b.coals.emissiveIntensity = 1.1 * f * flick;
+      b.embers.update(dt, time, f > 0 && hi);
+      this.brazierLights[b.id].intensity = 30 * f * flick;
     }
-    if (near) {
-      const at = BRAZIER_POS[near];
-      put(this.brazierLight, at.x, at.y + 0.7, at.z);
-      this.brazierLight.intensity = 30 * Math.min(1, w.braziers[near] / 12) * flick;
-    } else this.brazierLight.intensity = 0;
 
     // 拾取前后的清空变化
     this.pickLantern.visible = !w.inv.hasLantern;
@@ -1031,21 +1017,21 @@ export class Props {
     }
 
     // 炉火
-    const fire = !w.hearth.lit ? 0 : w.phase === 'night' ? 0.45 + 0.55 * Math.min(1, w.hearth.burn / (HEARTH.nightBurn * 0.5)) : 1;
+    const burn = Math.min(1, Math.max(0, w.hearth.burn / (HEARTH.nightBurn * 0.5)));
+    const fireFade = THREE.MathUtils.smoothstep(w.hearth.burn, 0, 6);
+    const fire = !w.hearth.lit ? 0 : w.phase === 'night' ? (0.45 + 0.55 * burn) * fireFade : 1;
     const hf = 0.85 + 0.1 * Math.sin(time * 9.1) + 0.08 * Math.sin(time * 17.3 + 0.7);
     this.flames.forEach((f, i) => {
       f.visible = fire > 0;
       f.scale.set(fire, fire * (0.85 + 0.25 * Math.sin(time * (7 + i * 2.3) + i)), fire);
     });
     this.hearthLight.intensity = 22 * fire * hf;
-    this.windowLight.intensity = 6 * fire * hf;
-    (this.embers.material as THREE.MeshBasicMaterial).color.setHex(fire > 0 ? 0xff9040 : 0x24201c);
-    this.potGlow.visible = fire > 0;
-    this.benchGlow.material.opacity = 0.6 + 0.2 * Math.sin(time * 6.3);
+    this.hearthCoals.emissiveIntensity = 1.2 * fire * hf;
     this.hearthEmbers.update(dt, time, fire > 0 && hi);
     this.chimneySmoke.forEach((s, i) => {
       const on = fire > 0;
-      s.material.opacity = on ? 0.16 * fire : 0;
+      s.visible = on;
+      s.material.opacity = 0.16 * fire;
       if (on) {
         s.position.y = 3.5 + ((time * 0.4 + i * 0.6) % 2.2);
         s.position.x = -2.72 + Math.sin(time * 0.5 + i) * 0.2;

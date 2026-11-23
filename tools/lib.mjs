@@ -53,7 +53,11 @@ export async function shot(page, name) {
 export async function clickButton(page, text) {
   const btn = page.locator('#overlay button', { hasText: text }).first();
   await btn.waitFor({ state: 'visible', timeout: 8000 });
-  await btn.click();
+  // The calibration CTA acquires pointer lock synchronously; dispatching its
+  // mouseup via CDP can hang after Chrome transfers the cursor to the canvas.
+  // Enter is also a genuine user gesture and exercises the same button handler.
+  if (text === '开始') { await btn.focus(); await page.keyboard.press('Enter'); }
+  else await btn.click();
 }
 
 export async function waitFor(page, fn, timeout = 15000, arg) {

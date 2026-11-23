@@ -1,0 +1,144 @@
+{
+  "gpu": "ANGLE (Apple, ANGLE Metal Renderer: Apple M3 Max, Unspecified Version)",
+  "bundle": "index-Dsr-0LZ7.js",
+  "quality": "cinematic",
+  "viewport": [
+    1280,
+    720
+  ],
+  "worldViewSeparation": {
+    "metres": 2.1447708954307494,
+    "degrees": 6.598463775430938
+  },
+  "volume": [
+    {
+      "id": "day-approach",
+      "camera": [
+        2.5013998502038954,
+        1.468510514444491,
+        5.980704020009007
+      ],
+      "litPixelsOverNoise": 31012,
+      "fullChangedOverNoise": 888862,
+      "roiDeltaY": 0.0009508759844676487
+    },
+    {
+      "id": "day-cross-angle",
+      "camera": [
+        1.4279979532525289,
+        1.4035243075590977,
+        4.125002709338921
+      ],
+      "litPixelsOverNoise": 68362,
+      "fullChangedOverNoise": 471484,
+      "roiDeltaY": 0.0007261340926385526
+    },
+    {
+      "id": "night-window",
+      "camera": [
+        -1.0741362593879193,
+        1.1423415776756607,
+        4.884224116300455
+      ],
+      "litPixelsOverNoise": 0,
+      "fullChangedOverNoise": 0,
+      "roiDeltaY": 0
+    },
+    {
+      "id": "day-b1-sealed",
+      "camera": [
+        17.87658003479842,
+        -0.9716524507479611,
+        -14.620000000000001
+      ],
+      "litPixelsOverNoise": 0,
+      "fullChangedOverNoise": 0,
+      "roiDeltaY": 0
+    },
+    {
+      "id": "day-chapel-high-window",
+      "camera": [
+        22.18418045603181,
+        0.7000000000000002,
+        -16.64323313808308
+      ],
+      "litPixelsOverNoise": 11213,
+      "fullChangedOverNoise": 735869,
+      "roiDeltaY": 0.0049762089944521744
+    }
+  ],
+  "surfaces": [
+    {
+      "station": "b1-store",
+      "id": "lantern-off",
+      "meanDisplayLinearY": {
+        "eastStone": 0,
+        "rightFloor": 0
+      }
+    },
+    {
+      "station": "b1-store",
+      "id": "lantern-on",
+      "meanDisplayLinearY": {
+        "eastStone": 0.008135680506306694,
+        "rightFloor": 0.0070840351323976074
+      }
+    },
+    {
+      "station": "gatehouse",
+      "id": "day-all-off",
+      "meanDisplayLinearY": {
+        "belowRearWindow": 0.0034667440205779034,
+        "deepLeftStone": 0.002128319417939107,
+        "hearthSideMasonry": 0.0008900124980116677
+      }
+    },
+    {
+      "station": "gatehouse",
+      "id": "night-all-off",
+      "meanDisplayLinearY": {
+        "belowRearWindow": 0.00027120045138542955,
+        "deepLeftStone": 0.00017242219985365867,
+        "hearthSideMasonry": 1.0259528622368464e-06
+      }
+    },
+    {
+      "station": "gatehouse",
+      "id": "night-hearth-on",
+      "meanDisplayLinearY": {
+        "belowRearWindow": 0.027840778755489737,
+        "deepLeftStone": 0.008171326258180196,
+        "hearthSideMasonry": 0.15441489928619706
+      }
+    },
+    {
+      "station": "courtyard",
+      "id": "night-all-off",
+      "meanDisplayLinearY": {
+        "rightPaving": 0.010910901617394641,
+        "eastStone": 0.00965926674610156
+      }
+    },
+    {
+      "station": "courtyard",
+      "id": "day-all-off",
+      "meanDisplayLinearY": {
+        "rightPaving": 0.08539948235568035,
+        "eastStone": 0.07866208628357907
+      }
+    }
+  ],
+  "receiverChecks": {
+    "sealedCellarDark": true,
+    "lanternReachesCellarStone": true,
+    "windowDaylightSurvives": true,
+    "windowBrighterThanDeepStone": true,
+    "hearthLightsItsSurround": true,
+    "courtyardRetainsDaylight": true
+  },
+  "wetReflectionsPass": true,
+  "glassCausticsPass": false,
+  "glassCausticsFailures": [
+    "Glass: no overcast receiver signal above off-repeat noise"
+  ]
+}

@@ -58,3 +58,17 @@ it('uses stable sub-code grain for smooth haze and blends, rather than steps, th
   // One colour sample and the existing 3D LUT: no spatial filter or grain texture.
   expect(shader.match(/\btexture(?:2D)?\(/g)).toHaveLength(2);
 });
+
+it('keeps zero radiance at black and reveals faint positive radiance without affecting midtones', () => {
+  const shade = FilmOutputShader.fragmentShader;
+  const [, slopeValue, capValue] = shade.match(/float toeY = ([\d.]+) \* sceneY \/ \(1.0 \+ [\d.]+ \* sceneY \/ ([\d.]+)\)/) ?? [];
+  const slope = Number(slopeValue), cap = Number(capValue);
+  const aces = (y: number) => { const v = y / .6; return Math.max(0, (v * (v + .0245786) - .000090537) / (v * (.983729 * v + .432951) + .238081)); };
+  const out = (y: number) => Math.max(aces(y), slope * y / (1 + slope * y / cap));
+  expect(out(0)).toBe(0);
+  expect(aces(.0013)).toBe(0);
+  expect(out(.0013)).toBeGreaterThan(.001);
+  let last = 0;
+  for (let i = 1; i <= 1000; i++) { const value = out(i / 10000); expect(value).toBeGreaterThan(last); last = value; }
+  for (const y of [.05,.18,1,4]) expect(out(y)).toBe(aces(y));
+});

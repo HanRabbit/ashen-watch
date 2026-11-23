@@ -922,6 +922,13 @@ export class PlayerModel {
     });
   }
 
+  /** Collision can push the camera into the coat. The flame still lights the room. */
+  setBodyVisible(visible: boolean): void {
+    this.procedural.group.visible = visible && !this.asset;
+    if (this.asset) this.asset.root.visible = visible;
+    this.grip.visible = visible;
+  }
+
   private attachAsset(a: HunterAsset, tex: CharTextures): void {
     this.asset = a;
     this.procedural.group.visible = false;

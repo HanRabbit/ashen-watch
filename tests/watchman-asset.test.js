@@ -422,3 +422,19 @@ it('keeps the rendered Hunter connected through live key and look changes', asyn
   expect(root.x).toBeCloseTo(p.x, 5);
   expect(root.z).toBeCloseTo(-p.z, 5);
 });
+
+it('preserves the live handheld light when a wall pushes the camera inside the coat', async () => {
+  const { model } = await makePlayer();
+  const w = newWorld();
+  w.inv.hasLantern = true;
+  Object.assign(w.lantern, { on: true, oil: 120 });
+  posePlayer(model, w, { x: 4, y: -3, z: 12 }, 0, 1);
+  const visible = [];
+  model.setBodyVisible(false);
+  model.group.traverseVisible(o => visible.push(o));
+  expect(visible).toContain(model.lanternLight);
+  expect(model.lanternLight.intensity).toBeGreaterThan(0);
+  expect(visible.some(o => o.isMesh)).toBe(false);
+  model.setBodyVisible(true);
+  expect(model.asset.root.visible).toBe(true);
+});

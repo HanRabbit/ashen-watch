@@ -827,6 +827,16 @@ normal -= (awSlope - nonPerturbedNormal * dot(awSlope, nonPerturbedNormal))
 normal = normalize(mix(normal, viewMatrix[1].xyz, awPuddle * 0.95));
 `;
 
+// Integrate the subpixel slope variance into the GGX lobe. Three already
+// filters geometric edges. This term accounts only for the mapped relief.
+const FILTER_MINERAL_SPECULAR = /* glsl */`
+  vec3 reliefNormal = normal - nonPerturbedNormal;
+  vec3 slopeX = dFdx(reliefNormal), slopeY = dFdy(reliefNormal);
+  float slopeVariance = min(0.055, 0.22 * (dot(slopeX, slopeX) + dot(slopeY, slopeY)));
+  float alpha = material.roughness * material.roughness;
+  material.roughness = sqrt(sqrt(min(1.0, alpha * alpha + slopeVariance)));
+`;
+
 function stoneMapUV(chunk: string, slot: string, uv: string): string {
   return chunk.replace(new RegExp(`texture2D\\(\\s*${slot}\\s*,\\s*${uv}\\s*\\)`, 'g'),
     `textureGrad(${slot}, awUv, awDx, awDy)`);
@@ -840,7 +850,11 @@ export function stoneShader(mat: THREE.MeshStandardMaterial, u: AwUniforms): voi
     shader.vertexShader = AW_VERT_PREFIX + shader.vertexShader
       .replace('#include <defaultnormal_vertex>', '#include <defaultnormal_vertex>\n' + AW_VERT_NORMAL)
       .replace('#include <project_vertex>', '#include <project_vertex>\n' + AW_VERT_POS);
-    shader.fragmentShader = AW_FRAG_PREFIX + shader.fragmentShader
+    // Enable r187's energy-preserving rough diffuse BRDF on the three scanned
+    // courtyard floor families. Sheltered soil stays matte under a moving lamp.
+    const roughFloor = mat.defines?.AW_FLOOR_HISTORY !== undefined;
+    if (roughFloor) shader.uniforms.diffuseRoughness = { value: 0.65 };
+    shader.fragmentShader = (roughFloor ? '#define USE_DIFFUSE_ROUGHNESS\n' : '') + AW_FRAG_PREFIX + shader.fragmentShader
       .replace('#include <map_fragment>', AW_MAP_BLOCK)
       .replace('#include <roughnessmap_fragment>', stoneMapUV(THREE.ShaderChunk.roughnessmap_fragment, 'roughnessMap', 'vRoughnessMapUv') + AW_ROUGH_BLOCK)
       .replace('#include <normal_fragment_begin>', THREE.ShaderChunk.normal_fragment_begin
@@ -857,6 +871,11 @@ export function stoneShader(mat: THREE.MeshStandardMaterial, u: AwUniforms): voi
         #include <lights_physical_fragment>
         // The aggregate and air in dry mortar make a weaker unresolved interface
         // than a worn face. Pore water darkens the mineral without a clearcoat.
+        ${FILTER_MINERAL_SPECULAR}
+        #ifdef AW_FLOOR_HISTORY
+          material.diffuseRoughness = clamp((0.46 + 0.34 * awGrit + 0.16 * awMudCover)
+            * (1.0 - 0.35 * awWet) * (1.0 - awPuddle), 0.0, 1.0);
+        #endif
         float awF0Weight = mix(0.86, 0.48, awGrit) * (1.0 - 0.14 * awWet);
         float awGrazingWeight = mix(0.90, 0.63, awGrit);
         material.specularColor *= mix(1.0, awF0Weight, uAwMineral.w);

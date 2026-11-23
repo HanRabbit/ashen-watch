@@ -1,6 +1,6 @@
 // HDR weather, local light transport and optical halo share the existing opaque-depth pass.
 import * as THREE from 'three';
-import { AIR_VOLUME_GLSL } from './airVolume';
+import { AIR_OCCLUSION_GLSL, AIR_VOLUME_GLSL } from './airVolume';
 import { GATHER_VOLUME_GLSL } from './shadowVolume';
 
 export const MAX_GLOW_LIGHTS = 6;
@@ -20,6 +20,7 @@ export const LightGlowShader = {
     // uFog = (damp ground extinction, free-air extinction, height datum)
     uAirColor: { value: new THREE.Color() }, uGroundAir: { value: new THREE.Color() }, uAirTime: { value: 0 },
     uKeyDir: { value: new THREE.Vector3(0, 1, 0) }, uKeyAir: { value: 0 },
+    uAirDoors: { value: new THREE.Vector2() },
     uScatter: { value: 0.4 }, uFog: { value: new THREE.Vector3(0.025, 0.008, 0.1) },
     uTanHalfFov: { value: new THREE.Vector2(1, 1) },
     uInvView: { value: new THREE.Matrix4() }, uCamPos: { value: new THREE.Vector3() },
@@ -35,8 +36,8 @@ export const LightGlowShader = {
     uniform sampler2D tDiffuse, tDepth, tVolume;
     uniform float uHasVolume;
     uniform float uHasDepth, uNear, uFar, uAspect, uStrength, uScatter, uHiThresh, uHiKneeCool, uHiKneeWarm;
-    uniform float uAirTime, uKeyAir;
-    uniform vec3 uFog, uCamPos, uAirColor, uGroundAir, uKeyDir;
+    uniform float uAirTime;
+    uniform vec3 uFog, uCamPos, uAirColor, uGroundAir;
     uniform vec2 uTanHalfFov;
     uniform mat4 uInvView;
     uniform int uCount;
@@ -49,6 +50,7 @@ export const LightGlowShader = {
       return -( uNear * uFar ) / ( ( uFar - uNear ) * d - uFar );
     }
     ${AIR_VOLUME_GLSL}
+    ${AIR_OCCLUSION_GLSL}
     ${GATHER_VOLUME_GLSL}
     vec2 projectView(vec3 p) {
       return 0.5 + 0.5 * p.xy / (-p.z * uTanHalfFov);
@@ -57,43 +59,55 @@ export const LightGlowShader = {
     float sourceVisibility(vec4 light, float atCenter, vec2 fromLight) {
       // Depth is authoritative for solid occluders. Only probe beside the source in the
       // last few decimetres, where a lamp's own cap, bracket or cames can hide its centre.
-      float center = smoothstep(light.z - 0.27, light.z - 0.07, atCenter);
-      if (center >= 1.0 || atCenter <= light.z - 0.43) return center;
+      float center = smoothstep(light.z - 0.16, light.z - 0.04, atCenter);
+      if (center >= 1.0 || atCenter <= light.z - 0.24) return center;
       vec2 side = vec2(-fromLight.y, fromLight.x) + vec2(1e-4, 0.0);
       side /= max(length(side), 1e-5);
       vec2 px = 1.0 / vec2(textureSize(tDepth, 0));
       vec2 offset = side * clamp(vec2(0.047) / (light.z * uTanHalfFov), px, 3.0 * px);
-      float sideA = smoothstep(light.z - 0.22, light.z - 0.05, depthAt(light.xy + offset));
-      float sideB = smoothstep(light.z - 0.22, light.z - 0.05, depthAt(light.xy - offset));
-      float fixture = 0.5 * (sideA + sideB) * smoothstep(light.z - 0.43, light.z - 0.24, atCenter);
+      float sideA = smoothstep(light.z - 0.12, light.z - 0.03, depthAt(light.xy + offset));
+      float sideB = smoothstep(light.z - 0.12, light.z - 0.03, depthAt(light.xy - offset));
+      float fixture = 0.5 * (sideA + sideB) * smoothstep(light.z - 0.24, light.z - 0.13, atCenter);
       return mix(center, 1.0, 0.48 * fixture);
     }
-    // Softened inverse-square, integrated only between the first and last visible points
-    // in the finite light sphere. An opaque wall ends the integral even if the source is visible.
-    float pointScatter(vec3 ray, vec3 lightPos, vec2 interval, vec2 sphere, vec3 worldRay, float transmission) {
-      float a = interval.x, b = interval.y, along = sphere.x, perpendicular2 = sphere.y;
-      const float core = 0.40; // metres; no singularity at the emitter centre
-      float invD = inversesqrt(perpendicular2 + core * core);
-      float radialIntegral = invD * (atan((b - along) * invD) - atan((a - along) * invD));
-      float center = clamp(along, a, b);
-      float sampleT = mix(center, 0.5 * (a + b), 0.34);
-      float delta = along - sampleT;
-      float cosTheta = delta * inversesqrt(perpendicular2 + delta * delta + core * core);
-      // HG with a broad lobe; high anisotropy makes lanterns pop as the camera circles them.
-      const float g = 0.34;
-      float phaseDenom = 1.0 + g * g - 2.0 * g * cosTheta;
-      float phase = 0.0704 / (phaseDenom * sqrt(phaseDenom)); // (1-g²) / (4π)
+    float legDepth(vec3 lightPos, vec3 airPos) {
+      // Camera depth adds movable occluders and small meshes to the world barriers.
+      // A blocked tap vetoes this sample. A single view cannot recover hidden light paths.
+      vec3 a = mix(lightPos, airPos, 0.33), b = mix(lightPos, airPos, 0.67);
+      float da = depthAt(projectView(a)) + a.z;
+      float db = depthAt(projectView(b)) + b.z;
+      return smoothstep(-0.12, 0.015, min(da, db));
+    }
+    float scatterSample(vec3 ray, vec3 lightPos, vec3 worldLight, vec3 worldRay, float sampleT,
+                        float along, float perpendicular2, float transmission) {
       vec3 world = uCamPos + worldRay * sampleT;
-      float openAir = 1.0 - awAirShelter(world);
-      float height = max(world.y - uFog.z, 0.0);
-      vec2 d = uFog.xy * exp(-AW_FALLOFF * height);
-      float medium = openAir * (d.x * awDampPatch(world, uAirTime) + d.y) + 0.007;
-      // Visibility along the light-to-air leg is approximate with one camera depth buffer.
-      // Don't illuminate a sample across a visible obstruction between it and the source.
-      vec3 probe = mix(lightPos, ray * sampleT, 0.55);
-      float leg = smoothstep(-0.21, 0.025, depthAt(projectView(probe)) + probe.z);
-      float airT = mix(1.0, transmission, clamp(sampleT / AW_WEATHER_REACH, 0.0, 1.0));
-      return max(0.0, radialIntegral) * medium * phase * mix(0.035, 1.0, leg) * airT;
+      if (awLightLeg(worldLight, world) == 0.0) return 0.0;
+      float visibility = legDepth(lightPos, ray*sampleT);
+      if (visibility <= 0.0) return 0.0;
+      float delta = along-sampleT;
+      float cosTheta = delta*inversesqrt(perpendicular2 + delta*delta + 0.16);
+      const float g = 0.34;
+      float phaseDenom = 1.0 + g*g - 2.0*g*cosTheta;
+      float phase = 0.0704 / (phaseDenom*sqrt(phaseDenom));
+      float height = max(world.y-uFog.z,0.0);
+      vec2 density = uFog.xy*exp(-AW_FALLOFF*height);
+      // A small amount of indoor particulate is visible to a real local light.
+      // It contributes nothing when the light-to-air leg is blocked.
+      float medium = (1.0-awAirShelter(world))*(density.x*awDampPatch(world,uAirTime)+density.y)+0.007;
+      float airT = mix(1.0,transmission,clamp(sampleT/AW_WEATHER_REACH,0.0,1.0));
+      return medium*phase*airT*visibility;
+    }
+    float pointScatter(vec3 ray, vec3 lightPos, vec3 worldLight, vec2 interval, vec2 sphere, vec3 worldRay, float transmission) {
+      // Split the softened inverse-square integral into two equal-weight
+      // angular strata. Test the light leg independently in each stratum.
+      float along = sphere.x, perpendicular2 = sphere.y;
+      float invD = inversesqrt(perpendicular2 + 0.16); // 0.40 m light core
+      vec2 angles = atan((interval-along)*invD);
+      float a = along+tan(mix(angles.x,angles.y,0.25))/invD;
+      float b = along+tan(mix(angles.x,angles.y,0.75))/invD;
+      float s0 = scatterSample(ray,lightPos,worldLight,worldRay,a,along,perpendicular2,transmission);
+      float s1 = scatterSample(ray,lightPos,worldLight,worldRay,b,along,perpendicular2,transmission);
+      return 0.5*invD*(angles.y-angles.x)*(s0+s1);
     }
     const vec3 AW_LUMA = vec3(0.2126, 0.7152, 0.0722);
     float awRolloff(float luma, float threshold, float knee) {
@@ -115,6 +129,8 @@ export const LightGlowShader = {
         if(uHasVolume>.5) volume=awResolveVolume(here,isSky,confidence);
         vec3 resolved=c*volume.a+volume.rgb;
         if(confidence<1.) {
+          // Do not synthesize window shafts without trustworthy opaque-depth
+          // neighbours and a live key shadow map. The fallback is base air only.
           vec3 fallback=awAtmosphere(c,uCamPos,worldRay,rayEnd,isSky,transmission);
           resolved=mix(fallback,resolved,confidence);
         }
@@ -132,17 +148,8 @@ export const LightGlowShader = {
           c *= awRolloff(luma, uHiThresh, knee) / luma;
         }
       }
-      if (hasDepth) {
-        // The rig interpolates this radiance in linear light. Blue night air is below
-        // the shoulder, so we never switch a window beam on/off by camera room or phase.
-        // No hard-sun shaft: this is the short diffuse path just behind the existing pane.
-        float paneSky = smoothstep(0.065, 0.24, dot(uAirColor, AW_LUMA));
-        if (paneSky > 0.0) {
-          float windowColumn = awWindowColumn(uCamPos, worldRay, rayEnd);
-          c += uAirColor * (1.0 - exp(-0.21 * windowColumn)) * paneSky * transmission;
-        }
-      }
       for (int i = 0; i < ${MAX_GLOW_LIGHTS}; i++) {
+        if (!hasDepth) break;
         if (i >= uCount) break;
         vec4 L = uLights[i];
         if (L.w < 1e-4) continue;
@@ -156,24 +163,28 @@ export const LightGlowShader = {
         // Broad lighting follows world metres, not screen UV. Restrict depth fetches to
         // rays that can see a lit interval or the very tight optical halo.
         vec2 interval = vec2(0.0);
-        if (hasDepth && uScatter > 0.001 && perpendicular2 < radius2) {
+        if (uScatter > 0.001 && perpendicular2 < radius2) {
           float span = sqrt(radius2 - perpendicular2);
           interval = vec2(max(0.0, along - span), min(rayEnd, along + span));
         }
         bool litAir = interval.y > interval.x;
-        bool haloVisible = r2 < 0.008 && here > L.z - 0.44 && uStrength > 0.001;
+        bool haloVisible = r2 < 0.008 && here > L.z - 0.12 && uStrength > 0.001;
         if (!litAir && !haloVisible) continue;
-        float occ = hasDepth ? sourceVisibility(L, depthAt(L.xy), dv) : 1.0;
+        float occ = sourceVisibility(L, depthAt(L.xy), dv);
         if (occ < 0.001) continue;
+        vec3 worldLight = (uInvView*vec4(lightPos,1.0)).xyz;
+        if (awLightLeg(worldLight,uCamPos) == 0.0) continue;
         float radiance = 0.0;
         if (haloVisible) {
           float halo = exp(-r2 * 1050.0) * 0.35 + exp(-r2 * 5200.0) * 0.64;
           halo *= 1.0 - smoothstep(0.005, 0.008, r2);
-          float foreground = smoothstep(L.z - 0.44, L.z - 0.07, here);
-          radiance += halo * clamp(4.0 / L.z, 0.12, 1.4) * foreground * min(1.0, L.w / 22.0) * uStrength;
+          float foreground = smoothstep(L.z - 0.12, L.z + 0.01, here);
+          vec3 haloPoint = uCamPos + worldRay * (L.z / -viewRay.z);
+          float haloLeg = awLightLeg(worldLight,haloPoint);
+          radiance += halo * clamp(4.0 / L.z, 0.12, 1.4) * foreground * haloLeg * min(1.0, L.w / 22.0) * uStrength;
         }
         if (litAir) {
-          float haze = pointScatter(viewRay, lightPos, interval, vec2(along, perpendicular2), worldRay, transmission);
+          float haze = pointScatter(viewRay, lightPos, worldLight, interval, vec2(along, perpendicular2), worldRay, transmission);
           // Fade the tangential rim of the finite point-light support.
           float reach = 1.0 - perpendicular2 / radius2;
           float edge = smoothstep(0.0, 0.55, reach);

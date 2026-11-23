@@ -32,3 +32,30 @@ it.each([true,false])('gathers the live beauty shadow without refreshing casters
   expect(render).toHaveBeenCalledTimes(1);
   pass.dispose(); target.dispose(); pass.uniforms.tDepth.value.dispose();
 });
+
+it('filters a seamless deterministic weather volume, including the wrapping edge on every axis', () => {
+  const pass = () => new ShadowVolumePass(true, () => new THREE.DirectionalLight(), () => {});
+  const a = pass(), b = pass();
+  try {
+    const field = a.uniforms.tWeather.value;
+    expect(field.minFilter).toBe(THREE.LinearMipmapLinearFilter);
+    expect(field.generateMipmaps).toBe(true);
+    expect([field.wrapS, field.wrapT, field.wrapR]).toEqual(Array(3).fill(THREE.RepeatWrapping));
+    const { width: n, height, depth, data } = field.image;
+    expect([height, depth]).toEqual([n, n]);
+    expect(data).toEqual(b.uniforms.tWeather.value.image.data);
+    const bytes = data as Uint8Array;
+    // A repeated copy of non-periodic noise makes the last→first texel step an
+    // outlier. Compare its mean squared gradient to interior steps on each axis.
+    for (const stride of [1, n, n * n]) {
+      let edge = 0, interior = 0;
+      for (let i = 0; i < bytes.length; ++i) {
+        const wraps = Math.floor(i / stride) % n === n - 1;
+        const step = bytes[i] - bytes[i + (wraps ? 1 - n : 1) * stride];
+        if (wraps) edge += step * step; else interior += step * step;
+      }
+      expect(interior).toBeGreaterThan(0);
+      expect(edge * (n - 1) / interior).toBeLessThan(2);
+    }
+  } finally { a.dispose(); b.dispose(); }
+});

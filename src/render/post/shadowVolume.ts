@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { FullScreenQuad, Pass } from 'three/addons/postprocessing/Pass.js';
-import { HEIGHT_COLUMN_GLSL, WEATHER_REACH } from './airVolume';
+import { AIR_SOURCE_GLSL, HEIGHT_COLUMN_GLSL, WEATHER_REACH, WINDOW_SCATTER_GLSL } from './airVolume';
 import { COURT_MIST_GLSL } from './courtMist';
 
 // RGB = integrated single-scattering radiance, A = camera transmittance in linear HDR.
@@ -18,6 +18,8 @@ const fragment = /* glsl */`
   uniform vec3 uOrigin,uFog,uGround,uSky,uKeyDirection,uKeyColour;
   uniform float uTime;
   ${HEIGHT_COLUMN_GLSL}
+  ${AIR_SOURCE_GLSL}
+  ${WINDOW_SCATTER_GLSL}
   ${COURT_MIST_GLSL}
   float awLit(vec3 q) {
     // Beyond the site-sized shadow frustum ease to the open valley, never repeat an edge caster.
@@ -36,14 +38,14 @@ const fragment = /* glsl */`
   // A baked, tileable, single-channel volume: two trilinear fetches instead of
   // evaluating dozens of hashes per step. Wind advects the air, not the stone or camera.
   uniform highp sampler3D tWeather;
-  float awDrift(vec3 p, vec3 segment) {
+  const vec3 awWeatherScale=vec3(.022,.049,.019);
+  float awDrift(vec3 p, float footprint) {
     // Filter along the ray as a depth bin widens. Sampling only mip 0 made
     // fine density rotate in and out of existence on long grazing rays.
-    vec3 scale=vec3(.022,.049,.019);
-    vec3 uv=p*scale + vec3(-.00135,.00009,.00054)*uTime;
-    float footprint=length(segment*scale)*float(textureSize(tWeather,0).x);
-    float broad=textureLod(tWeather,uv,log2(max(1.,footprint))).r;
-    float fine=textureLod(tWeather,uv.zxy*1.93+vec3(.32,.47,.73),log2(max(1.,footprint*1.93))).r;
+    vec3 uv=p*awWeatherScale + vec3(-.00135,.00009,.00054)*uTime;
+    float lod=log2(max(.5,footprint));
+    float broad=textureLod(tWeather,uv,max(0.,lod)).r;
+    float fine=textureLod(tWeather,uv.zxy*1.93+vec3(.32,.47,.73),max(0.,lod+.94860)).r;
     return .74*broad + .26*fine;
   }
   void main(){
@@ -52,8 +54,8 @@ const fragment = /* glsl */`
     vec3 ray=mat3(uWorld)*viewRay;
     float end=min(AW_WEATHER_REACH,(uClip.x*uClip.y)/(uClip.y-depth*(uClip.y-uClip.x)) / -viewRay.z);
     float horizon=depth>=1. ? .68*(1.-smoothstep(.035,.32,ray.y)) : 1.;
-    if(horizon<.001){gl_FragColor=vec4(0.,0.,0.,1.);return;}
     vec3 q0=(uShadow*vec4(uOrigin,1.)).xyz, dq=mat3(uShadow)*ray; // orthographic site key
+    float texelsPerMetre=length(ray*awWeatherScale)*float(textureSize(tWeather,0).x);
     float mu=dot(ray,uKeyDirection);
     const float g=.39;
     float denom=1.+g*g-2.*g*mu;
@@ -61,6 +63,21 @@ const fragment = /* glsl */`
     // The lamp rig is calibrated for opaque surfaces. Normalise the scattering
     // lobe; do not paint the moon's surface-light intensity into every mist bin.
     float skyEnergy=dot(uSky,vec3(.2126,.7152,.0722));
+    float windowScale=max(0.,uWindowScatter)*awWindowDaylight(skyEnergy);
+    vec3 windowSkySource=AW_WINDOW_SKY_GAIN*uWindowIrradiance;
+    bool hasWindowSource=any(greaterThan(windowSkySource,vec3(0.))) || any(greaterThan(uKeyColour,vec3(0.)));
+    vec2 gateWindow=vec2(end,0.), chapelWindow=vec2(end,0.);
+    if(windowScale>0. && hasWindowSource) {
+      vec3 inv=awInverseSegment(ray);
+      gateWindow=awWindowInterval(uOrigin,inv,vec3(-3.,.02,0.),vec3(3.,3.5,7.94));
+      chapelWindow=awWindowInterval(uOrigin,inv,vec3(13.5,.45,-22.25),vec3(22.,14.1,-10.75));
+    }
+    bool windowRay=gateWindow.x<min(end,gateWindow.y) || chapelWindow.x<min(end,chapelWindow.y);
+    if(horizon<.001){
+      if(!windowRay){gl_FragColor=vec4(0.,0.,0.,1.);return;}
+      horizon=0.; // Window air can be seen against sky above the outdoor mist horizon.
+      end=min(end,max(gateWindow.y,chapelWindow.y));
+    }
     vec3 direct=uKeyColour*(.0795775*phase)*mix(.42,1.,smoothstep(.025,.23,skyEnergy));
     float trans=1.,start=0.; vec3 light=vec3(0.);
     // Fixed near-weighted bins: a nearby character does not change the spacing of all
@@ -74,22 +91,44 @@ const fragment = /* glsl */`
       float shelter=awAirShelter(p);
       float bank=awCourtyardMist(p,uTime);
       float weatherWeight=(1.-smoothstep(6.5,9.,p.y))*(1.-smoothstep(.76,.91,shelter));
-      float drift=weatherWeight>.001 ? mix(.5,awDrift(p,ray*(stop-start)),weatherWeight) : .5;
+      float drift=weatherWeight>.001 ? mix(.5,awDrift(p,texelsPerMetre*(stop-start)),weatherWeight) : .5;
       float ground=(layers.x*(.53+drift)+bank)*(1.-.985*shelter);
       float upper=layers.y*mix(.90,1.04,drift)*(1.-.965*shelter);
       float density=ground+upper;
       float opacity=1.-exp(-density*(stop-start)*awNearWeather(mid)*horizon);
-      if(opacity>.00008){
-        // Average visibility over the segment rather than toggling an entire
-        // metre of air when its midpoint crosses a parapet or a mullion.
+      bool gateBin=start<gateWindow.y && stop>gateWindow.x;
+      bool chapelBin=start<chapelWindow.y && stop>chapelWindow.x;
+      if(opacity>.00008 || gateBin || chapelBin){
+        // Reuse the existing two key-shadow taps. Only the diffuse sky term
+        // can reach a window outside the directional shadow corridor.
         float delta=(stop-start)*.28867513;
-        float sun=.5*(awLit(q0+dq*(mid-delta))+awLit(q0+dq*(mid+delta)));
-        vec3 ambient=mix(uGround,uSky,upper/max(density,1e-5));
-        // Diffuse overcast fill is always present. Raking light exists only along the
-        // unblocked part of the ray. Ground vapour scatters differently from the upper haze.
-        vec3 source=ambient*mix(.84,1.,sun) + direct*sun*(1.-.88*shelter);
-        light+=trans*opacity*source;
-        trans*=1.-opacity;
+        float a=mid-delta, b=mid+delta;
+        vec3 pa=uOrigin+ray*a, pb=uOrigin+ray*b;
+        vec2 wa=vec2(0.), wb=vec2(0.);
+        if(gateBin || chapelBin){
+          wa=awWindowTransport(pa,uKeyDirection,gateBin,chapelBin);
+          wb=awWindowTransport(pb,uKeyDirection,gateBin,chapelBin);
+        }
+        float ka=opacity>.00008 ? awKeyAccess(pa,uKeyDirection) : 0.;
+        float kb=opacity>.00008 ? awKeyAccess(pb,uKeyDirection) : 0.;
+        float litA=max(ka,wa.y)>0. ? awLit(q0+dq*a) : 0.;
+        float litB=max(kb,wb.y)>0. ? awLit(q0+dq*b) : 0.;
+        if(gateBin || chapelBin){
+          // First-order radiance of optically thin indoor air. Keep weather
+          // extinction and its outdoor history unchanged for the A/B control.
+          vec3 windowSky=windowSkySource*.5*(wa.x+wb.x);
+          vec3 windowKey=AW_WINDOW_KEY_GAIN*uKeyColour*phase*.5*(wa.y*litA+wb.y*litB);
+          light+=trans*(1.-.5*opacity)*(stop-start)*AW_WINDOW_DUST*windowScale*(windowSky+windowKey);
+        }
+        if(opacity>.00008){
+          float sun=.5*(ka*litA+kb*litB);
+          // A damp bank can see diffuse sky even in the key's shadow.
+          vec3 ambient=mix(uGround,uSky,clamp((upper+.48*bank)/max(density,1e-5),0.,1.));
+          float sky=awSkyAccess(p);
+          vec3 source=ambient*sky*mix(.84,1.,sun) + direct*sun*(1.-.88*shelter);
+          light+=trans*opacity*source;
+          trans*=1.-opacity;
+        }
       }
       if(stop>=end)break;
       start=stop;
@@ -137,7 +176,8 @@ export class ShadowVolumePass extends Pass {
     uShadow:{value:new THREE.Matrix4()}, uWorld:{value:new THREE.Matrix4()},
     uTan:{value:new THREE.Vector2()}, uOrigin:{value:new THREE.Vector3()}, uClip:{value:new THREE.Vector2()},
     uFog:{value:new THREE.Vector3()}, uSky:{value:new THREE.Color()}, uGround:{value:new THREE.Color()},
-    uKeyColour:{value:new THREE.Color()},uKeyDirection:{value:new THREE.Vector3()},uTime:{value:0},
+    uAirDoors:{value:new THREE.Vector2()},uWindowScatter:{value:1},uWindowIrradiance:{value:new THREE.Color(0,0,0)},
+    uKeyColour:{value:new THREE.Color(0,0,0)},uKeyDirection:{value:new THREE.Vector3()},uTime:{value:0},
   };
   private readonly material:THREE.ShaderMaterial;
   private readonly quad:FullScreenQuad;
@@ -155,6 +195,7 @@ export class ShadowVolumePass extends Pass {
   }
   override render(renderer:THREE.WebGLRenderer){
     const key=this.key(),shadow=key.shadow, rt=shadow.map;
+    this.uniforms.uKeyColour.value.copy(key.color).multiplyScalar(key.visible ? Math.max(0,key.intensity) : 0);
     const tex=this.cinematic ? rt?.texture : rt?.depthTexture;
     const available=!!(tex && this.uniforms.tDepth.value && renderer.shadowMap.enabled && key.castShadow &&
       (this.cinematic ? tex.format===THREE.RGFormat : rt?.depthTexture?.compareFunction===THREE.LessEqualCompare));
@@ -162,7 +203,6 @@ export class ShadowVolumePass extends Pass {
     if(!available)return;
     this.uniforms.tKey.value=tex!;
     this.uniforms.uShadow.value.copy(shadow.matrix);
-    this.uniforms.uKeyColour.value.copy(key.color).multiplyScalar(key.intensity);
     renderer.setRenderTarget(this.target);this.quad.render(renderer);
   }
   override dispose(){this.uniforms.tWeather.value.dispose();this.target.dispose();this.material.dispose();this.quad.dispose();}

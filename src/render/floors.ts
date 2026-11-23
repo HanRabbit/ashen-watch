@@ -6,8 +6,7 @@ import { isBaileyApronFabric } from '../sim/baileyApron';
 import { addReliefFooting } from './masonry';
 import { isWestCourtFabric } from '../sim/courtPlan';
 import { isNorthCourtFabric } from '../sim/northCourt';
-import { AREAS, B1_CEILINGS, B1_FOUNDATION_BACKING, B1_Y, CHAPEL_SLABS, COLUMNS, DECK_SLABS, NORTH_GUARD, PLATFORM_SLAB, PROPS, RAISED_Y, S1_SHAFT, S2_SHAFT, STAIR_BODIES, STAIR_RAILS, STEP_RAMP, WALLS } from '../sim/level';
-import { World } from '../sim/state';
+import { AREAS, B1_CEILINGS, B1_FOUNDATION_BACKING, B1_Y, CHAPEL_SLABS, COLUMNS, DECK_SLABS, NORTH_GUARD, PLATFORM_SLAB, PROPS, RAISED_Y, STAIR_BODIES, STAIR_RAILS, STEP_RAMP, WALLS } from '../sim/level';
 import { Batch } from './geom';
 import { Materials, scaleUV, tiledBox } from './materials';
 import { variants } from './materialVariants';
@@ -21,7 +20,6 @@ import { addRampartEdge } from './rampartEdges';
 
 export interface Floors {
   group: THREE.Group;
-  update(w: World): void;
 }
 
 
@@ -161,25 +159,12 @@ export function buildFloors(m: Materials): Floors {
     b.geo(v.wallTrim, scaleUV(new THREE.CylinderGeometry(c.r * 1.3, c.r * 1.4, 0.2, 10), 1), c.x, c.y0 + 0.1, c.z);
   }
 
+  // Walkways, piers and the cellar's cut-out ceiling occlude the key. The
+  // same indexed surfaces define both the beauty pass and the shadow map.
   b.build(group, true);
-  b1.build(g1, true); group.add(g1); // map: B1 子组
-  group.traverse((o) => { const me = o as THREE.Mesh; if (me.isMesh) { me.castShadow = false; me.receiveShadow = true; } }); // map: 三层几何不投影，省 shadow pass（swiftshader 稳定+预算）
-
-  // Subtle local bounce makes the first few descending treads legible at
-  // their mouths without illuminating the whole cellar or changing AI light zones.
-  const fill1 = new THREE.PointLight(0xaebccd, 6.5, 6, 2);
-  fill1.position.set(S1_SHAFT.x0 + 2.4, -0.55, -(S1_SHAFT.z0 + S1_SHAFT.z1) / 2);
-  const fill2 = new THREE.PointLight(0xdeab7b, 4.2, 5.5, 2);
-  fill2.position.set((S2_SHAFT.x0 + S2_SHAFT.x1) / 2, -0.32, -(S2_SHAFT.z1 - 1.65));
-  group.add(fill1, fill2);
-  return {
-    group,
-    update(w: World): void {
-      const daylight = w.phase === 'night' ? 0.32 : w.phase === 'dusk' ? 0.65 : 1;
-      fill1.intensity = 6.5 * daylight;
-      fill2.intensity = 4.2 * daylight;
-    },
-  };
+  b1.build(g1, true);
+  group.add(g1);
+  return { group };
 }
 
 /** @deprecated The slabs and ground dressing now have cutouts at creation. */
