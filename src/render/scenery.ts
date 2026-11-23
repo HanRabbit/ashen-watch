@@ -1,864 +1,627 @@
-// 远景（art pass 3 · 第六轮 / 圣经 v2.9）：远景森林 = 画布程序化「林冠团块」贴图带（连续深色林体 +
-// 锯齿冠廓 + 多频噪声斑驳），不再是实例化圆锥树阵列；只有最近 foothill 保留少量 3D 单株。
-// 坡面/岩崖/石材用冷灰偏深固有色贴图再叠雾，不得为白；逐片段天空上限仅作保护上限。
-// 城堡石砌体与深色屋面拆两个合批网格；植被落点采样实际地形高度场；大气锚定天空地平线。
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { Materials } from './materials';
+import type { Materials } from './materials';
 
 export interface Scenery {
   group: THREE.Group;
 }
 
-const clamp01 = (t: number): number => Math.max(0, Math.min(1, t));
-const HALF_PI = Math.PI / 2;
+const TAU = 2 * Math.PI;
+const clamp01 = (x: number) => Math.max(0, Math.min(1, x));
+const mix = (a: number, b: number, t: number) => a + (b - a) * t;
+function smooth(a: number, b: number, x: number): number {
+  const t = clamp01((x - a) / (b - a));
+  return t * t * (3 - 2 * t);
+}
 
 function rng(seed: number): () => number {
-  let s = seed >>> 0;
   return () => {
-    s = (s + 0x6d2b79f5) >>> 0;
-    let t = Math.imul(s ^ (s >>> 15), 1 | s);
+    let t = (seed = (seed + 0x6d2b79f5) | 0);
+    t = Math.imul(t ^ (t >>> 15), 1 | t);
     t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
 }
 
-// —— 逐片段天空上限（与主天空同梯度+同云，共享 uniform 值）——
-const SKYCAP_GLSL = /* glsl */`
-uniform vec3 uScHorizon, uScZenith, uScCloudDark, uScCloudLit, uScSunColor, uScSunDir;
-uniform float uScTime, uScCover, uScStars, uScGlow, uScRim;
-float scHash(vec2 p){ p=fract(p*vec2(123.34,456.21)); p+=dot(p,p+45.32); return fract(p.x*p.y); }
-float scNoise(vec2 p){ vec2 i=floor(p),f=fract(p); f=f*f*(3.0-2.0*f);
-  float a=scHash(i),b=scHash(i+vec2(1,0)),c=scHash(i+vec2(0,1)),d=scHash(i+vec2(1,1));
-  return mix(mix(a,b,f.x),mix(c,d,f.x),f.y); }
-float scFbm(vec2 p){ float v=0.0,a=0.55; mat2 r=mat2(0.8,-0.6,0.6,0.8);
-  for(int i=0;i<5;i++){ v+=a*scNoise(p); p=r*p*2.03+11.7; a*=0.5; } return v; }
-float scFbm3(vec2 p){ float v=0.0,a=0.6;
-  for(int i=0;i<3;i++){ v+=a*scNoise(p); p=p*2.11+7.3; a*=0.5; } return v; }
-float scShape(vec2 uv){ vec2 w=vec2(scFbm3(uv*1.4+1.7),scFbm3(uv*1.4+9.2));
-  float b=scFbm(uv*1.8+w*0.40); float d=scFbm3(uv*3.2+w*0.6); return b*0.65+d*0.35; }
-float scGrad(vec2 uv){ return scFbm(uv*1.8); }
-vec3 awSkyCap(vec3 d){
-  float h=d.y;
-  vec3 col=mix(uScHorizon,uScZenith,pow(clamp(h,0.0,1.0),0.55));
-  vec3 sd=normalize(uScSunDir);
-  float cosA=clamp(dot(d,sd),0.0,1.0);
-  col+=uScSunColor*uScGlow*0.22*pow(cosA,3.0);
-  float hh=max(h,0.02);
-  vec2 proj=d.xz/(hh+0.35);
-  vec2 uv1=proj*0.45+uScTime*vec2(0.003,0.0013)+2.3;
-  float veil=smoothstep(0.55,0.95,scFbm(uv1))*0.22*(1.0-uScStars*0.6)*smoothstep(-0.02,0.12,h);
-  col=mix(col,mix(uScHorizon,uScCloudLit,0.35),veil);
-  vec2 uv2=proj*0.8+uScTime*vec2(0.004,0.0018);
-  float dens=scShape(uv2);
-  float lo=0.62-uScCover*0.20; float hi=lo+0.10;
-  float cover=smoothstep(lo,hi,dens)*smoothstep(-0.02,0.08,h);
-  float e=0.10;
-  vec2 grad=vec2(scGrad(uv2+vec2(e,0.0))-scGrad(uv2-vec2(e,0.0)), scGrad(uv2+vec2(0.0,e))-scGrad(uv2-vec2(0.0,e)));
-  vec3 cn=normalize(vec3(-grad.x*2.2,0.55,-grad.y*2.2));
-  float lambert=clamp(dot(cn,sd),0.0,1.0);
-  float topLight=mix(0.30,1.0,smoothstep(0.05,0.85,h));
-  float thick=smoothstep(lo,hi+0.10,dens);
-  float lit=clamp(0.12+0.88*lambert,0.0,1.0)*topLight*mix(1.0,0.45,thick);
-  vec3 cloudCol=mix(uScCloudDark,uScCloudLit,lit);
-  cloudCol+=uScSunColor*uScRim*cover*(1.0-cover)*4.0*pow(cosA,6.0);
-  return mix(col,cloudCol,cover);
+function noise(x: number, z: number, seed: number, period = 0): number {
+  const ix = Math.floor(x), iz = Math.floor(z);
+  const hash = (a: number, b: number) => {
+    if (period) { a = (a + period) % period; b = (b + period) % period; }
+    const n = Math.imul(a, 374761393) ^ Math.imul(b, 668265263) ^ Math.imul(seed, 1274126177);
+    const h = Math.imul(n ^ (n >>> 13), 1597334677);
+    return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+  };
+  return mix(mix(hash(ix, iz), hash(ix + 1, iz), smooth(0, 1, x - ix)),
+    mix(hash(ix, iz + 1), hash(ix + 1, iz + 1), smooth(0, 1, x - ix)), smooth(0, 1, z - iz));
+}
+
+function relief(x: number, z: number, seed: number): number {
+  return noise(x, z, seed) * 0.62 + noise(x * 2.1, z * 2.1, seed + 1) * 0.25
+    + noise(x * 4.4, z * 4.4, seed + 2) * 0.13;
+}
+
+// These are render-space coordinates (the simulation's z is negated in the camera rig).
+const KEEP = { x: 143, z: 94, y: 49 };
+const GATE = { x: 94, z: -51 };
+const ROAD: [number, number][] = [[33, -37], [51, -40], [63, -50], [80, -51], [102, -51], [119, -48], [137, -56], [158, -64]];
+
+function roadDistance(x: number, z: number): number {
+  let best = Infinity;
+  for (let i = 1; i < ROAD.length; i++) {
+    const [ax, az] = ROAD[i - 1], dx = ROAD[i][0] - ax, dz = ROAD[i][1] - az;
+    const t = clamp01(((x - ax) * dx + (z - az) * dz) / (dx * dx + dz * dz));
+    const sx = x - ax - t * dx, sz = z - az - t * dz;
+    best = Math.min(best, sx * sx + sz * sz);
+  }
+  return Math.sqrt(best);
+}
+
+// Overlapping massifs with uneven passes, not nested skyline walls. The inner valley is
+// held below the playable map; vegetation and foundations sample the triangulated result.
+type Massif = { x: number; z: number; width: number; length: number; height: number; s: number; c: number };
+function makeMassifs(): Massif[] {
+  const r = rng(8127);
+  const hills: Massif[] = [];
+  const row = (count: number, radius: number, width: number, depth: number, height: number, offset: number) => {
+    for (let i = 0; i < count; i++) {
+      const a = (i / count + offset) * TAU + (r() - .5) * .28;
+      const d = radius * (.84 + r() * .32);
+      const x = Math.cos(a) * d, z = Math.sin(a) * d;
+      const axis = a + (r() - .5) * 1.1;
+      const eastPass = x > 0 && z > -d * .72 && z < d * .81;
+      hills.push({ x, z, width: width * (.8 + r() * .52), length: depth * (.75 + r() * .6),
+        height: height * (.7 + r() * .56) * (eastPass ? .62 : 1), s: Math.sin(axis), c: Math.cos(axis) });
+    }
+  };
+  row(12, 108, 61, 50, 25, .06);
+  row(13, 219, 102, 90, 56, .015);
+  row(14, 353, 128, 105, 101, .04);
+  row(16, 479, 144, 143, 124, .006);
+  return hills;
+}
+
+function geology(x: number, z: number, hills: Massif[]): number {
+  const distance = Math.hypot(x - 5, z + 9);
+  if (distance < 32) return -.62;
+  const n = relief(x * .031, z * .031, 6);
+  const a = (noise(x * .019, z * .028, 201) - .5) * 25;
+  const b = (noise(x * .027, z * .021, 292) - .5) * 23;
+  let major = 0, overlap = 0;
+  for (const h of hills) {
+    const dx = x + a - h.x, dz = z + b - h.z;
+    if (Math.abs(dx) > 225 || Math.abs(dz) > 225) continue;
+    const along = (dx * h.c + dz * h.s) / h.length;
+    const across = (-dx * h.s + dz * h.c) / h.width;
+    const l = Math.hypot(along, across);
+    const rise = h.height * (1 - smooth(.04, 1.29, l));
+    overlap += Math.min(.27 * rise, 21);
+    major = Math.max(major, rise);
+  }
+  let y = -3.4 + (major * .72 + overlap) * (.86 + n * .27) + (n - .47) * mix(6, 30, smooth(120, 430, distance));
+  // A tilted spur with a solid summit and tapering ridges, not a separate pedestal.
+  const dx = x - KEEP.x, dz = z - KEEP.z;
+  const along = (dx * .85 + dz * .53) / 84, across = (-dx * .53 + dz * .85) / 49;
+  const crag = Math.hypot(along, across) + (n - .5) * .32;
+  const west = smooth(-27, -57, dx);
+  const ribs = relief(dx * .045 + dz * .11, dz * .045, 87) - .5;
+  const flutes = Math.abs(noise(dx * .083 + dz * .18, dz * .046, 88) * 2 - 1);
+  const bluff = (KEEP.y + 2.3) * (1 - smooth(.24 + west * .19, 1.03, crag));
+  const spur = 30 * (1 - smooth(.15, 1.13, Math.hypot((dx + 43) / 53, (dz + 22) / 35)));
+  const incision = (ribs * 21 + flutes * 3.5) * smooth(.25, .62, crag);
+  y = Math.max(y, Math.max(bluff, spur * .85) + Math.min(bluff, spur) * .11 + (n - .5) * 8 + incision - 2);
+  // A broad bench at the pass keeps the approach, gate and adjacent rooflines tied together.
+  if (x > 31 && x < 163 && z < -29 && z > -78) {
+    const trail = (1 - smooth(5, 22, roadDistance(x, z))) * smooth(32, 55, x) * (1 - smooth(139, 163, x));
+    y = mix(y, 3.5 + (x - 60) * .078, trail);
+  }
+  return mix(-.62, y, smooth(32, 54, distance));
+}
+
+function forestCover(x: number, z: number, y: number, slope: number): number {
+  const broad = relief(x * .044, z * .043, 29);
+  const edge = noise(x * .13, z * .13, 18);
+  const living = smooth(.31, .63, broad * .88 + edge * .12);
+  return living * (1 - smooth(.37, .75, slope)) * (1 - smooth(53, 92, y))
+    * smooth(36, 55, Math.hypot(x - 5, z + 9)) * smooth(3, 10, roadDistance(x, z));
+}
+
+interface Terrain {
+  tiles: THREE.BufferGeometry[];
+  height: (x: number, z: number) => number;
+}
+
+function terrain(): Terrain {
+  // Fine at the playable edges and fortress, progressively coarser at the far ridges.
+  const axis = [0];
+  for (let x = 0; x < 596;) {
+    x += x < 61 ? 3 : x < 174 ? 4 : x < 283 ? 7 : 13;
+    axis.unshift(-x);
+    axis.push(x);
+  }
+  const n = axis.length, hills = makeMassifs();
+  const vertices = new Float32Array(n * n * 3), indices: number[] = [];
+  for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) {
+    const x = axis[i], z = axis[j], k = j * n + i;
+    vertices.set([x, geology(x, z, hills), z], 3 * k);
+    if (i + 1 < n && j + 1 < n) indices.push(k, k + n, k + 1, k + 1, k + n, k + n + 1);
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(vertices, 3));
+  g.setIndex(indices);
+  g.computeVertexNormals();
+  const norms = g.getAttribute('normal');
+  const color = new Float32Array(n * n * 3), biomes = new Float32Array(n * n * 2);
+  const soil = new THREE.Color(0x4b4c3c), grass = new THREE.Color(0x565e4d);
+  const timber = new THREE.Color(0x273730), stone = new THREE.Color(0x565d62);
+  const scree = new THREE.Color(0x42494d), path = new THREE.Color(0x6b6658);
+  const tint = new THREE.Color();
+  for (let k = 0; k < n * n; k++) {
+    const x = vertices[k * 3], y = vertices[k * 3 + 1], z = vertices[k * 3 + 2];
+    const slope = 1 - norms.getY(k);
+    const cover = forestCover(x, z, y, slope);
+    const patch = relief(x * .058, z * .058, 187);
+    const divide = smooth(0, .30, slope) * mix(.4, 1.0, smooth(.32, .67, patch));
+    const rock = Math.max(divide, smooth(42, 89, y) * .74);
+    tint.copy(soil).lerp(grass, smooth(.27, .7, patch)).lerp(timber, cover * .98);
+    tint.lerp(scree, rock * .69).lerp(stone, rock * smooth(.39, .72, patch) * .62);
+    tint.lerp(path, (1 - smooth(1.8, 4.2, roadDistance(x, z))) * .85);
+    const face = norms.getX(k) * -.56 + norms.getZ(k) * -.48 + norms.getY(k) * .67;
+    tint.multiplyScalar(mix(.64, 1.25, smooth(-.55, .88, face)) * mix(.8, 1.17, patch));
+    tint.toArray(color, 3 * k);
+    biomes[2 * k] = rock;
+    biomes[2 * k + 1] = cover;
+  }
+  g.setAttribute('color', new THREE.BufferAttribute(color, 3));
+  g.setAttribute('aBiome', new THREE.BufferAttribute(biomes, 2));
+  const cell = (v: number) => {
+    let a = 0, b = n - 1;
+    while (b - a > 1) { const m = (a + b) >> 1; if (axis[m] > v) b = m; else a = m; }
+    return a;
+  };
+  const height = (x: number, z: number) => {
+    const i = cell(x), j = cell(z), k = (j * n + i) * 3 + 1;
+    const u = clamp01((x - axis[i]) / (axis[i + 1] - axis[i]));
+    const v = clamp01((z - axis[j]) / (axis[j + 1] - axis[j]));
+    const a = vertices[k], b = vertices[k + 3], c = vertices[k + n * 3], d = vertices[k + (n + 1) * 3];
+    // Same diagonal as the render mesh, including where grid spacing changes.
+    return u + v < 1 ? a * (1 - u - v) + b * u + c * v : d * (u + v - 1) + b * (1 - v) + c * (1 - u);
+  };
+  // Cut the finished surface into tiles, preserving shared-edge vertices and normals.
+  const tiles: THREE.BufferGeometry[] = [];
+  const stops = [0, cell(-164), cell(0), cell(164), n - 1];
+  for (let j = 0; j < stops.length - 1; j++) for (let i = 0; i < stops.length - 1; i++) {
+    const minX = stops[i], minZ = stops[j], width = stops[i + 1] - minX + 1, depth = stops[j + 1] - minZ + 1;
+    const tile = new THREE.BufferGeometry();
+    for (const name of ['position', 'normal', 'color', 'aBiome']) {
+      const attrib = g.getAttribute(name) as THREE.BufferAttribute, components = attrib.itemSize;
+      const data = new Float32Array(width * depth * components);
+      for (let row = 0; row < depth; row++) {
+        const start = ((minZ + row) * n + minX) * components;
+        data.set((attrib.array as Float32Array).subarray(start, start + width * components), row * width * components);
+      }
+      tile.setAttribute(name, new THREE.BufferAttribute(data, components));
+    }
+    const tris: number[] = [];
+    for (let row = 0; row < depth - 1; row++) for (let col = 0; col < width - 1; col++) {
+      const k = row * width + col;
+      tris.push(k, k + width, k + 1, k + 1, k + width, k + width + 1);
+    }
+    tile.setIndex(tris);
+    tile.computeBoundingBox();
+    tile.computeBoundingSphere();
+    tiles.push(tile);
+  }
+  g.dispose();
+  return { tiles, height };
+}
+
+function grain(): THREE.DataTexture {
+  const size = 128, data = new Uint8Array(size * size * 4);
+  for (let z = 0; z < size; z++) for (let x = 0; x < size; x++) {
+    const k = (z * size + x) * 4;
+    data[k] = 255 * (.56 * noise(x / 8, z / 8, 74, 16) + .44 * noise(x / 2, z / 2, 17, 64));
+    data[k + 1] = 255 * noise(x / 4, z / 8, 31, 32); // seam and strata grain
+    data[k + 2] = 255 * noise(x / 16, z / 16, 93, 8);
+    data[k + 3] = 255;
+  }
+  const map = new THREE.DataTexture(data, size, size);
+  map.wrapS = map.wrapT = THREE.RepeatWrapping;
+  map.magFilter = THREE.LinearFilter;
+  map.minFilter = THREE.LinearMipmapLinearFilter;
+  map.generateMipmaps = true;
+  map.needsUpdate = true;
+  return map;
+}
+
+// Cheap world-space aerial perspective. Light the visible surface first, then add the
+// air between it and the camera; low saddles and ravines collect haze without fog cards.
+const AERIAL = /* glsl */`
+uniform vec3 uLandAir;
+uniform float uLandNight;
+varying vec3 vLandPos;
+vec3 landAir(vec3 base, float drift, float density) {
+  vec3 ray = vLandPos - cameraPosition;
+  float d = length(ray);
+  float low = exp(-max(vLandPos.y - 4.0, 0.0) * .042);
+  float cloudBank = exp(-abs(vLandPos.y - 18.0) * .083);
+  float join = smoothstep(53.0, 173.0, d);
+  float veil = (low * (.08 + .18 * drift) + cloudBank * smoothstep(.24, .75, drift) * .26) * join;
+  float distanceHaze = smoothstep(50.0, 572.0, d) * .85;
+  float t = min(.94, (distanceHaze + veil) * density);
+  vec3 moon = vec3(.155, .217, .330);
+  return mix(base * mix(vec3(1.0), moon, uLandNight), uLandAir, t);
 }
 `;
 
-/** 值噪声 + fbm（画布程序化肌理用）。 */
-function vnoise(x: number, y: number, seed: number): number {
-  const xi = Math.floor(x), yi = Math.floor(y);
-  const xf = x - xi, yf = y - yi;
-  const h = (a: number, b: number): number => {
-    let n = a * 374761393 + b * 668265263 + seed * 1442695041;
-    n = (n ^ (n >> 13)) * 1274126177;
-    return ((n ^ (n >> 16)) >>> 0) / 4294967296;
-  };
-  const u = xf * xf * (3 - 2 * xf), v = yf * yf * (3 - 2 * yf);
-  return (h(xi, yi) * (1 - u) + h(xi + 1, yi) * u) * (1 - v) + (h(xi, yi + 1) * (1 - u) + h(xi + 1, yi + 1) * u) * v;
-}
-function fbm2(x: number, y: number, seed: number): number {
-  return 0.55 * vnoise(x, y, seed) + 0.3 * vnoise(x * 2.1 + 7, y * 2.1 + 3, seed + 1) + 0.15 * vnoise(x * 4.3 + 11, y * 4.3 + 5, seed + 2);
-}
-
-/** 画布林冠团块贴图：顶边锯齿冠廓（alpha 裁切），下方连续深色林体 + 多频噪声斑驳。 */
-function canopyTexture(seed: number, scale: number, hazeMix: number): THREE.CanvasTexture {
-  const W = 1024, H = 256;
-  const c = document.createElement('canvas');
-  c.width = W; c.height = H;
-  const g = c.getContext('2d')!;
-  const r = rng(seed);
-  const waves = Array.from({ length: 7 }, () => ({ f: 1 + r() * 6, ph: r() * 6.28, a: 0.4 + r() * 0.6 }));
-  const crown = (x: number): number => {
-    let n = 0;
-    for (const w of waves) n += w.a * Math.sin((x / W) * w.f * Math.PI * 2 * scale + w.ph);
-    n /= waves.length;
-    const crowns = fbm2(x * 0.3 * scale, 8.7, seed + 13);
-    return H * (0.023 + (n * 0.5 + 0.5) * 0.072 + crowns * 0.036);
-  };
-  const img = g.createImageData(W, H);
-  const haze = [142, 159, 174];
-  for (let x = 0; x < W; x++) {
-    const cl = crown(x);
-    for (let y = 0; y < H; y++) {
-      const i = (y * W + x) * 4;
-      if (y < cl) { img.data[i + 3] = 0; continue; }
-      const depth = clamp01((y - cl) / (H - cl));
-      // 有机多频噪声：大冠团 / 中凹凸 / 细树隙 / 竖向冠簇
-      const n1 = fbm2(x * 0.018 * scale, y * 0.03, seed) * 2 - 1;
-      const n2 = fbm2(x * 0.07 * scale, y * 0.1 + 40, seed + 9) * 2 - 1;
-      const n3 = fbm2(x * 0.22 * scale, y * 0.22, seed + 17);
-      const clump = fbm2(x * 0.045 * scale, 0.5, seed + 23) * 2 - 1;
-      const lit = clamp01(0.5 + 0.62 * n1 + 0.29 * n2 + 0.32 * clump - 0.25 * depth);
-      const gap = clamp01(n3 - 0.66) * 3.2; // 树隙阴影
-      let rr = 34 + lit * 34 - gap * 20;
-      let gg = 42 + lit * 36 - gap * 22;
-      let bb = 40 + lit * 36 - gap * 20;
-      // 冠顶受光边
-      if (depth < 0.12) { rr += 12; gg += 13; bb += 11; }
-      rr = rr * (1 - hazeMix) + haze[0] * hazeMix;
-      gg = gg * (1 - hazeMix) + haze[1] * hazeMix;
-      bb = bb * (1 - hazeMix) + haze[2] * hazeMix;
-      img.data[i] = rr; img.data[i + 1] = gg; img.data[i + 2] = bb; img.data[i + 3] = 255;
-    }
-  }
-  g.putImageData(img, 0, 0);
-  const t = new THREE.CanvasTexture(c);
-  t.wrapS = THREE.RepeatWrapping;
-  t.wrapT = THREE.ClampToEdgeWrapping;
-  t.colorSpace = THREE.SRGBColorSpace;
-  t.anisotropy = 4;
-  return t;
-}
-
-/** 岩石贴图：冷灰偏深 + 斑驳 + 水平岩层 + 垂直节理 + 少量苔。 */
-function rockTexture(seed: number, hazeMix: number, grassy = false): THREE.CanvasTexture {
-  const S = 512;
-  const c = document.createElement('canvas');
-  c.width = c.height = S;
-  const g = c.getContext('2d')!;
-  const img = g.createImageData(S, S);
-  const haze = [174, 182, 191];
-  for (let y = 0; y < S; y++) {
-    for (let x = 0; x < S; x++) {
-      const i = (y * S + x) * 4;
-      const n1 = fbm2(x * 0.02, y * 0.02, seed) * 2 - 1;
-      const n2 = fbm2(x * 0.08, y * 0.08, seed + 5) * 2 - 1;
-      const n3 = fbm2(x * 0.3, y * 0.3, seed + 11) * 2 - 1;
-      let v = 0.5 + 0.5 * n1 + 0.3 * n2 + 0.15 * n3;
-      const strata = fbm2(0.5, y * 0.05, seed + 41) > 0.62 ? -0.16 : 0;
-      const joint = fbm2(x * 0.03, 0.5, seed + 47) > 0.72 ? -0.26 : 0;
-      v = clamp01(v + strata + joint);
-      let rr = 76 + v * 60, gg = 82 + v * 62, bb = 88 + v * 64;
-      if (grassy) {
-        const moss = clamp01(fbm2(x * 0.02, y * 0.024, seed + 31) - 0.55) * 2.4;
-        rr = rr * (1 - moss * 0.5) + 75 * moss * 0.5;
-        gg = gg * (1 - moss * 0.5) + 90 * moss * 0.5;
-        bb = bb * (1 - moss * 0.5) + 60 * moss * 0.5;
-      } else {
-        const moss = clamp01(n3 * 0.5 + 0.5 - 0.78) * 2;
-        rr = rr * (1 - moss * 0.4) + 75 * moss * 0.4;
-        gg = gg * (1 - moss * 0.4) + 90 * moss * 0.4;
-        bb = bb * (1 - moss * 0.4) + 60 * moss * 0.4;
-      }
-      rr = rr * (1 - hazeMix) + haze[0] * hazeMix;
-      gg = gg * (1 - hazeMix) + haze[1] * hazeMix;
-      bb = bb * (1 - hazeMix) + haze[2] * hazeMix;
-      img.data[i] = rr; img.data[i + 1] = gg; img.data[i + 2] = bb; img.data[i + 3] = 255;
-    }
-  }
-  g.putImageData(img, 0, 0);
-  const t = new THREE.CanvasTexture(c);
-  t.wrapS = t.wrapT = THREE.RepeatWrapping;
-  t.colorSpace = THREE.SRGBColorSpace;
-  t.anisotropy = 4;
-  return t;
-}
-
-/** 烘焙形体明暗到顶点色（contrast 控制内部对比）。 */
-function bakeForm(geo: THREE.BufferGeometry, y0: number, span: number, contrast = 0.35): void {
-  const pos = geo.getAttribute('position') as THREE.BufferAttribute;
-  const nor = geo.getAttribute('normal') as THREE.BufferAttribute;
-  const cols = new Float32Array(pos.count * 3);
-  for (let i = 0; i < pos.count; i++) {
-    const top = clamp01(nor.getY(i));
-    const west = clamp01(-nor.getX(i));
-    let raw = 0.5 + 0.4 * top + 0.25 * west;
-    raw *= 0.8 + 0.3 * clamp01((pos.getY(i) - y0) / span);
-    const form = 1 - contrast * (1 - Math.max(0.15, Math.min(1.0, raw)));
-    cols[i * 3] = cols[i * 3 + 1] = cols[i * 3 + 2] = form;
-  }
-  geo.setAttribute('color', new THREE.BufferAttribute(cols, 3));
-}
-
-/** 屋面/锥顶整体压暗 + 轻微受光变化。 */
-function bakeFlat(geo: THREE.BufferGeometry, base: number): void {
-  const nor = geo.getAttribute('normal') as THREE.BufferAttribute;
-  const cols = new Float32Array(nor.count * 3);
-  for (let i = 0; i < nor.count; i++) {
-    const v = base * (0.85 + 0.3 * clamp01(nor.getY(i)));
-    cols[i * 3] = cols[i * 3 + 1] = cols[i * 3 + 2] = v;
-  }
-  geo.setAttribute('color', new THREE.BufferAttribute(cols, 3));
-}
-
-/** 圆柱全景带：顶边噪声缓起伏 + UV（u 环向重复、v 自底向顶），供林冠贴图。 */
-function panoramaBand(radius: number, crest: number, amp: number, seed: number, repeatU: number): THREE.BufferGeometry {
-  const SEG = 160;
-  const pos: number[] = [];
-  const uv: number[] = [];
-  const idx: number[] = [];
-  const crestAt = (a: number): number =>
-    crest + amp * (0.5 * Math.sin(a * 3 + seed) + 0.3 * Math.sin(a * 7 + seed * 2.3) + 0.2 * Math.sin(a * 13 + seed * 4.1));
-  for (let i = 0; i <= SEG; i++) {
-    const a = (i / SEG) * Math.PI * 2;
-    const x = Math.sin(a) * radius, z = Math.cos(a) * radius;
-    const yTop = crestAt(a);
-    pos.push(x, yTop, z, x, -14, z);
-    const u = (i / SEG) * repeatU;
-    uv.push(u, 1, u, 0);
-    if (i < SEG) {
-      const t0 = i * 2, b0 = i * 2 + 1, t1 = i * 2 + 2, b1 = i * 2 + 3;
-      idx.push(t0, b0, t1, b0, b1, t1);
-    }
-  }
-  const g = new THREE.BufferGeometry();
-  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
-  g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
-  g.setIndex(idx);
-  return g;
-}
-
-/** 低缓 foothill mound 环（3D 近层）。 */
-function moundRing(radius: number, baseH: number, varH: number, peaks: number, seed: number): THREE.BufferGeometry {
-  const r = rng(seed);
-  const parts: THREE.BufferGeometry[] = [];
-  for (let i = 0; i < peaks; i++) {
-    const a = (i / peaks) * Math.PI * 2 + (r() - 0.5) * 0.2;
-    const h = baseH + (r() - 0.35) * varH;
-    const pr = radius * (0.3 + r() * 0.2);
-    const cone = new THREE.ConeGeometry(pr, h, 9, 3);
-    const pos = cone.getAttribute('position') as THREE.BufferAttribute;
-    for (let k = 0; k < pos.count; k++) {
-      const px = pos.getX(k), py = pos.getY(k), pz = pos.getZ(k);
-      const n = Math.sin(px * 0.16 + pz * 0.13 + seed) * Math.cos(pz * 0.11 - px * 0.07);
-      if (py < h / 2 - 0.1) {
-        pos.setX(k, px * (1 + n * 0.2));
-        pos.setZ(k, pz * (1 + n * 0.2));
-      }
-    }
-    cone.computeVertexNormals();
-    cone.translate(Math.sin(a) * radius, h / 2 - 6, Math.cos(a) * radius);
-    parts.push(cone);
-  }
-  const geo = mergeGeometries(parts.map((g) => g.toNonIndexed()), false)!;
-  for (const g of parts) g.dispose();
-  return geo;
-}
-
-/** 高度场：rasterize 实际地形网格，供植被落点双线性采样。 */
-function heightGrid(geo: THREE.BufferGeometry, extent: number, step: number): { g: Float32Array; n: number; extent: number; step: number } {
-  const n = Math.ceil((extent * 2) / step) + 1;
-  const g = new Float32Array(n * n).fill(-1e9);
-  const pos = geo.getAttribute('position') as THREE.BufferAttribute;
-  for (let i = 0; i < pos.count; i += 3) {
-    const ax = pos.getX(i), az = pos.getZ(i), ay = pos.getY(i);
-    const bx = pos.getX(i + 1), bz = pos.getZ(i + 1), by = pos.getY(i + 1);
-    const cx = pos.getX(i + 2), cz = pos.getZ(i + 2), cy = pos.getY(i + 2);
-    const i0 = Math.max(0, Math.floor((Math.min(ax, bx, cx) + extent) / step));
-    const i1 = Math.min(n - 1, Math.ceil((Math.max(ax, bx, cx) + extent) / step));
-    const j0 = Math.max(0, Math.floor((Math.min(az, bz, cz) + extent) / step));
-    const j1 = Math.min(n - 1, Math.ceil((Math.max(az, bz, cz) + extent) / step));
-    const d = (bz - cz) * (ax - cx) + (cx - bx) * (az - cz);
-    if (Math.abs(d) < 1e-9) continue;
-    for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) {
-      const px = -extent + i * step, pz = -extent + j * step;
-      const w1 = ((bz - cz) * (px - cx) + (cx - bx) * (pz - cz)) / d;
-      const w2 = ((cz - az) * (px - cx) + (ax - cx) * (pz - cz)) / d;
-      const w3 = 1 - w1 - w2;
-      if (w1 < -0.02 || w2 < -0.02 || w3 < -0.02) continue;
-      const y = w1 * ay + w2 * by + w3 * cy;
-      const k = j * n + i;
-      if (y > g[k]) g[k] = y;
-    }
-  }
-  return { g, n, extent, step };
-}
-type HGrid = ReturnType<typeof heightGrid>;
-function sampleH(hg: HGrid, x: number, z: number): number {
-  const fx = (x + hg.extent) / hg.step, fz = (z + hg.extent) / hg.step;
-  const i = Math.floor(fx), j = Math.floor(fz);
-  if (i < 0 || j < 0 || i >= hg.n - 1 || j >= hg.n - 1) return -1e9;
-  const a = hg.g[j * hg.n + i], b = hg.g[j * hg.n + i + 1], c = hg.g[(j + 1) * hg.n + i], d = hg.g[(j + 1) * hg.n + i + 1];
-  if (a < -1e8 || b < -1e8 || c < -1e8 || d < -1e8) return -1e9;
-  const tx = fx - i, tz = fz - j;
-  return (a * (1 - tx) + b * tx) * (1 - tz) + (c * (1 - tx) + d * tx) * tz;
-}
-
-/** 近层单株松（仅 foothill，角尺寸够大）：分层枝盘 + 尖顶 + 单株明暗。 */
-function pineGeometry(): THREE.BufferGeometry {
-  const parts: THREE.BufferGeometry[] = [];
-  const trunk = new THREE.CylinderGeometry(0.09, 0.17, 1.6, 5);
-  trunk.translate(0, 0.8, 0);
-  parts.push(trunk);
-  for (let i = 0; i < 6; i++) {
-    const t = i / 6;
-    const r = 1.55 * (1 - t * 0.82);
-    const skirt = new THREE.ConeGeometry(r, 0.78, 7, 1, true);
-    const sp = skirt.getAttribute('position') as THREE.BufferAttribute;
-    for (let k = 8; k < 16; k++) {
-      const f = k % 2 ? 1.3 : 0.72;
-      sp.setX(k, sp.getX(k) * f);
-      sp.setZ(k, sp.getZ(k) * f);
-    }
-    skirt.translate(0, 1.35 + i * 0.92 + 0.39, 0);
-    parts.push(skirt);
-  }
-  const spike = new THREE.ConeGeometry(0.22, 1.0, 5);
-  spike.translate(0, 6.9, 0);
-  parts.push(spike);
-  const geo = mergeGeometries(parts.map((g) => g.toNonIndexed()), false)!;
-  for (const g of parts) g.dispose();
-  bakeForm(geo, 0, 7.4, 1.0);
-  return geo;
-}
-
-function deadTreeGeometry(): THREE.BufferGeometry {
-  const parts: THREE.BufferGeometry[] = [];
-  const grow = (x: number, y: number, z: number, len: number, ang: number, tilt: number, depth: number): void => {
-    const g = new THREE.CylinderGeometry(0.03 * depth + 0.02, 0.05 * depth + 0.04, len, 5);
-    const dx = Math.sin(ang) * Math.sin(tilt), dy = Math.cos(tilt), dz = Math.cos(ang) * Math.sin(tilt);
-    g.applyMatrix4(new THREE.Matrix4().compose(
-      new THREE.Vector3(x + dx * len / 2, y + dy * len / 2, z + dz * len / 2),
-      new THREE.Quaternion().setFromEuler(new THREE.Euler(tilt, ang, 0, 'YXZ')),
-      new THREE.Vector3(1, 1, 1),
-    ));
-    parts.push(g);
-    if (depth <= 0) return;
-    const ex = x + dx * len, ey = y + dy * len, ez = z + dz * len;
-    grow(ex, ey, ez, len * 0.68, ang + 0.5, tilt + 0.35, depth - 1);
-    grow(ex, ey, ez, len * 0.6, ang - 0.6, tilt + 0.5, depth - 1);
-  };
-  grow(0, 0, 0, 2.6, 0.3, 0.15, 3);
-  const geo = mergeGeometries(parts.map((g) => g.toNonIndexed()), false)!;
-  for (const g of parts) g.dispose();
-  return geo;
-}
-
-/** 圆塔：分段收分 + 檐口环 + 锥顶脊线/残顶 + 垛口；石进 stone[]、屋面进 roof[]。 */
-function tower(stone: THREE.BufferGeometry[], roof: THREE.BufferGeometry[], x: number, z: number, y0: number, r: number, h: number, spire: number, opts: { merlons?: boolean; broken?: boolean } = {}): void {
-  const seg = 10;
-  for (let b = 0; b < 3; b++) {
-    const bh = h / 3;
-    const rr = r * (1.12 - b * 0.09);
-    const body = new THREE.CylinderGeometry(rr * 0.97, rr * 1.04, bh, seg);
-    body.translate(x, y0 + bh * (b + 0.5), z);
-    stone.push(body);
-    if (b < 2) {
-      const ring = new THREE.CylinderGeometry(rr * 1.1, rr * 1.1, 0.35, seg);
-      ring.translate(x, y0 + bh * (b + 1), z);
-      stone.push(ring);
-    }
-  }
-  const cap = new THREE.CylinderGeometry(r * 1.16, r * 1.16, 0.5, seg);
-  cap.translate(x, y0 + h + 0.25, z);
-  stone.push(cap);
-  if (opts.merlons) {
-    for (let i = 0; i < 8; i++) {
-      const a = (i / 8) * Math.PI * 2;
-      const m = new THREE.BoxGeometry(r * 0.4, 0.9, r * 0.28);
-      m.rotateY(-a);
-      m.translate(x + Math.cos(a) * r * 1.05, y0 + h + 0.85, z + Math.sin(a) * r * 1.05);
-      stone.push(m);
-    }
-  }
-  if (opts.broken) {
-    const stub = new THREE.ConeGeometry(r * 1.15, spire * 0.4, seg, 1, true);
-    stub.translate(x, y0 + h + 0.5 + spire * 0.2, z);
-    roof.push(stub);
-    const jag = new THREE.BoxGeometry(r * 0.7, spire * 0.25, r * 0.5);
-    jag.rotateY(0.6);
-    jag.translate(x + r * 0.3, y0 + h + 0.5 + spire * 0.35, z);
-    roof.push(jag);
-  } else {
-    const cone = new THREE.ConeGeometry(r * 1.2, spire, seg);
-    cone.translate(x, y0 + h + 0.5 + spire / 2, z);
-    roof.push(cone);
-    const cR = r * 1.2;
-    const slopeLen = Math.hypot(cR, spire);
-    const tilt = Math.atan2(cR, spire);
-    for (let i = 0; i < 4; i++) {
-      const a = (i / 4) * Math.PI * 2 + Math.PI / 4;
-      const rib = new THREE.BoxGeometry(0.08, slopeLen * 0.9, 0.08);
-      rib.rotateZ(tilt);
-      rib.rotateY(-a);
-      rib.translate(x + Math.cos(a) * cR * 0.5, y0 + h + 0.5 + spire * 0.5, z + Math.sin(a) * cR * 0.5);
-      roof.push(rib);
-    }
-  }
-}
-
-interface SkyUniforms { uHorizon: { value: THREE.Color }; uZenith: { value: THREE.Color }; uCloudDark: { value: THREE.Color }; uCover: { value: number } }
-
-export function buildScenery(_m: Materials): Scenery {
-  const group = new THREE.Group();
-  group.name = 'scenery';
-  const R = rng(1234);
-  const dummy = new THREE.Object3D();
-  const tmpC = new THREE.Color();
-
-  const skyU = {
-    uScHorizon: { value: new THREE.Color() }, uScZenith: { value: new THREE.Color() },
-    uScCloudDark: { value: new THREE.Color() }, uScCloudLit: { value: new THREE.Color() },
-    uScSunColor: { value: new THREE.Color() }, uScSunDir: { value: new THREE.Vector3(0, 1, 0) },
-    uScTime: { value: 0 }, uScCover: { value: 0.8 }, uScStars: { value: 0 }, uScGlow: { value: 0 }, uScRim: { value: 0 },
-  };
-  const attachSkyCap = (mat: THREE.MeshBasicMaterial): void => {
-    mat.onBeforeCompile = (shader) => {
-      Object.assign(shader.uniforms, skyU);
-      shader.vertexShader = 'varying vec3 vAwSkyPos;\n' + shader.vertexShader.replace(
-        '#include <project_vertex>',
-        '#include <project_vertex>\n vec4 awPos = vec4(transformed, 1.0);\n#ifdef USE_INSTANCING\n  awPos = instanceMatrix * awPos;\n#endif\nvAwSkyPos = (modelMatrix * awPos).xyz;',
-      );
-      shader.fragmentShader = SKYCAP_GLSL + 'varying vec3 vAwSkyPos;\n' + shader.fragmentShader.replace(
-        '#include <tonemapping_fragment>',
-        'gl_FragColor.rgb = min(gl_FragColor.rgb, awSkyCap(normalize(vAwSkyPos - cameraPosition)) * 0.93);\n#include <tonemapping_fragment>',
-      );
+function palette(): { land: THREE.MeshBasicMaterial; trees: THREE.MeshBasicMaterial; stone: THREE.MeshBasicMaterial;
+  roof: THREE.MeshBasicMaterial; apertures: THREE.MeshBasicMaterial; update: (scene: THREE.Scene) => void } {
+  const map = grain();
+  const air = { value: new THREE.Color(0x7f8b95) }, night = { value: 0 };
+  const make = (kind: 'land' | 'trees' | 'stone' | 'roof') => {
+    const mat = new THREE.MeshBasicMaterial({ vertexColors: true, fog: false, side: kind === 'trees' ? THREE.DoubleSide : THREE.FrontSide });
+    mat.customProgramCacheKey = () => `aw-landscape:${kind}`;
+    mat.onBeforeCompile = shader => {
+      Object.assign(shader.uniforms, { uLandAir: air, uLandNight: night, uLandGrain: { value: map } });
+      shader.vertexShader = `varying vec3 vLandPos;\n${kind === 'land' ? 'attribute vec2 aBiome; varying vec2 vBiome;\n' : ''}${shader.vertexShader}`
+        .replace('#include <project_vertex>', `#include <project_vertex>
+          vec4 pLand = vec4(transformed,1.0);
+          #ifdef USE_INSTANCING
+            pLand = instanceMatrix * pLand;
+          #endif
+          vLandPos = (modelMatrix * pLand).xyz;
+          ${kind === 'land' ? 'vBiome = aBiome;' : ''}`);
+      const geology = /* glsl */`
+        vec3 mottling = texture2D(uLandGrain, vLandPos.xz * .044).rgb;
+        vec2 seamSpace = vec2((vLandPos.x * .73 + vLandPos.z * .48) * .043, (vLandPos.y + vLandPos.z * .27 + vLandPos.x * .15) * .114);
+        seamSpace.y += mottling.b * .19;
+        float seams = texture2D(uLandGrain, seamSpace).g;
+        float joints = texture2D(uLandGrain, seamSpace * vec2(3.1, .37) + 0.28).r;
+        float crowns = texture2D(uLandGrain, vLandPos.xz * .34).g;
+        base *= mix(.68, 1.29, mottling.r) * mix(1.0, mix(.62, 1.28, seams) * mix(.63, 1.26, joints), vBiome.x);
+        base *= mix(1.0, mix(.52, 1.23, crowns), vBiome.y);
+        drift = texture2D(uLandGrain, vLandPos.xz * .005).b;
+      `;
+      const masonry = /* glsl */`
+        vec3 norm = abs(cross(dFdx(vLandPos), dFdy(vLandPos)));
+        vec2 brick = vec2(norm.x > norm.z ? vLandPos.z : vLandPos.x, vLandPos.y) * vec2(.72, 1.44);
+        brick.x += mod(floor(brick.y), 2.0) * .5;
+        vec2 scaleAA = max(fwidth(brick), vec2(.001));
+        vec2 cell = abs(fract(brick) - .5);
+        vec2 mortar = smoothstep(vec2(.465) - scaleAA, vec2(.49) + scaleAA, cell);
+        float grain = texture2D(uLandGrain, vLandPos.xz * .09 + vLandPos.y * .047).r;
+        base *= mix(.87, 1.14, grain) * (1.0 - max(mortar.x * .52, mortar.y) * .20);
+      `;
+      shader.fragmentShader = `${AERIAL}\nuniform sampler2D uLandGrain;\n${kind === 'land' ? 'varying vec2 vBiome;\n' : ''}${shader.fragmentShader}`
+        .replace('#include <tonemapping_fragment>', `vec3 base = gl_FragColor.rgb;
+          float drift = .5;
+          ${kind === 'land' ? geology : kind === 'stone' ? masonry : ''}
+          gl_FragColor.rgb = landAir(base, drift, ${kind === 'land' || kind === 'trees' ? '1.0' : '.80'});
+          #include <tonemapping_fragment>`);
     };
-    mat.customProgramCacheKey = () => 'aw-skycap';
-  };
-
-  const atmo: { mat: THREE.MeshBasicMaterial; day: THREE.Color; night: THREE.Color; df: number; nf: number }[] = [];
-  const basic = (day: number, night: number, df: number, nf: number, vc = true): THREE.MeshBasicMaterial => {
-    const mat = new THREE.MeshBasicMaterial({ color: day, fog: false, vertexColors: vc });
-    attachSkyCap(mat);
-    atmo.push({ mat, day: new THREE.Color(day), night: new THREE.Color(night), df, nf });
     return mat;
   };
+  const apertures = new THREE.MeshBasicMaterial({ color: 0x252829, fog: false, side: THREE.DoubleSide, vertexColors: true });
+  let horizon: THREE.Color | undefined;
+  let foundSky = false;
+  return { land: make('land'), trees: make('trees'), stone: make('stone'), roof: make('roof'), apertures, update(scene) {
+    if (!foundSky) {
+      scene.traverse(o => {
+        const u = ((o as THREE.Mesh).material as THREE.ShaderMaterial | undefined)?.uniforms;
+        if (u?.uHorizon && u?.uZenith && u?.uCloudDark) horizon = u.uHorizon.value;
+      });
+      foundSky = true;
+    }
+    night.value = scene.userData.night ?? 0;
+    const fog = (scene.fog as THREE.Fog | null)?.color;
+    if (fog) air.value.copy(fog).multiplyScalar(mix(.79, 1.0, night.value));
+    if (horizon) air.value.lerp(horizon, .09 + .26 * night.value);
+    air.value.multiplyScalar(1.0 + .85 * night.value);
+    const lit = smooth(.34, .88, night.value);
+    apertures.color.setHex(0x252829).lerp(warmWindow, lit).multiplyScalar(1 + lit * 2.08);
+  } };
+}
+const warmWindow = new THREE.Color(0xffb45f);
 
-  // ——— 大地盘 ———
-  const ground = new THREE.Mesh(new THREE.CircleGeometry(600, 48), new THREE.MeshStandardMaterial({ color: 0x4a4a44, roughness: 1 }));
-  ground.rotation.x = -Math.PI / 2;
-  ground.position.y = -0.62;
-  ground.receiveShadow = false;
-  group.add(ground);
+// Opaque geometry gives correct depth from every bearing, including the GTAO override pass.
+// Two distance tiers share an instanced palette. Mid-distance trees use two cut-out
+// (geometrically shaped, not alpha-blended) profiles instead of a second 3-D crown mesh.
+function fir(seed: number, near: boolean): THREE.BufferGeometry {
+  const r = rng(seed);
+  const profile = near ? [
+    [.13, .095], [.22, .196], [.29, .114], [.41, .173], [.48, .082],
+    [.59, .128], [.66, .062], [.77, .091], [.83, .032], [1, .002],
+  ] : [[.11, .08], [.22, .183], [.32, .098], [.45, .146], [.55, .079], [.63, .108], [.72, .048], [1, .002]];
+  const bark = new THREE.Color(0x5c5043), shade = new THREE.Color(0x26342f), lit = new THREE.Color(0x526351);
+  const p: number[] = [], c: number[] = [], index: number[] = [];
+  const tint = new THREE.Color();
+  const add = (x: number, y: number, z: number, strength: number, wood = false) => {
+    p.push(x, y, z);
+    tint.copy(wood ? bark : shade);
+    if (!wood) tint.lerp(lit, clamp01(strength));
+    c.push(tint.r, tint.g, tint.b);
+  };
+  // Small ochre trunk below the branches, never separate from their silhouette.
+  if (near) {
+    for (let i = 0; i < 4; i++) {
+      const a = i * TAU / 4;
+      add(.018 * Math.cos(a), -.045, .018 * Math.sin(a), 0, true);
+      add(.011 * Math.cos(a), .35, .011 * Math.sin(a), 0, true);
+      const k = i * 2, m = (k + 2) % 8;
+      index.push(k, m, k + 1, m, m + 1, k + 1);
+    }
+    const branches = 5;
+    for (let j = 0; j < profile.length; j++) {
+      const [h, w] = profile[j];
+      for (let i = 0; i < branches; i++) {
+        const a = TAU * i / branches + (j % 2) * .21;
+        const t = w * mix(.64, 1.29, r()) * (i % 2 ? .70 : 1);
+        const sway = h * h * .051 * Math.sin(seed);
+        add(t * Math.cos(a) + sway, h + (r() - .5) * .09 * (1 - h), t * Math.sin(a),
+          .16 + .44 * (.5 - .5 * Math.cos(a)) + .19 * r() + (j % 2 ? 0 : .19));
+        if (j + 1 < profile.length) {
+          const k = 8 + j * branches + i, m = 8 + j * branches + ((i + 1) % branches);
+          index.push(k, m, k + branches, m, m + branches, k + branches);
+        }
+      }
+    }
+  } else {
+    for (let side = 0; side < 2; side++) {
+      const k = p.length / 3;
+      add(side ? 0 : -.016, -.04, side ? -.016 : 0, .13);
+      add(side ? 0 : .020, -.04, side ? .020 : 0, .13);
+      for (const [h, w] of profile) {
+        const l = -w * mix(.72, 1.18, r()), b = w * mix(.72, 1.18, r());
+        add(side ? 0 : l, h, side ? l : 0, .25 + r() * .28);
+        add(side ? 0 : b, h, side ? b : 0, .40 + r() * .29);
+      }
+      for (let j = 0; j < profile.length; j++) {
+        const i = k + j * 2;
+        index.push(i, i + 1, i + 2, i + 1, i + 3, i + 2);
+      }
+    }
+  }
+  const tree = new THREE.BufferGeometry();
+  tree.setAttribute('position', new THREE.Float32BufferAttribute(p, 3));
+  tree.setAttribute('color', new THREE.Float32BufferAttribute(c, 3));
+  tree.setIndex(index);
+  tree.computeVertexNormals();
+  return tree;
+}
 
-  // ——— 中景 foothill（3D，岩石+枯草固有色贴图）———
-  const footGeo = moundRing(70, 14, 6, 34, 71);
-  bakeForm(footGeo, -6, 24, 0.6);
-  const footMat = basic(0xffffff, 0x2a3644, 0, 0);
-  footMat.map = rockTexture(72, 0.2, true);
-  footMat.map.repeat.set(5, 2);
-  footMat.needsUpdate = true;
-  footMat.vertexColors = true;
-  const foot = new THREE.Mesh(footGeo, footMat);
-  foot.castShadow = false; foot.receiveShadow = false;
-  group.add(foot);
-  const hg = heightGrid(footGeo, 110, 2);
+type Tree = { x: number; z: number; y: number; h: number; yaw: number; tone: number; width: number };
+function plant(group: THREE.Group, ground: Terrain, mat: THREE.MeshBasicMaterial): void {
+  const r = rng(443), p = new THREE.Object3D(), color = new THREE.Color();
+  const meshes = [fir(34, true), fir(71, false)];
+  const sectors: Tree[][] = Array.from({ length: 12 * meshes.length }, () => []);
+  const plantAt = (x: number, z: number, step: number, near: boolean) => {
+    const y = ground.height(x, z);
+    const dx = (ground.height(x + 2, z) - ground.height(x - 2, z)) / 4;
+    const dz = (ground.height(x, z + 2) - ground.height(x, z - 2)) / 4;
+    const slope = 1 - 1 / Math.hypot(1, dx, dz);
+    const forest = forestCover(x, z, y, slope);
+    const dist = Math.hypot(x, z);
+    if (Math.hypot(x - KEEP.x, z - KEEP.z) < 20 || Math.hypot(x - GATE.x, z - GATE.z) < 12
+      || Math.hypot(x - 77, z + 62) < 13 || Math.hypot(x - 119, z + 39) < 11
+      || dist < 41 || r() > smooth(.23, .62, forest) * .98) return;
+    const h = mix(2.4, near ? 7.9 : 8.25, Math.pow(r(), 1.34)) * mix(.76, 1.28, forest);
+    const a = ((Math.atan2(z, x) + TAU) % TAU) / TAU;
+    const cell = Math.floor(a * 12) * meshes.length + (near ? 0 : 1);
+    sectors[cell].push({ x, z, y: y - .10, h, yaw: r() * TAU, tone: mix(.59, 1.19, r()), width: mix(.79, 1.40, r()) * Math.min(1, step / 4) });
+  };
+  for (const [min, max, step, near] of [[41, 100, 4.05, true], [100, 239, 6.0, false]] as const) {
+    for (let z = -max; z < max; z += step) for (let x = -max; x < max; x += step) {
+      const bx = x + r() * step, bz = z + r() * step, d = Math.hypot(bx, bz);
+      if (d < min || d >= max) continue;
+      plantAt(bx, bz, step, near);
+    }
+  }
+  // A few anchored stands silhouette the fortress spur and the sides of its scree gullies.
+  for (let i = 0; i < 360; i++) {
+    const a = r() * TAU, d = 23 + 45 * r();
+    const x = KEEP.x + Math.sin(a) * d, z = KEEP.z + Math.cos(a) * d;
+    const h = ground.height(x, z);
+    if (h > 11 && h < 44) plantAt(x, z, 6, false);
+  }
+  sectors.forEach((trees, i) => {
+    if (!trees.length) return;
+    const lod = i % meshes.length;
+    const mesh = new THREE.InstancedMesh(meshes[lod], mat, trees.length);
+    mesh.name = lod ? 'distant fir stands' : 'near fir stands';
+    trees.forEach((t, k) => {
+      p.position.set(t.x, t.y, t.z);
+      p.rotation.set(0, t.yaw, 0);
+      p.scale.set(t.h * t.width, t.h, t.h * t.width);
+      p.updateMatrix();
+      mesh.setMatrixAt(k, p.matrix);
+      color.setRGB(t.tone * .94, t.tone, t.tone * .96);
+      mesh.setColorAt(k, color);
+    });
+    mesh.computeBoundingSphere();
+    group.add(mesh);
+  });
+}
 
-  // ——— 四层林冠团块全景带（连续深色林体 + 锯齿冠廓 + 斑驳；越远雾越多）———
-  const bandSpec: [number, number, number, number, number, number, number][] = [
-    // [radius, crest, amp, seed, repeatU, hazeMix, noiseScale]
-    [118, 32, 9, 11, 7, 0.17, 1.0],
-    [225, 73, 15, 22, 8, 0.35, 1.4],
-    [345, 128, 19, 33, 10, 0.57, 1.8],
-    [485, 184, 22, 44, 12, 0.74, 2.2],
-  ];
-  for (const [rad, crest, amp, sd, rep, hm, ns] of bandSpec) {
-    const g = panoramaBand(rad, crest, amp, sd, rep);
-    const mat = new THREE.MeshBasicMaterial({ map: canopyTexture(sd * 7 + 3, ns, hm), alphaTest: 0.5, side: THREE.DoubleSide, fog: false, color: 0xffffff });
-    attachSkyCap(mat);
-    atmo.push({ mat, day: new THREE.Color(0xffffff), night: new THREE.Color(0x567095), df: 0, nf: 0.18 });
-    const mesh = new THREE.Mesh(g, mat);
-    mesh.castShadow = false; mesh.receiveShadow = false;
+type Material = 'stone' | 'roof' | 'apertures';
+function architecture(group: THREE.Group, ground: Terrain, paints: ReturnType<typeof palette>): void {
+  // A single indexed batch per finish: the keep, pass gate, road hamlet and western ruin.
+  const bins: Record<Material, THREE.BufferGeometry[]> = { stone: [], roof: [], apertures: [] };
+  const tint = new THREE.Color(), source = new THREE.Color();
+  const add = (g: THREE.BufferGeometry, color: number, finish: Material) => {
+    const pos = g.getAttribute('position'), n = g.getAttribute('normal');
+    g.computeBoundingBox();
+    const box = g.boundingBox!, ymin = box.min.y, height = Math.max(1, box.max.y - ymin);
+    const c = new Float32Array(pos.count * 3);
+    source.setHex(color);
+    for (let i = 0; i < pos.count; i++) {
+      const face = n.getX(i) * -.52 + n.getZ(i) * -.42 + n.getY(i) * .71;
+      tint.copy(source).multiplyScalar(finish === 'apertures' ? 1 : mix(.56, 1.15, smooth(-.94, .88, face))
+        * mix(.77, 1.12, smooth(0, 1, (pos.getY(i) - ymin) / height)));
+      tint.toArray(c, i * 3);
+    }
+    g.setAttribute('color', new THREE.BufferAttribute(c, 3));
+    if (!g.index) g.setIndex(Array.from({ length: pos.count }, (_, k) => k));
+    bins[finish].push(g);
+  };
+  const box = (x: number, y: number, z: number, w: number, h: number, d: number, tint: number, angle = 0, finish: Material = 'stone') =>
+    add(new THREE.BoxGeometry(w, h, d).rotateY(angle).translate(x, y, z), tint, finish);
+  const cylinder = (x: number, y: number, z: number, r1: number, r2: number, h: number, tint: number, finish: Material = 'stone') =>
+    add(new THREE.CylinderGeometry(r1, r2, h, 10).translate(x, y, z), tint, finish);
+  const wallColor = 0x697480, edge = 0x747d87, roofColor = 0x36414c, rubble = 0x586064;
+  const base = (x: number, z: number, w: number, d: number, a = 0) => {
+    let level = ground.height(x, z);
+    for (const u of [-.5, 0, .5]) for (const v of [-.5, 0, .5]) {
+      const sx = w * u, sz = d * v;
+      level = Math.min(level, ground.height(x + sx * Math.cos(a) + sz * Math.sin(a), z - sx * Math.sin(a) + sz * Math.cos(a)));
+    }
+    return level - .6;
+  };
+  const opening = (w: number, h: number) => {
+    const shape = new THREE.Shape();
+    shape.moveTo(-w / 2, 0); shape.lineTo(w / 2, 0); shape.lineTo(w / 2, h * .63);
+    shape.quadraticCurveTo(w / 2, h * .84, 0, h);
+    shape.quadraticCurveTo(-w / 2, h * .84, -w / 2, h * .63);
+    shape.closePath();
+    return shape;
+  };
+  const slit = (x: number, y: number, z: number, w: number, h: number, a: number, strength: number) => {
+    add(new THREE.ShapeGeometry(opening(w, h), 4).rotateY(a).translate(x, y, z), strength, 'apertures');
+  };
+  const curtain = (ax: number, az: number, bx: number, bz: number, top: number, cren = true) => {
+    const x = (ax + bx) / 2, z = (az + bz) / 2, span = Math.hypot(bx - ax, bz - az), a = Math.atan2(bx - ax, bz - az);
+    const y = Math.min(top - .55, base(x, z, 2.2, span, a));
+    box(x, (y + top) / 2, z, 2.2, top - y, span + .4, wallColor, a);
+    box(x, top - .4, z, 2.65, .62, span + .5, edge, a);
+    const n = Math.floor(span / 2.35);
+    if (cren) for (let i = 0; i <= n; i++) {
+      const t = (i + .35) / (n + 1);
+      box(mix(ax, bx, t), top + .44, mix(az, bz, t), 2.25, 1, 1.11, edge, a);
+    }
+  };
+  const tower = (x: number, z: number, foot: number, r: number, top: number, spire: number, ragged = false) => {
+    const y = Math.min(top - 4, base(x, z, r * 2, r * 2));
+    const skirt = Math.min(top - 1.5, Math.max(foot + 2.1, y + 2.1));
+    cylinder(x, (y + skirt) / 2, z, r, r * 1.22, skirt - y, rubble);
+    cylinder(x, (skirt + top) / 2, z, r * .88, r, top - skirt, wallColor);
+    cylinder(x, top - .2, z, r * 1.06, r * .91, .75, edge);
+    cylinder(x, top + .38, z, r * 1.06, r * 1.06, .58, wallColor);
+    if (spire > 0) {
+      cylinder(x, top + spire * .15 + .65, z, r * .77, r * 1.22, spire * .30, roofColor, 'roof');
+      cylinder(x, top + spire * .65 + .65, z, .05, r * .77, spire * .70, roofColor, 'roof');
+      cylinder(x, top + spire + 1.02, z, .025, .08, .85, edge);
+    } else {
+      for (let i = 0; i < 9; i++) {
+        if (ragged && (i === 3 || i === 4 || i === 5 || i === 7)) continue;
+        const a = i / 9 * TAU;
+        box(x + Math.sin(a) * r * .82, top + (ragged && i % 2 ? .9 : 1.32), z + Math.cos(a) * r * .82, .81, ragged && i % 2 ? .68 : 1.32, .65, edge, a);
+      }
+    }
+    // Cardinal slits laid against the taper, above the retaining bank.
+    for (const a of [-Math.PI / 2, 0, Math.PI, Math.PI / 2]) {
+      slit(x + Math.sin(a) * r * .96, top - 5.4, z + Math.cos(a) * r * .96, .48, 2, a,
+        (a === -Math.PI / 2 || a === Math.PI) && spire > 0 ? 0x998471 : 0x463a31);
+    }
+  };
+  const { x, y, z } = KEEP;
+  // Successive terraces and two offset spires; retain the near end of the curtain in the rock.
+  const keepBase = base(x + 2, z + 2, 21, 17);
+  box(x + 2, (keepBase + y + 25) / 2, z + 2, 21, y + 25 - keepBase, 17, wallColor);
+  box(x + 2, y + 24, z + 2, 22, 1.25, 18, edge);
+  for (const dz of [-6.5, 10.5]) for (let dx = -8; dx <= 12; dx += 2.5)
+    box(x + dx, y + 25.6, z + dz, 1.18, 1.3, .75, edge);
+  for (const dx of [-8.5, 12.5]) for (let dz = -4; dz <= 8; dz += 2.5)
+    box(x + dx, y + 25.6, z + dz, .75, 1.3, 1.18, edge);
+  const inner = base(x - 9, z + 2, 6, 15);
+  box(x - 9, (inner + y + 16) / 2, z + 2, 6, y + 16 - inner, 15, 0x6a747e);
+  for (const dz of [-3.8, 1, 5.8]) {
+    box(x - 11.9, y + 8.6, z + dz, .76, 13.6, .85, edge);
+    slit(x - 12.02, y + 10, z + dz + 1.3, .72, 3.4, -Math.PI / 2, dz > 0 ? 0x77715a : 0xaca18a);
+    slit(x - 8.53, y + 19, z + dz + 1.2, .63, 2.8, -Math.PI / 2, dz > 0 ? 0x967f66 : 0x50443b);
+  }
+  for (const [dx, dy] of [[-5.5, 15.3], [.3, 11.4], [4.0, 17.6], [10.1, 14.6]])
+    slit(x + dx, y + dy, z - 6.52, .65, 2.88, Math.PI, dx > 5 ? 0x565044 : 0xa88a6f);
+  tower(x - 6.8, z - 8.1, y - 1.8, 3.0, y + 27, 12.4);
+  tower(x + 2.3, z + 7.2, y - 1.8, 3.2, y + 31, 15.6);
+  tower(x + 10, z + 10, y - 1.8, 3.4, y + 25, 8.5);
+  tower(x - 25, z - 10.8, y - 10, 3.0, y + 6.5, 9.0);
+  tower(x - 15, z + 13, y - 8, 3.0, y + 7.8, 0, true);
+  tower(x + 4, z + 19, y - 8, 2.8, y + 11, 0);
+  curtain(x - 25, z - 10.8, x - 15, z + 13, y + .8);
+  curtain(x - 15, z + 13, x + 4, z + 19, y + 4.6);
+  curtain(x + 4, z + 19, x + 13, z + 11, y + 6.8);
+  curtain(x - 25, z - 10.8, x - 8, z - 10, y + 4.1);
+  for (const tx of [-20.7, -17.0, -13.3]) {
+    slit(x + tx, y + 1.5, z - 11.56 + (tx + 25) * .047, .64, 1.62, Math.PI, tx < -18 ? 0x67594d : 0xa9937b);
+  }
+
+  // Pass gate bridges the road with an actual open pointed arch, viewed from the west.
+  const gx = GATE.x, gz = GATE.z, gy = ground.height(gx, gz) - .2, facing = -Math.PI / 2;
+  const archW = 4.7, archH = 7.5;
+  const portal = new THREE.Shape();
+  portal.moveTo(-5.9, -.8); portal.lineTo(-archW / 2, -.8); portal.lineTo(-archW / 2, archH * .63);
+  portal.quadraticCurveTo(-archW / 2, archH * .84, 0, archH);
+  portal.quadraticCurveTo(archW / 2, archH * .84, archW / 2, archH * .63);
+  portal.lineTo(archW / 2, -.8); portal.lineTo(5.9, -.8); portal.lineTo(5.9, 11); portal.lineTo(-5.9, 11); portal.closePath();
+  add(new THREE.ExtrudeGeometry(portal, { depth: 5.7, bevelEnabled: false, curveSegments: 6 })
+    .translate(0, 0, -2.85).rotateY(facing).translate(gx, gy, gz), wallColor, 'stone');
+  // Grated front and the small, recessed gate light behind it.
+  slit(gx + 2.4, gy + .18, gz, 3.8, 6.55, facing, 0x7c6550);
+  for (let dz = -1.8; dz <= 1.8; dz += .46) box(gx - 2.53, gy + 2.6, gz + dz, .12, 5.22, .12, 0x25292d, 0, 'roof');
+  for (let i = -2; i <= 2; i++) box(gx, gy + 11.5, gz + i * 1.72, 6.2, 1.18, .86, edge);
+  tower(gx, gz - 5.5, gy, 2.85, gy + 14.6, 5.3);
+  tower(gx, gz + 5.5, gy, 2.85, gy + 13.7, 0);
+  curtain(gx, gz + 5.5, gx + 3, gz + 16, gy + 7.1);
+  curtain(gx, gz - 5.5, gx + 8, gz - 17, gy + 6.2);
+  for (const dz of [-1.7, 1.7]) slit(gx - 2.88, gy + 8.3, gz + dz, .64, 1.63, facing, 0x829083);
+
+  const cottage = (x: number, z: number, width: number, depth: number, height: number, a: number) => {
+    const top = ground.height(x, z) + height, foot = base(x, z, width, depth, a), lift = width * .38;
+    box(x, (foot + top) / 2, z, width, top - foot, depth, rubble, a);
+    const gable = new THREE.Shape();
+    gable.moveTo(-width * .59, 0); gable.lineTo(0, lift); gable.lineTo(width * .59, 0); gable.closePath();
+    add(new THREE.ExtrudeGeometry(gable, { depth: depth + .5, bevelEnabled: false })
+      .translate(0, 0, -(depth + .5) / 2).rotateY(a).translate(x, top, z), roofColor, 'roof');
+    box(x + Math.cos(a) * width * .28, top + lift * .53, z - Math.sin(a) * width * .28, .62, 2.1, .67, edge, a);
+    const w = width * .51;
+    slit(x - Math.cos(a) * w, top - height * .63, z + Math.sin(a) * w, .58, .95, a - Math.PI / 2, 0x7e6249);
+  };
+  cottage(77, -58, 4.4, 7, 3.6, .24);
+  cottage(71, -61, 4.0, 4.8, 3.4, -.23);
+  cottage(82, -62, 3.5, 4.5, 2.9, -.15);
+  cottage(111, -40, 4.5, 5.8, 4.2, -.3);
+  cottage(119, -36, 4.0, 6.2, 4, .38);
+  cottage(125, -40, 3.5, 4.7, 2.8, -.1);
+
+  const wx = -88, wz = -54, wy = ground.height(wx, wz);
+  tower(wx, wz, wy, 3.5, wy + 12.3, 0, true);
+  curtain(wx, wz, wx - 9, wz - 4, wy + 3.9, false);
+  curtain(wx - 9, wz - 4, wx - 14, wz - 3, wy + 2.3, false);
+
+  for (const kind of ['stone', 'roof', 'apertures'] as const) {
+    const geometry = mergeGeometries(bins[kind])!;
+    bins[kind].forEach(g => g.dispose());
+    const mesh = new THREE.Mesh(geometry, paints[kind]);
+    mesh.name = `distant architecture: ${kind}`;
     group.add(mesh);
   }
+}
 
-  // ——— 城堡岩崖（岩石固有色贴图 + 块面明暗 + 坡脚碎石）———
-  const cx = 118, czSim = -121, cy = 53;
-  const cz = -czSim;
-  const crag = new THREE.CylinderGeometry(19, 46, cy + 6, 20, 10);
-  {
-    const pos = crag.getAttribute('position') as THREE.BufferAttribute;
-    for (let i = 0; i < pos.count; i++) {
-      const px = pos.getX(i), py = pos.getY(i), pz = pos.getZ(i);
-      const ang = Math.atan2(px, pz);
-      const strata = Math.floor((py + cy / 2) / 7) * 0.9;
-      const joint = Math.sin(ang * 6 + 1.7) * 0.17 + Math.sin(ang * 11 + py * 0.07) * 0.09;
-      const n = Math.sin(px * 0.3 + pz * 0.22) * Math.cos(pz * 0.26 - px * 0.15);
-      if (py < (cy + 6) / 2 - 0.1) {
-        const s = 1 + n * 0.23 + joint - strata * 0.012;
-        pos.setX(i, px * s); pos.setZ(i, pz * s); pos.setY(i, py + n * 1.4);
-      }
-    }
-    crag.computeVertexNormals();
+export function buildScenery(_materials: Materials): Scenery {
+  const group = new THREE.Group();
+  group.name = 'scenery';
+  const ground = terrain(), paints = palette();
+  for (const tile of ground.tiles) {
+    const land = new THREE.Mesh(tile, paints.land);
+    land.name = 'valley terrain and ridges';
+    group.add(land);
   }
-  const cragParts = [crag.toNonIndexed()];
-  crag.dispose();
-  const screeCone = new THREE.ConeGeometry(46, 12, 12, 2);
-  screeCone.translate(0, -(cy + 6) / 2 + 6, 0);
-  cragParts.push(screeCone.toNonIndexed());
-  screeCone.dispose();
-  for (let i = 0; i < 26; i++) {
-    const a = R() * Math.PI * 2, rr = 34 + R() * 16;
-    const b = new THREE.DodecahedronGeometry(1.5 + R() * 2.5, 0);
-    b.translate(Math.sin(a) * rr, -(cy + 6) / 2 + 7 + R() * 3, Math.cos(a) * rr);
-    cragParts.push(b.toNonIndexed());
-    b.dispose();
-  }
-  const cragGeo = mergeGeometries(cragParts, false)!;
-  for (const g of cragParts) g.dispose();
-  bakeForm(cragGeo, -6, cy + 10, 0.7);
-  const cragY = cy / 2 - 3;
-  const cragSupport = heightGrid(cragGeo, 55, 1.5);
-  const cliffTexture = rockTexture(73, 0.12, true);
-  const cragMat = basic(0xadb8c0, 0x576b83, 0.05, 0.2);
-  cragMat.map = cliffTexture;
-  cliffTexture.repeat.set(3, 1.2);
-  cragMat.needsUpdate = true;
-  const cragMesh = new THREE.Mesh(cragGeo, cragMat);
-  cragMesh.position.set(cx, cragY, cz);
-  cragMesh.castShadow = false; cragMesh.receiveShadow = false;
-  group.add(cragMesh);
-
-  // ——— 山顶城堡（石砌体冷灰 + 深色屋面双网格）———
-  const cp: THREE.BufferGeometry[] = [];
-  const cr: THREE.BufferGeometry[] = [];
-  const kw = 13, kh = 26;
-  for (let b = 0; b < 3; b++) {
-    const bh = kh / 3;
-    const box = new THREE.BoxGeometry(kw - b * 0.8, bh, kw - b * 0.8);
-    box.translate(cx, cy + bh * (b + 0.5), cz);
-    cp.push(box);
-    const band = new THREE.BoxGeometry(kw - b * 0.8 + 0.5, 0.4, kw - b * 0.8 + 0.5);
-    band.translate(cx, cy + bh * (b + 1), cz);
-    cp.push(band);
-  }
-  for (const [dx, dz] of [[-1, 0], [1, 0], [0, -1], [0, 1]]) {
-    const pil = new THREE.BoxGeometry(dx ? 0.7 : kw * 0.9, kh, dz ? 0.7 : kw * 0.9);
-    pil.translate(cx + dx * (kw / 2), cy + kh / 2, cz + dz * (kw / 2));
-    cp.push(pil);
-  }
-  for (let side = 0; side < 4; side++) {
-    for (let i = 0; i < 6; i++) {
-      const t = (i + 0.5) / 6 - 0.5;
-      const m = new THREE.BoxGeometry(side % 2 ? 0.9 : 1.2, 1.3, side % 2 ? 1.2 : 0.9);
-      const ox = side === 0 ? t * kw : side === 1 ? kw / 2 : side === 2 ? t * kw : -kw / 2;
-      const oz = side === 0 ? -kw / 2 : side === 1 ? t * kw : side === 2 ? kw / 2 : t * kw;
-      m.translate(cx + ox, cy + kh + 0.65, cz + oz);
-      cp.push(m);
-    }
-  }
-  const roof = new THREE.ConeGeometry(kw * 0.78, 12, 4);
-  roof.rotateY(Math.PI / 4);
-  roof.translate(cx, cy + kh + 6, cz);
-  cr.push(roof);
-  const ridge = new THREE.BoxGeometry(0.5, 0.5, kw * 0.5);
-  ridge.translate(cx, cy + kh + 9, cz);
-  cr.push(ridge);
-  for (const [dx, dz] of [[-3, -2], [3, 2]]) {
-    const ch = new THREE.BoxGeometry(1.2, 5, 1.2);
-    ch.translate(cx + dx, cy + kh + 8, cz + dz);
-    cp.push(ch);
-  }
-  for (const [dx, dz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) {
-    tower(cp, cr, cx + dx * kw / 2, cz + dz * kw / 2, cy + kh * 0.5, 2.0, kh * 0.62, 7, { broken: dx === 1 && dz === -1 });
-  }
-  const ring: [number, number, number, number, boolean][] = [
-    [-16, -10, 3.0, 20, false], [-17, 8, 2.6, 16, true], [14, -12, 3.2, 23, false],
-    [16, 7, 2.7, 17, false], [-3, -17, 2.4, 15, true], [6, 15, 2.5, 18, false], [-10, 14, 2.2, 14, false],
-  ];
-  for (const [dx, dz, r, h, broken] of ring) tower(cp, cr, cx + dx, cz + dz, cy - 3, r, h, r * 2.3, { merlons: true, broken });
-  const wallPairs: [number, number, number, number][] = [
-    [-15, -9, -3, -16], [-3, -16, 13, -11], [13, -11, 15, 6], [15, 6, 5, 14],
-    [5, 14, -9, 13], [-9, 13, -16, 7], [-16, 7, -15, -9],
-  ];
-  let wi = 0;
-  for (const [ax, az, bx, bz] of wallPairs) {
-    const len = Math.hypot(bx - ax, bz - az);
-    const ang = Math.atan2(bx - ax, bz - az);
-    const collapsed = wi === 2;
-    const wh = collapsed ? 3.5 : 7;
-    const wall = new THREE.BoxGeometry(1.7, wh, len);
-    wall.rotateY(ang);
-    wall.translate(cx + (ax + bx) / 2, cy - 1 + wh / 2, cz + (az + bz) / 2);
-    cp.push(wall);
-    const walk = new THREE.BoxGeometry(2.6, 0.4, len);
-    walk.rotateY(ang);
-    walk.translate(cx + (ax + bx) / 2, cy - 1 + wh - 0.6, cz + (az + bz) / 2);
-    cp.push(walk);
-    const n = Math.floor(len / 2.2);
-    for (let i = 0; i < n; i++) {
-      if (collapsed && i % 2 === 0) continue;
-      const t = (i + 0.5) / n;
-      const merlon = new THREE.BoxGeometry(1.7, 1.1, 1.0);
-      merlon.rotateY(ang);
-      merlon.translate(cx + ax + (bx - ax) * t, cy - 1 + wh + 0.55, cz + az + (bz - az) * t);
-      cp.push(merlon);
-    }
-    if (collapsed) {
-      for (let i = 0; i < 8; i++) {
-        const t = R();
-        const b = new THREE.DodecahedronGeometry(0.8 + R() * 1.2, 0);
-        b.translate(cx + ax + (bx - ax) * t, cy - 2 + R() * 2, cz + az + (bz - az) * t);
-        cp.push(b);
-      }
-    }
-    wi++;
-  }
-  tower(cp, cr, cx - 4, cz - 16, cy - 3, 2.6, 18, 7, { merlons: true });
-  tower(cp, cr, cx + 4, cz - 16, cy - 3, 2.6, 18, 7, { merlons: true });
-  const gateWall = new THREE.BoxGeometry(10, 14, 3);
-  gateWall.translate(cx, cy + 4, cz - 16);
-  cp.push(gateWall);
-  const castleGeo = mergeGeometries(cp.map((g) => g.toNonIndexed()), false)!;
-  for (const g of cp) g.dispose();
-  bakeForm(castleGeo, cy - 6, 50, 1.4);
-  const masonry = rockTexture(123, 0.12);
-  const castleMat = basic(0xa2afbd, 0x526584, 0.06, 0.18);
-  castleMat.map = masonry;
-  const castle = new THREE.Mesh(castleGeo, castleMat);
-  castle.castShadow = false; castle.receiveShadow = false;
-  group.add(castle);
-  for (const g of cr) bakeFlat(g, 0.13);
-
-  // 门洞暗色 + 吊闸（合批）
-  const archDark = new THREE.MeshBasicMaterial({ color: 0x0a0d12, fog: false });
-  const archParts: THREE.BufferGeometry[] = [];
-  const a1 = new THREE.BoxGeometry(3, 5.5, 3.6); a1.translate(cx, cy + 0.5, cz - 16); archParts.push(a1);
-  const gx = 80, gzSim = 45, gz = -gzSim;
-  const gateBase = sampleH(hg, gx, gz);
-  const gy = gateBase < -1e8 ? -0.65 : gateBase - 1;
-  const a2 = new THREE.BoxGeometry(2.8, 5, 3.4); a2.translate(gx, gy + 2.5, gz); archParts.push(a2);
-  const a3 = new THREE.BoxGeometry(2.6, 3.6, 0.12); a3.translate(gx, gy + 3, gz + 1.75); archParts.push(a3);
-  const archGeo = mergeGeometries(archParts.map((g) => g.toNonIndexed()), false)!;
-  for (const g of archParts) g.dispose();
-  group.add(new THREE.Mesh(archGeo, archDark));
-  const glowMat = new THREE.MeshBasicMaterial({ color: 0xffb25e, fog: false, transparent: true, opacity: 0, side: THREE.DoubleSide });
-  const glowParts: THREE.BufferGeometry[] = [];
-  const g1 = new THREE.PlaneGeometry(2.6, 4.4); g1.translate(cx, cy + 0.2, cz - 17.9); glowParts.push(g1);
-  const g2 = new THREE.PlaneGeometry(2.4, 4); g2.translate(gx, gy + 2.2, gz + 1.8); glowParts.push(g2);
-  const glowGeo = mergeGeometries(glowParts.map((g) => g.toNonIndexed()), false)!;
-  for (const g of glowParts) g.dispose();
-  group.add(new THREE.Mesh(glowGeo, glowMat));
-
-  // 城堡暖窗
-  const winMat = new THREE.MeshBasicMaterial({ color: 0x0d1118, fog: false, side: THREE.DoubleSide });
-  const winSpots: [number, number, number, number, number][] = [
-    [cx - 6.6, cy + 12, cz - 3, -HALF_PI, 0.9],
-    [cx - 6.6, cy + 20, cz + 2, -HALF_PI, 0.55],
-    [cx - 2, cy + 16, cz - 6.6, 0, 0.75],
-    [cx + 3, cy + 22, cz - 6.6, 0, 0.4],
-    [cx + 14, cy + 10, cz - 12, -1.2, 0.8],
-    [cx - 17, cy + 8, cz + 8, -1.4, 0.5],
-    [cx - 4, cy + 12, cz - 17.6, 0, 0.65],
-    [gx - 3.6, gy + 12, gz + 2.6, 0, 0.7],
-    [gx + 3.6, gy + 14, gz + 2.6, 0, 0.5],
-  ];
-  const winInst = new THREE.InstancedMesh(new THREE.PlaneGeometry(0.8, 1.5), winMat, winSpots.length);
-  winSpots.forEach(([x, y, z, rot, b], i) => {
-    dummy.position.set(x, y, z);
-    dummy.rotation.set(0, rot, 0);
-    dummy.scale.set(1, 1, 1);
-    dummy.updateMatrix();
-    winInst.setMatrixAt(i, dummy.matrix);
-    tmpC.setRGB(b, b * 0.92, b * 0.8);
-    winInst.setColorAt(i, tmpC);
-  });
-  winInst.instanceMatrix.needsUpdate = true;
-  if (winInst.instanceColor) winInst.instanceColor.needsUpdate = true;
-  group.add(winInst);
-
-  // ——— 第二城门塔（冷灰石材）———
-  const gp: THREE.BufferGeometry[] = [];
-  const gr: THREE.BufferGeometry[] = [];
-  tower(gp, gr, gx - 3.6, gz, gy, 2.5, 17, 7, { merlons: true });
-  tower(gp, gr, gx + 3.6, gz, gy, 2.5, 17, 7, { merlons: true, broken: true });
-  const gwall = new THREE.BoxGeometry(9.5, 12, 3);
-  gwall.translate(gx, gy + 6, gz);
-  gp.push(gwall);
-  const groof = new THREE.ConeGeometry(5.6, 4.5, 4);
-  groof.rotateY(Math.PI / 4);
-  groof.translate(gx, gy + 14.2, gz);
-  gr.push(groof);
-  const gateGeo = mergeGeometries(gp.map((g) => g.toNonIndexed()), false)!;
-  for (const g of gp) g.dispose();
-  bakeForm(gateGeo, gy, 26, 0.9);
-  const gateMat = basic(0x8a9cac, 0x4e5d75, 0.05, 0.18);
-  gateMat.map = masonry;
-  const gate = new THREE.Mesh(gateGeo, gateMat);
-  gate.castShadow = false; gate.receiveShadow = false;
-  group.add(gate);
-  for (const g of gr) bakeFlat(g, 0.13);
-
-  // ——— 中景：下城郭 / 坍塌墙 / 瞭望塔（冷灰）———
-  const midParts: THREE.BufferGeometry[] = [];
-  const mr: THREE.BufferGeometry[] = [];
-  const townSpots: [number, number][] = [[62, -26], [70, -10], [58, 8], [76, -38], [52, 26], [44, 48], [30, 62], [-24, 58], [-36, 44]];
-  for (const [tx, tz] of townSpots) {
-    const n = 3 + Math.floor(R() * 3);
-    for (let i = 0; i < n; i++) {
-      const hx = tx + (R() - 0.5) * 12, hz = tz + (R() - 0.5) * 12;
-      const sy = sampleH(hg, hx, -hz);
-      if (sy < -1e8) continue;
-      const hy = sy - 0.45;
-      const hw = 2.0 + R() * 1.6, hh = 3 + R() * 1.6;
-      const body = new THREE.BoxGeometry(hw, hh, hw * 1.4);
-      body.translate(hx, hy + hh / 2, -hz);
-      midParts.push(body);
-      const rf = new THREE.ConeGeometry(hw * 0.95, 2.6, 4);
-      rf.rotateY(Math.PI / 4);
-      rf.translate(hx, hy + hh + 1.3, -hz);
-      mr.push(rf);
-    }
-  }
-  for (let i = 0; i < 7; i++) {
-    const h = i === 3 ? 1.5 : 4 + (i % 2);
-    const cwY = sampleH(hg, 46 + i * 3, 40);
-    if (cwY < -1e8) continue;
-    const base = cwY - 0.5;
-    const seg = new THREE.BoxGeometry(3, h, 1.6);
-    seg.translate(46 + i * 3, base + h / 2, -40);
-    midParts.push(seg);
-    if (i === 3) {
-      for (let k = 0; k < 5; k++) {
-        const b = new THREE.DodecahedronGeometry(0.7 + R(), 0);
-        b.translate(46 + i * 3 + (R() - 0.5) * 3, base + R(), -40 + (R() - 0.5) * 3);
-        midParts.push(b);
-      }
-    }
-  }
-  const wtY = sampleH(hg, -28, -62);
-  if (wtY >= -1e8) tower(midParts, mr, -28, -62, wtY - 0.5, 2.2, 22, 6, { merlons: true });
-  const midGeo = mergeGeometries(midParts.map((g) => g.toNonIndexed()), false)!;
-  for (const g of midParts) g.dispose();
-  bakeForm(midGeo, 4, 30, 0.7);
-  const midMat = basic(0x8f9ba4, 0x43566d, 0.06, 0.18);
-  midMat.map = masonry;
-  const mid = new THREE.Mesh(midGeo, midMat);
-  mid.castShadow = false; mid.receiveShadow = false;
-  group.add(mid);
-  for (const g of mr) bakeFlat(g, 0.13);
-
-  // 屋面统一合批（深色）
-  const roofAll = mergeGeometries([...cr, ...gr, ...mr].map((g) => g.toNonIndexed()), false)!;
-  for (const g of [...cr, ...gr, ...mr]) g.dispose();
-  const roofMat = basic(0x8794a6, 0x54627c, 0.065, 0.18);
-  const roofMesh = new THREE.Mesh(roofAll, roofMat);
-  roofMesh.castShadow = false; roofMesh.receiveShadow = false;
-  group.add(roofMesh);
-
-  // 裸岩 outcrop（冷灰）
-  const outGeo = new THREE.DodecahedronGeometry(3, 0);
-  outGeo.scale(1, 0.7, 1);
-  const outMat = basic(0x6a7076, 0x151d2a, 0.25, 0.3, false);
-  const outInst = new THREE.InstancedMesh(outGeo, outMat, 24);
-  for (let i = 0; i < 24; i++) {
-    const a = R() * Math.PI * 2, rr = 45 + R() * 55;
-    const ox = Math.sin(a) * rr, oz = Math.cos(a) * rr;
-    const sy = sampleH(hg, ox, -oz);
-    dummy.position.set(ox, sy < -1e8 ? -60 : sy - 0.5, -oz);
-    dummy.rotation.set(R() * 0.4, R() * 3, R() * 0.4);
-    const s = 0.7 + R() * 1.4;
-    dummy.scale.set(s, s, s);
-    dummy.updateMatrix();
-    outInst.setMatrixAt(i, dummy.matrix);
-  }
-  outInst.instanceMatrix.needsUpdate = true;
-  outInst.castShadow = false; outInst.receiveShadow = false;
-  group.add(outInst);
-
-  // ——— 仅最近 foothill 保留少量 3D 单株松 + 枯树（采样真实地形）———
-  const pineSpots: { x: number; y: number; z: number; h: number }[] = [];
-  for (let i = 0; i < 120; i++) {
-    const a = R() * Math.PI * 2, rr = 46 + R() * 30;
-    const x = Math.sin(a) * rr, z = Math.cos(a) * rr;
-    if (x > -13 && x < 32 && z > -11 && z < 32) continue;
-    const sy = sampleH(hg, x, -z);
-    if (sy < -1e8) continue;
-    pineSpots.push({ x, y: sy - 0.4, z, h: 5 + R() * 4 });
-  }
-  // Colonies on the actual crag, concentrated along shelves, never against blank sky.
-  for (let i = 0; i < 120; i++) {
-    const a = R() * Math.PI * 2, rad = 20 + R() * 26;
-    const x = Math.sin(a) * rad, z = Math.cos(a) * rad;
-    const sy = sampleH(cragSupport, x, z);
-    if (sy < -1e8 || sy > cy * 0.3 || (Math.sin(a * 5) < -0.5 && R() < 0.8)) continue;
-    pineSpots.push({ x: cx + x, y: cragY + sy - 0.55, z: -cz - z, h: 3.2 + R() * 3.9 });
-  }
-  const pineMat = basic(0x3f5757, 0x526981, 0.07, 0.17);
-  const pineInst = new THREE.InstancedMesh(pineGeometry(), pineMat, pineSpots.length);
-  pineSpots.forEach((p, i) => {
-    const s = p.h / 7.4;
-    dummy.position.set(p.x, p.y, -p.z);
-    dummy.rotation.set((R() - 0.5) * 0.12, R() * Math.PI * 2, (R() - 0.5) * 0.12);
-    dummy.scale.set(s * (0.85 + R() * 0.3), s, s * (0.85 + R() * 0.3));
-    dummy.updateMatrix();
-    pineInst.setMatrixAt(i, dummy.matrix);
-    tmpC.setScalar(0.7 + R() * 0.3);
-    pineInst.setColorAt(i, tmpC);
-  });
-  pineInst.instanceMatrix.needsUpdate = true;
-  if (pineInst.instanceColor) pineInst.instanceColor.needsUpdate = true;
-  pineInst.castShadow = false; pineInst.receiveShadow = false;
-  group.add(pineInst);
-
-  const deadMat = basic(0x3a322c, 0x1a222c, 0.15, 0.3, false);
-  const deadInst = new THREE.InstancedMesh(deadTreeGeometry(), deadMat, 12);
-  for (let i = 0; i < 12; i++) {
-    const a = R() * Math.PI * 2, rr = 46 + R() * 34;
-    const dx = Math.sin(a) * rr, dz = Math.cos(a) * rr;
-    const sy = sampleH(hg, dx, -dz);
-    const s = 1.2 + R() * 1.4;
-    dummy.position.set(dx, sy < -1e8 ? -60 : sy - 0.3, -dz);
-    dummy.rotation.set(0, R() * 3, (R() - 0.5) * 0.15);
-    dummy.scale.set(s, s, s);
-    dummy.updateMatrix();
-    deadInst.setMatrixAt(i, dummy.matrix);
-  }
-  deadInst.instanceMatrix.needsUpdate = true;
-  deadInst.castShadow = false; deadInst.receiveShadow = false;
-  group.add(deadInst);
-
-  // ——— 每帧大气驱动（锚定天空地平线；逐片段上限保护）———
-  const tmpA = new THREE.Color(), tmpB = new THREE.Color();
-  let skyUniforms: SkyUniforms | null = null;
-  ground.onBeforeRender = (_r, scene, _camera) => {
-    const fog = scene.fog as THREE.Fog | null;
-    if (!fog) return;
-    if (!skyUniforms) {
-      scene.traverse((o) => {
-        const mm = (o as THREE.Mesh).material as THREE.ShaderMaterial | undefined;
-        if (!skyUniforms && mm && mm.uniforms && mm.uniforms.uHorizon && mm.uniforms.uZenith && mm.uniforms.uCloudDark) skyUniforms = mm.uniforms as unknown as SkyUniforms;
-      });
-    }
-    const night: number = scene.userData.night ?? 0;
-    const haze = skyUniforms ? skyUniforms.uHorizon.value : fog.color;
-    for (const a of atmo) {
-      tmpA.copy(a.day).lerp(a.night, night);
-      tmpB.copy(haze).multiplyScalar(1 + night * 0.6);
-      const amount = Math.min(0.95, a.df) * (1 - night) + a.nf * night;
-      a.mat.color.copy(tmpA).lerp(tmpB, Math.min(0.95, amount));
-    }
-    if (skyUniforms) {
-      skyU.uScHorizon.value.copy(skyUniforms.uHorizon.value);
-      skyU.uScZenith.value.copy(skyUniforms.uZenith.value);
-      skyU.uScCloudDark.value.copy(skyUniforms.uCloudDark.value);
-      const su = skyUniforms as unknown as Record<string, { value: unknown }>;
-      if (su.uCloudLit) skyU.uScCloudLit.value.copy(su.uCloudLit.value as THREE.Color);
-      if (su.uSunColor) skyU.uScSunColor.value.copy(su.uSunColor.value as THREE.Color);
-      if (su.uSunDir) skyU.uScSunDir.value.copy(su.uSunDir.value as THREE.Vector3);
-      if (su.uTime) skyU.uScTime.value = su.uTime.value as number;
-      if (su.uCover) skyU.uScCover.value = su.uCover.value as number;
-      if (su.uStars) skyU.uScStars.value = su.uStars.value as number;
-      if (su.uGlow) skyU.uScGlow.value = su.uGlow.value as number;
-      if (su.uRim) skyU.uScRim.value = su.uRim.value as number;
-    }
-    winMat.color.setHex(night > 0.5 ? 0xffb25e : 0x0d1118);
-    glowMat.opacity = night * 0.6;
-    archDark.color.setHex(0x0a0d12).lerp(tmpB, night * 0.2);
+  architecture(group, ground, paints);
+  plant(group, ground, paints.trees);
+  // Refresh once per main frame, even if the first visible object is not terrain.
+  let frame = -1;
+  for (const mesh of group.children) mesh.onBeforeRender = (renderer, scene) => {
+    if (frame === renderer.info.render.frame) return;
+    frame = renderer.info.render.frame;
+    paints.update(scene);
   };
-
   return { group };
 }
