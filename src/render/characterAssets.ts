@@ -9,10 +9,11 @@ export interface HunterAsset {
   /** 归一化根节点：脚底 y=0，面朝本地 -Z，身高约 1.75m。 */
   root: THREE.Group;
   mixer: THREE.AnimationMixer;
-  clips: { idle: THREE.AnimationClip; walk: THREE.AnimationClip; run: THREE.AnimationClip };
+  idle: THREE.AnimationClip;
+  feet: { orientation: THREE.Quaternion; ankleHeight: number }[];
+  /** World-space position of the light emitter, shared by body and outfit materials. */
+  lampSource: { value: THREE.Vector3 };
   bones: Record<string, THREE.Bone>;
-  /** 挂在右手 bone 上的米制锚点（提灯用）。 */
-  handAnchor: THREE.Group;
   /** 挂在头 bone 上的米制锚点（兜帽用）。 */
   headAnchor: THREE.Group;
   /** 挂在胸椎 bone 上的米制锚点（斗篷/披肩/腰带用）。 */
@@ -138,13 +139,32 @@ function meterAnchor(bone: THREE.Bone, alignTo: THREE.Object3D): THREE.Group {
 
 const HUNTER_BONES: Record<string, RegExp> = {
   hips: /Hips/, spine: /Spine_/, spine1: /Spine1/, spine2: /Spine2/, neck: /Neck/, head: /Head_/, headTop: /HeadTop/,
-  upLegL: /LeftUpLeg/, upLegR: /RightUpLeg/, legL: /LeftLeg_/, legR: /RightLeg_/, footL: /LeftFoot/, footR: /RightFoot/,
+  toeL: /LeftToeBase/, toeR: /RightToeBase/, upLegL: /LeftUpLeg/, upLegR: /RightUpLeg/, legL: /LeftLeg_/, legR: /RightLeg_/, footL: /LeftFoot/, footR: /RightFoot/,
   armL: /LeftArm_/, armR: /RightArm_/, foreArmL: /LeftForeArm/, foreArmR: /RightForeArm/, handL: /LeftHand_/, handR: /RightHand_/,
 };
 
+/** A small shield on the body-facing side of the lantern: only its own direct
+ * light is attenuated on the wearer. Room lighting, other lamps and sim are unchanged. */
+export function shieldWatchmanLamp(sh: THREE.WebGLProgramParametersWithUniforms, source: HunterAsset['lampSource']): void {
+  sh.uniforms.uWatchmanLamp = source;
+  const light = THREE.ShaderChunk.lights_fragment_begin.replace(
+    'getPointLightInfo( pointLight, geometryPosition, directLight );',
+    `getPointLightInfo( pointLight, geometryPosition, directLight );
+     { vec3 watchLampView = (viewMatrix * vec4(uWatchmanLamp, 1.0)).xyz;
+     if (distance(pointLight.position, watchLampView) < 0.015) {
+       float wearDist = distance(geometryPosition, watchLampView);
+       directLight.color *= mix(0.11, 0.58, smoothstep(0.22, 0.83, wearDist));
+     } }`,
+  );
+  sh.fragmentShader = sh.fragmentShader
+    .replace('#include <common>', '#include <common>\nuniform vec3 uWatchmanLamp;')
+    .replace('#include <lights_fragment_begin>', light);
+}
+
 /** 原贴图去饱和 + 暖褐压暗：覆盖过亮/过花的部分，归一到圣经皮革/旧布。 */
-function hunterNormalize(mat: THREE.MeshStandardMaterial): void {
+function hunterNormalize(mat: THREE.MeshStandardMaterial, source: HunterAsset['lampSource']): void {
   mat.onBeforeCompile = (sh) => {
+    shieldWatchmanLamp(sh, source);
     sh.fragmentShader = sh.fragmentShader.replace('#include <map_fragment>', /* glsl */`#include <map_fragment>
       float hLum = dot(diffuseColor.rgb, vec3(0.3333));
       diffuseColor.rgb = mix(vec3(hLum), diffuseColor.rgb, 0.2) * vec3(0.6, 0.54, 0.47);`);
@@ -152,9 +172,10 @@ function hunterNormalize(mat: THREE.MeshStandardMaterial): void {
   mat.customProgramCacheKey = () => 'hunterNormalize';
 }
 
-function prepHunter(gltf: GLTF): HunterAsset {
+export function prepHunter(gltf: GLTF): HunterAsset {
   const scene = gltf.scene;
   const { wrap } = normalize(scene, 1.75, Math.PI);
+  const lampSource = { value: new THREE.Vector3(1000, 1000, 1000) };
   const bones: Record<string, THREE.Bone> = {};
   for (const [k, rx] of Object.entries(HUNTER_BONES)) {
     const b = findBone(scene, rx);
@@ -208,77 +229,42 @@ function prepHunter(gltf: GLTF): HunterAsset {
       const mat = m.material as THREE.MeshStandardMaterial;
       if (mat && mat.isMeshStandardMaterial) {
         mat.color.multiplyScalar(0.62);
-        mat.roughness = Math.max(mat.roughness, 0.85);
-        mat.metalness = Math.min(mat.metalness, 0.1);
-        hunterNormalize(mat);
+        mat.roughness = Math.max(mat.roughness, 0.94);
+        mat.roughnessMap = null; // packed GLB surface had glossy leather on sleeves
+        mat.metalness = 0;
+        mat.metalnessMap = null;
+        hunterNormalize(mat, lampSource);
       }
     }
   });
-  const handAnchor = meterAnchor(bones.handR ?? bones.armR ?? scene, wrap);
   const headAnchor = meterAnchor(bones.head ?? scene, wrap);
   const chestAnchor = meterAnchor(bones.spine2 ?? bones.spine ?? scene, wrap);
+  // In the normalized asset front is -Z; ankle→toe provides each boot's
+  // real forward axis (the baked stance has feet turned in different directions).
+  const feet = ['L', 'R'].map((side) => {
+    const ankle = bones[`foot${side}`], toe = bones[`toe${side}`];
+    const orientation = new THREE.Quaternion();
+    let ankleHeight = 0.125;
+    if (ankle && toe) {
+      const forward = toe.getWorldPosition(new THREE.Vector3()).sub(ankle.getWorldPosition(new THREE.Vector3()));
+      const yaw = Math.atan2(forward.x, -forward.z);
+      orientation.setFromAxisAngle(new THREE.Vector3(0, 1, 0), yaw).multiply(ankle.getWorldQuaternion(new THREE.Quaternion()));
+      ankleHeight = Math.abs(forward.y) + 0.029;
+    }
+    return { orientation, ankleHeight };
+  });
 
   const mixer = new THREE.AnimationMixer(scene);
-  const idle = gltf.animations[0] ?? new THREE.AnimationClip('idle', 1, []);
-  const { walk, run } = authorLocomotion(bones);
-  return { root: wrap, mixer, clips: { idle, walk, run }, bones, handAnchor, headAnchor, chestAnchor };
-}
-
-/** 在 mixamo 骨骼上程序化 authored 走/跑循环（四元数关键帧），与 baked Idle 交叉淡入。 */
-function authorLocomotion(bones: Record<string, THREE.Bone>): { walk: THREE.AnimationClip; run: THREE.AnimationClip } {
-  const make = (name: string, cycle: number, p: {
-    legA: number; kneeA: number; armA: number; lean: number; bob: number; twist: number; sway: number;
-  }): THREE.AnimationClip => {
-    const N = 16;
-    const times: number[] = [];
-    for (let i = 0; i <= N; i++) times.push((i / N) * cycle);
-    const tracks: THREE.KeyframeTrack[] = [];
-    const q = new THREE.Quaternion();
-    const e = new THREE.Euler();
-    const rest = new THREE.Quaternion();
-    const rotTrack = (key: string, fn: (ph: number) => [number, number, number]): void => {
-      const b = bones[key];
-      if (!b) return;
-      rest.copy(b.quaternion);
-      const vals: number[] = [];
-      for (const t of times) {
-        const [x, y, z] = fn((t / cycle) * Math.PI * 2);
-        e.set(x, y, z);
-        q.setFromEuler(e).premultiply(rest);
-        vals.push(q.x, q.y, q.z, q.w);
-      }
-      tracks.push(new THREE.QuaternionKeyframeTrack(`${b.uuid}.quaternion`, times, vals));
-    };
-    const s = Math.sin, c = Math.cos;
-    rotTrack('upLegL', (ph) => [p.legA * s(ph), 0, 0.03]);
-    rotTrack('upLegR', (ph) => [p.legA * s(ph + Math.PI), 0, -0.03]);
-    rotTrack('legL', (ph) => [p.kneeA * Math.max(0, s(ph + 1.1)) + 0.08, 0, 0]);
-    rotTrack('legR', (ph) => [p.kneeA * Math.max(0, s(ph + Math.PI + 1.1)) + 0.08, 0, 0]);
-    rotTrack('footL', (ph) => [-p.legA * s(ph) * 0.5 - p.kneeA * Math.max(0, s(ph + 1.1)) * 0.4, 0, 0]);
-    rotTrack('footR', (ph) => [-p.legA * s(ph + Math.PI) * 0.5 - p.kneeA * Math.max(0, s(ph + Math.PI + 1.1)) * 0.4, 0, 0]);
-    rotTrack('armL', (ph) => [-p.armA * s(ph), 0, 0.1]);
-    rotTrack('armR', (ph) => [-p.armA * s(ph + Math.PI), 0, -0.1]);
-    rotTrack('foreArmL', (ph) => [0.25 + 0.25 * Math.max(0, -s(ph)), 0, 0]);
-    rotTrack('foreArmR', (ph) => [0.25 + 0.25 * Math.max(0, -s(ph + Math.PI)), 0, 0]);
-    rotTrack('spine', (ph) => [p.lean, p.twist * s(ph), p.sway * s(ph)]);
-    rotTrack('spine1', (ph) => [p.lean * 0.5, p.twist * 0.5 * s(ph), 0]);
-    rotTrack('head', (ph) => [-p.lean * 0.6, -p.twist * 0.6 * s(ph), 0]);
-    const hips = bones.hips;
-    if (hips) {
-      const base = hips.position.clone();
-      const vals: number[] = [];
-      for (const t of times) {
-        const ph = (t / cycle) * Math.PI * 2;
-        vals.push(base.x + p.sway * 0.4 * s(ph), base.y - p.bob * Math.abs(c(ph)), base.z);
-      }
-      tracks.push(new THREE.VectorKeyframeTrack(`${hips.uuid}.position`, times, vals));
-    }
-    return new THREE.AnimationClip(name, cycle, tracks);
-  };
-  // 走：1.0s 周期 ≈ 1.8m 步幅（匹配 PLAYER.walkSpeed）；跑：0.62s ≈ 1.9m（匹配 sprintSpeed）。
-  const walk = make('walk', 1.0, { legA: 0.55, kneeA: 0.95, armA: 0.4, lean: 0.07, bob: 0.035, twist: 0.07, sway: 0.04 });
-  const run = make('run', 0.62, { legA: 0.9, kneeA: 1.35, armA: 0.7, lean: 0.24, bob: 0.06, twist: 0.1, sway: 0.05 });
-  return { walk, run };
+  const source = gltf.animations.find((clip) => /^idle$/i.test(clip.name));
+  const idle = source?.clone() ?? new THREE.AnimationClip('idle', 1, []);
+  // The only embedded clip is Idle. Keep the small vertical breathing motion,
+  // remove horizontal pelvis drift and preserve the model's root transform.
+  idle.tracks = idle.tracks.filter((track) => !/^(RootNode|Armature|Object_\d+)\.position$/.test(track.name));
+  for (const track of idle.tracks) if (/Hips.*\.position$/.test(track.name) && bones.hips) {
+    const { x, z } = bones.hips.position;
+    for (let i = 0; i < track.values.length; i += 3) { track.values[i] = x; track.values[i + 2] = z; }
+  }
+  return { root: wrap, mixer, idle, feet, lampSource, bones, headAnchor, chestAnchor };
 }
 
 // ---------------------------------------------------------------------------

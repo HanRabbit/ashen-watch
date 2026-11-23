@@ -5,17 +5,20 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { GHOST, PLAYER } from '../config';
-import { groundY } from '../sim/level';
+import { groundY, inArea, STAIR_MASS, supportY } from '../sim/level';
 
 /** 跨层贴地：优先用实体自身连续高度 y（B1/2F），回退到只看 x/z 的 groundY。 */
 type Grounded = { x: number; z: number; y?: number };
 const gy = (p: Grounded): number => p.y ?? groundY(p.x, p.z);
+import { cameraClearT } from '../sim/collision';
 import { GhostState, World } from '../sim/state';
-import { CharTextures, HunterAsset, ReaperAsset, ghostRags, loadCharacterAssets, loadCharTextures } from './characterAssets';
+import { CharTextures, HunterAsset, ReaperAsset, ghostRags, loadCharacterAssets, loadCharTextures, shieldWatchmanLamp } from './characterAssets';
 import { cyl, lerp, mesh, yawToRot } from './geom';
 import { Materials, glowTexture, smokeTexture } from './materials';
 import { makeClapper, makeLantern } from './props';
 import { SoftParticles } from './vfx';
+import { WatchmanPace } from './locomotion';
+import { LimbSolver } from './locomotionRig';
 
 type Lantern = ReturnType<typeof makeLantern>;
 
@@ -187,25 +190,26 @@ float cwNoise(vec3 p) {
     mix(mix(cwHash(i + vec3(0, 0, 1)), cwHash(i + vec3(1, 0, 1)), f.x), mix(cwHash(i + vec3(0, 1, 1)), cwHash(i + vec3(1, 1, 1)), f.x), f.y), f.z);
 }`;
 
-function makeCloakOutfit(tex: CharTextures | null): {
+function makeCloakOutfit(tex: CharTextures | null, lamp: HunterAsset['lampSource'], flutter: CloakFlutter): {
   hood: THREE.Group; mantle: THREE.Group; cloakPivot: THREE.Group; belt: THREE.Group; cloakMat: THREE.MeshStandardMaterial;
 } {
   const fabric = tex?.fabric;
   const leather = tex?.leather;
   // 织物贴图为中灰扫描，color 提亮补偿，使有效反照率落在圣经 #2f2a26。
   const cloakMat = new THREE.MeshStandardMaterial({
-    color: 0x8a8074, roughness: 0.96, metalness: 0, side: THREE.DoubleSide,
+    color: 0x8a8074, roughness: 0.98, metalness: 0, side: THREE.DoubleSide,
     map: fabric?.map ?? null, normalMap: fabric?.normalMap ?? null, roughnessMap: fabric?.roughnessMap ?? null,
-    normalScale: new THREE.Vector2(0.85, 0.85),
+    normalScale: new THREE.Vector2(0.48, 0.48),
   });
   if (fabric) { fabric.map.repeat.set(2.5, 2.5); fabric.normalMap.repeat.set(2.5, 2.5); fabric.roughnessMap.repeat.set(2.5, 2.5); }
   cloakMat.onBeforeCompile = (sh) => {
-    Object.assign(sh.uniforms, cloakFlutter);
+    Object.assign(sh.uniforms, flutter);
+    shieldWatchmanLamp(sh, lamp);
     sh.vertexShader = sh.vertexShader
       .replace('#include <common>', '#include <common>\nuniform float uTime, uSway;\nvarying vec3 vPos;')
       .replace('#include <begin_vertex>', /* glsl */`#include <begin_vertex>
         vPos = position;
-        float hem = smoothstep(0.1, -0.45, position.y);
+        float hem = 1.0 - smoothstep(-0.45, 0.1, position.y);
         transformed.x += sin(uTime * 3.1 + position.y * 6.0 + position.z * 3.0) * 0.022 * (0.3 + uSway) * hem;
         transformed.z += cos(uTime * 2.4 + position.x * 5.0) * 0.018 * (0.3 + uSway) * hem;`);
     sh.fragmentShader = sh.fragmentShader
@@ -217,12 +221,12 @@ function makeCloakOutfit(tex: CharTextures | null): {
         diffuseColor.rgb *= 0.66 + 0.68 * cwNoise(vPos * 5.0 + 1.3);
         diffuseColor.rgb *= 0.8 + 0.4 * cwNoise(vPos * 13.0 + 5.7);
         // 下摆泥渍（水造成，沿重力向上渐淡）：泥 #2b2620，局部噪声遮罩不满铺
-        float mudH = smoothstep(-0.12, -0.46, vPos.y);
+        float mudH = 1.0 - smoothstep(-0.46, -0.12, vPos.y);
         float mud = mudH * smoothstep(0.35, 0.72, wn);
         diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.023, 0.019, 0.014), mud * 0.7);
         // 肩背磨亮（人用出来）：只降 roughness，不改色相
         float wear = smoothstep(0.12, 0.34, vPos.y) * smoothstep(0.4, 0.78, wn2);
-        roughnessFactor *= 1.0 - 0.6 * wear;
+        roughnessFactor = clamp(roughnessFactor * (1.0 - 0.2 * wear), 0.84, 1.0);
         // 下摆破边磨损露暖褐
         float fray = mudH * smoothstep(0.62, 0.9, wn2);
         diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.16, 0.12, 0.08), fray * 0.4);`);
@@ -288,14 +292,14 @@ function makeCloakOutfit(tex: CharTextures | null): {
   mantle.position.set(0, 0.02, 0);
 
   // 及膝斗篷：背面披挂，纵向褶皱 + 破边下摆 + 后摆更长
-  const cloakGeo = new THREE.CylinderGeometry(0.18, 0.38, 0.92, 32, 9, true, -1.95, 3.9);
+  const cloakGeo = new THREE.CylinderGeometry(0.18, 0.32, 0.78, 32, 9, true, -1.54, 3.08);
   const cp = cloakGeo.attributes.position as THREE.BufferAttribute;
   for (let i = 0; i < cp.count; i++) {
     const x = cp.getX(i), y = cp.getY(i), z = cp.getZ(i);
     const ang = Math.atan2(x, z);
-    const down = (0.46 - y) / 0.92;
+    const down = (0.39 - y) / 0.78;
     const fold = 1 + Math.sin(ang * 6) * 0.12 * (0.3 + down) + Math.sin(ang * 13 + 1.2) * 0.045 * down + Math.sin(ang * 3 + 0.5) * 0.04 * down;
-    cp.setX(i, x * fold); cp.setZ(i, z * fold);
+    cp.setX(i, x * fold); cp.setZ(i, z * fold + down * (0.08 + 0.14 * Math.abs(Math.sin(ang))));
     if (y < -0.26) {
       const tear = Math.abs(Math.sin(ang * 9 + 0.7)) * 0.09 + Math.abs(Math.sin(ang * 23 + 2.1)) * 0.045;
       cp.setY(i, y - tear * (0.4 + down) - Math.cos(ang) * 0.06 * down);
@@ -303,12 +307,14 @@ function makeCloakOutfit(tex: CharTextures | null): {
   }
   cloakGeo.computeVertexNormals();
   const cloakPivot = new THREE.Group();
-  cloakPivot.add(mesh(cloakGeo, cloakMat));
+  const cape = mesh(cloakGeo, cloakMat);
+  cape.position.y = -0.39;
+  cloakPivot.add(cape);
   const cloakCollar = mesh(new THREE.TorusGeometry(0.16, 0.03, 8, 16), cloakMat);
   cloakCollar.rotation.x = Math.PI / 2;
-  cloakCollar.position.y = 0.05;
+  cloakCollar.position.y = -0.37;
   cloakPivot.add(cloakCollar);
-  cloakPivot.position.set(0, -0.33, 0.03);
+  cloakPivot.position.set(0, 0.10, 0.055);
 
   // 皮革腰带 + 铁扣 + 皮囊 + 斜挎带
   const belt = new THREE.Group();
@@ -340,7 +346,6 @@ class ProceduralPlayer {
   private lantern: Lantern;
   private clapper: THREE.Group;
   private cloak: THREE.Mesh;
-  private phase = 0;
   private raise = 0;
   private hurt = 0;
 
@@ -419,15 +424,20 @@ class ProceduralPlayer {
 
   triggerHurt(): void { this.hurt = 1; }
 
-  update(w: World, at: Grounded, yaw: number, dt: number, time: number): void {
-    const p = w.player;
+  update(w: World, at: Grounded, yaw: number, dt: number, time: number, pace: WatchmanPace): void {
     this.group.position.set(at.x, gy(at), -at.z);
     this.group.rotation.y = yawToRot(yaw);
-    const speed = p.moving ? (p.sprinting ? 1.7 : 1) : 0;
-    this.phase += dt * speed * 7.2;
-    const sw = Math.sin(this.phase) * (p.sprinting ? 0.85 : 0.55) * (speed > 0 ? 1 : 0);
-    this.legL.rotation.x = lerp(this.legL.rotation.x, sw, 0.35);
-    this.legR.rotation.x = lerp(this.legR.rotation.x, -sw, 0.35);
+    const speed = pace.speed / PLAYER.sprintSpeed;
+    const sw = pace.swing * (0.34 + pace.run * 0.24) * Math.sign(pace.forward);
+    for (const [i, leg] of [this.legL, this.legR].entries()) {
+      const f = pace.feet[i];
+      const dx = f.x - at.x, dz = f.z - at.z;
+      const forward = dx * Math.sin(yaw) + dz * Math.cos(yaw);
+      const side = dx * Math.cos(yaw) - dz * Math.sin(yaw) - leg.position.x;
+      leg.rotation.x = Math.atan2(forward, Math.max(0.35, gy(at) + leg.position.y - f.y));
+      leg.rotation.z = Math.atan2(side, Math.max(0.35, gy(at) + leg.position.y - f.y));
+      leg.scale.y = THREE.MathUtils.clamp(Math.hypot(gy(at) + leg.position.y - f.y, forward, side) / 0.89, 0.67, 1.06);
+    }
     this.armL.rotation.x = lerp(this.armL.rotation.x, -sw * 0.7, 0.3);
     const lan = w.lantern;
     this.raise = lerp(this.raise, lan.raised ? 1 : 0, Math.min(1, dt * 9));
@@ -435,10 +445,10 @@ class ProceduralPlayer {
     this.armR.rotation.z = w.inv.hasLantern ? lerp(0.12, 0.0, this.raise) : 0;
     this.lantern.group.rotation.x = -this.armR.rotation.x;
     this.lantern.group.visible = w.inv.hasLantern;
-    const bob = speed > 0 ? Math.abs(Math.sin(this.phase)) * 0.035 : Math.sin(time * 1.6) * 0.006;
+    const bob = Math.abs(pace.swing) * 0.025 + Math.sin(time * 1.6) * 0.004;
     this.hurt = Math.max(0, this.hurt - dt * 3);
     this.body.position.y = bob;
-    this.body.rotation.x = (p.sprinting ? 0.16 : 0) + this.hurt * 0.3;
+    this.body.rotation.x = pace.forward * 0.042 + this.hurt * 0.3;
     this.cloak.rotation.x = -0.05 - speed * 0.07;
     this.clapper.visible = w.inv.hasClapper;
 
@@ -447,7 +457,8 @@ class ProceduralPlayer {
     const low = lan.oil < 20 ? 0.55 + 0.45 * Math.abs(Math.sin(time * 5)) : 1;
     this.light.intensity = on ? (lan.raised ? 30 : 13) * flick * low : 0;
     this.light.distance = lan.raised ? 17 : 12;
-    this.light.position.y = lerp(1.2, 1.95, this.raise);
+    this.lantern.group.localToWorld(this.light.position.set(0, -0.10, 0));
+    this.group.parent?.worldToLocal(this.light.position);
     this.lantern.glow.visible = on;
     this.lantern.glass.emissiveIntensity = on ? 2.4 * flick : 0;
   }
@@ -810,7 +821,7 @@ class RagWraith {
 // 资产驱动的守夜人：mixamo 骨骼 + baked Idle + authored Walk/Run 交叉淡入。
 // ---------------------------------------------------------------------------
 
-const cloakFlutter = { uTime: { value: 0 }, uSway: { value: 0 } };
+type CloakFlutter = { uTime: { value: number }; uSway: { value: number } };
 
 export class PlayerModel {
   readonly group = new THREE.Group();
@@ -819,10 +830,27 @@ export class PlayerModel {
   private lantern: Lantern;
   private clapper: THREE.Group;
   private asset: HunterAsset | null = null;
-  private actions: { idle: THREE.AnimationAction; walk: THREE.AnimationAction; run: THREE.AnimationAction } | null = null;
-  private current: THREE.AnimationAction | null = null;
+  private readonly pace = new WatchmanPace();
+  private readonly limb = new LimbSolver();
+  private readonly flutter: CloakFlutter = { uTime: { value: 0 }, uSway: { value: 0 } };
+  private lastWorld: World | null = null;
   private rotS: number | null = null;
+  private readonly turnQ = new THREE.Quaternion();
+  private readonly targetTurn = new THREE.Quaternion();
+  private readonly grip = new THREE.Group();
+  private readonly target = new THREE.Vector3();
+  private readonly pole = new THREE.Vector3();
+  private readonly joint = new THREE.Vector3();
+  private readonly axisY = new THREE.Vector3(0, 1, 0);
+  private readonly limit = new THREE.Vector3();
+  private readonly ground = (x: number, z: number, y: number): number => {
+    // Match solid stair surfaces, not the smoothed visual root or a floor above the boot.
+    for (const tread of STAIR_MASS) if (Math.abs(tread.h - y) < 0.47 && inArea(tread, x, z)) return tread.h;
+    const flat = supportY(x, z, y);
+    return flat && Math.abs(flat.y - y) < 0.47 ? flat.y : y;
+  };
   private raise = 0;
+  private pelvisY: number | null = null;
   private hurt = 0;
   private cloakPivot: THREE.Group | null = null;
   private tmpQ = new THREE.Quaternion();
@@ -833,7 +861,8 @@ export class PlayerModel {
     this.lantern = makeLantern(m, tex);
     this.clapper = makeClapper(m);
     this.procedural = new ProceduralPlayer(m, tex, this.lanternLight, this.lantern, this.clapper);
-    this.group.add(this.procedural.group, this.lanternLight);
+    this.grip.name = 'watchman-lantern-grip';
+    this.group.add(this.procedural.group, this.lanternLight, this.grip);
     void Promise.all([loadCharacterAssets(), loadCharTextures()]).then(([a, t]) => {
       if (a.hunter) this.attachAsset(a.hunter, t);
     });
@@ -843,14 +872,11 @@ export class PlayerModel {
     this.asset = a;
     this.procedural.group.visible = false;
     this.group.add(a.root);
-    const { idle, walk, run } = a.clips;
-    this.actions = { idle: a.mixer.clipAction(idle), walk: a.mixer.clipAction(walk), run: a.mixer.clipAction(run) };
-    this.actions.idle.play();
-    this.current = this.actions.idle;
+    a.mixer.clipAction(a.idle).play();
     // 提灯挂右手；兜帽挂头；披肩/斗篷/腰带挂胸椎
-    this.lantern.group.position.set(0, -0.14, 0.02);
-    a.handAnchor.add(this.lantern.group);
-    const { hood, mantle, cloakPivot, belt } = makeCloakOutfit(tex);
+    this.lantern.group.position.set(0, -0.152, 0);
+    this.grip.add(this.lantern.group);
+    const { hood, mantle, cloakPivot, belt } = makeCloakOutfit(tex, a.lampSource, this.flutter);
     a.headAnchor.add(hood);
     a.chestAnchor.add(mantle, cloakPivot, belt);
     this.cloakPivot = cloakPivot;
@@ -865,64 +891,87 @@ export class PlayerModel {
   }
 
   update(w: World, at: Grounded, yaw: number, dt: number, time: number): void {
-    if (!this.asset || !this.actions) {
-      this.procedural.update(w, at, yaw, dt, time);
+    if (w !== this.lastWorld) { this.pace.reset(); this.rotS = null; this.pelvisY = null; this.lastWorld = w; }
+    const targetYaw = yawToRot(yaw);
+    if (this.rotS === null) this.rotS = targetYaw;
+    const difference = targetYaw - this.rotS;
+    this.rotS += Math.atan2(Math.sin(difference), Math.cos(difference)) * (1 - Math.exp(-14 * dt));
+    const y = gy(at);
+    const terrainY = this.ground(at.x, at.z, w.player.y);
+    this.pace.update({ x: at.x, y: terrainY, z: at.z }, -this.rotS, dt, this.ground);
+    const pace = this.pace;
+    if (!this.asset) {
+      this.procedural.update(w, at, -this.rotS, dt, time, pace);
       return;
     }
-    const a = this.asset;
-    const p = w.player;
-    this.group.position.set(at.x, gy(at), -at.z);
-    // 转身惯性：偏航平滑
-    const target = yawToRot(yaw);
-    if (this.rotS === null) this.rotS = target;
-    let d = target - this.rotS;
-    d = Math.atan2(Math.sin(d), Math.cos(d));
-    this.rotS += d * Math.min(1, dt * 10);
+    const a = this.asset, b = a.bones;
+    this.group.position.set(at.x, y, -at.z);
     this.group.rotation.y = this.rotS;
-
-    const speed = p.moving ? (p.sprinting ? PLAYER.sprintSpeed : PLAYER.walkSpeed) : 0;
-    const want = speed > 2.2 ? this.actions.run : speed > 0.01 ? this.actions.walk : this.actions.idle;
-    if (want !== this.current) {
-      want.reset().play();
-      this.current?.crossFadeTo(want, 0.25, true);
-      this.current = want;
-    }
-    this.actions.walk.timeScale = THREE.MathUtils.clamp(speed / PLAYER.walkSpeed, 0.4, 1.8);
-    this.actions.run.timeScale = THREE.MathUtils.clamp(speed / PLAYER.sprintSpeed, 0.4, 1.6);
     a.mixer.update(dt);
 
-    // 持灯/举灯：mixer 之后叠加右臂姿态
     const lan = w.lantern;
-    this.raise = lerp(this.raise, lan.raised ? 1 : 0, Math.min(1, dt * 9));
-    const b = a.bones;
-    if (w.inv.hasLantern && b.armR && b.foreArmR) {
-      this.tmpE.set(lerp(-0.1, -1.55, this.raise), 0, lerp(0.06, 0.15, this.raise));
-      this.tmpQ.setFromEuler(this.tmpE);
-      b.armR.quaternion.multiply(this.tmpQ);
-      this.tmpE.set(lerp(-0.22, -0.1, this.raise), 0, 0);
-      this.tmpQ.setFromEuler(this.tmpE);
-      b.foreArmR.quaternion.multiply(this.tmpQ);
-    }
-    // 受击 flinch
+    const smooth = (rate: number): number => 1 - Math.exp(-rate * dt);
+    this.raise = lerp(this.raise, lan.raised && w.inv.hasLantern ? 1 : 0, smooth(12));
     this.hurt = Math.max(0, this.hurt - dt * 3);
-    if (this.hurt > 0 && b.spine) {
-      this.tmpE.set(this.hurt * 0.32, 0, 0);
-      this.tmpQ.setFromEuler(this.tmpE);
-      b.spine.quaternion.multiply(this.tmpQ);
+    this.turnQ.setFromAxisAngle(this.axisY, this.rotS);
+    if (b.hips) {
+      const ground = Math.min(terrainY, Math.max(terrainY - 0.27, Math.min(...pace.feet.map((f) => f.y))));
+      const tuck = pace.run * 0.025 + Math.abs(pace.lateral) * 0.012;
+      this.pelvisY = this.pelvisY === null || Math.abs(ground - this.pelvisY) > 0.46 ? ground : lerp(this.pelvisY, ground, smooth(19));
+      b.hips.getWorldPosition(this.tmpV);
+      this.tmpV.y += this.pelvisY - y - 0.055 - tuck + Math.abs(pace.swing) * 0.029;
+      b.hips.parent?.worldToLocal(this.tmpV);
+      b.hips.position.copy(this.tmpV);
     }
-    // 提灯保持世界竖直 + 轻微钟摆
-    this.lantern.group.visible = w.inv.hasLantern;
-    a.handAnchor.getWorldQuaternion(this.tmpQ);
-    this.lantern.group.quaternion.copy(this.tmpQ).invert();
-    this.tmpE.set(0, 0, Math.sin(time * 2.2) * 0.05 * (p.moving ? 1 : 0.3));
-    this.tmpQ.setFromEuler(this.tmpE);
-    this.lantern.group.quaternion.multiply(this.tmpQ);
+    this.tilt(b.spine, pace.forward * 0.026 + this.hurt * 0.32, pace.swing * 0.075, -pace.lateral * 0.027);
+    this.tilt(b.spine1, pace.forward * 0.016, pace.swing * 0.035, -pace.lateral * 0.014);
+    this.tilt(b.head, -pace.forward * 0.021, -pace.swing * 0.051, pace.lateral * 0.018);
+
+    for (const [i, side] of ['L', 'R'].entries()) {
+      const f = pace.feet[i], boot = a.feet[i];
+      const hip = b[`upLeg${side}`], knee = b[`leg${side}`], ankle = b[`foot${side}`];
+      if (!hip || !knee || !ankle) continue;
+      this.target.set(f.x, f.y + boot.ankleHeight, -f.z);
+      this.pole.set(i === 0 ? -0.14 : 0.14, 0, -1).applyQuaternion(this.turnQ);
+      this.limb.solve(hip, knee, ankle, this.target, this.pole);
+      this.tmpQ.setFromAxisAngle(this.axisY, -f.yaw).multiply(boot.orientation);
+      this.limb.orient(ankle, this.tmpQ);
+    }
+
+    // Reach in body axes, with a separate elbow guide. The lamp does not inherit
+    // the swinging arm's twist or cross the body when transitioning to raised.
+    for (const [i, side] of ['L', 'R'].entries()) {
+      const upper = b[`arm${side}`], lower = b[`foreArm${side}`], hand = b[`hand${side}`];
+      if (!upper || !lower || !hand) continue;
+      const sign = i === 0 ? -1 : 1;
+      const carrying = i === 1 && w.inv.hasLantern;
+      const counter = pace.swing * (0.16 + pace.run * 0.16) * THREE.MathUtils.clamp(pace.forward, -1, 1) * sign;
+      if (carrying) {
+        this.target.set(lerp(0.395, 0.34, this.raise), lerp(0.88, 1.34, this.raise), lerp(-0.19, -0.53, this.raise));
+        this.target.z += counter * (1 - this.raise) * 0.12;
+      } else this.target.set(sign * 0.255, 0.81 + Math.abs(counter * 0.27), -0.045 + counter);
+      this.group.localToWorld(this.target);
+      upper.getWorldPosition(this.joint);
+      if (carrying) {
+        const t = cameraClearT(this.joint.x, -this.joint.z, this.joint.y, this.target.x, -this.target.z, this.target.y, w.doors);
+        if (t < 1) this.target.lerpVectors(this.joint, this.target, Math.max(0.24, t - 0.16));
+      }
+      this.pole.set(sign * (carrying ? 0.45 : 0.3), carrying ? -0.75 : -0.2, 0.6).applyQuaternion(this.turnQ);
+      this.limb.solve(upper, lower, hand, this.target, this.pole);
+    }
+    this.grip.visible = this.lantern.group.visible = w.inv.hasLantern;
+    if (b.handR) {
+      b.handR.getWorldPosition(this.tmpV);
+      this.grip.position.copy(this.group.worldToLocal(this.tmpV));
+    }
+    this.grip.rotation.set(-pace.forward * 0.018 * (1 - this.raise), 0,
+      (-pace.lateral * 0.024 + pace.swing * 0.041) * (1 - this.raise * 0.7));
     this.clapper.visible = w.inv.hasClapper;
-    // 斗篷 follow-through：速度/转身滞后
-    cloakFlutter.uTime.value = time;
-    cloakFlutter.uSway.value = lerp(cloakFlutter.uSway.value, (speed / PLAYER.sprintSpeed) + Math.abs(d) * 2, Math.min(1, dt * 5));
+    this.flutter.uTime.value = time;
+    this.flutter.uSway.value = lerp(this.flutter.uSway.value, pace.activity * 0.44 + Math.abs(pace.turn) * 0.055, smooth(5));
     if (this.cloakPivot) {
-      this.cloakPivot.rotation.x = lerp(this.cloakPivot.rotation.x, -0.03 - (speed / PLAYER.sprintSpeed) * 0.16, Math.min(1, dt * 6));
+      this.cloakPivot.rotation.x = lerp(this.cloakPivot.rotation.x, -0.085 - Math.max(0, pace.forward) * 0.038, smooth(7));
+      this.cloakPivot.rotation.z = lerp(this.cloakPivot.rotation.z, -pace.lateral * 0.047 + pace.turn * 0.009, smooth(6));
     }
 
     const on = w.inv.hasLantern && lan.on && lan.oil > 0;
@@ -930,12 +979,20 @@ export class PlayerModel {
     const low = lan.oil < 20 ? 0.55 + 0.45 * Math.abs(Math.sin(time * 5)) : 1;
     this.lanternLight.intensity = on ? (lan.raised ? 30 : 13) * flick * low : 0;
     this.lanternLight.distance = lan.raised ? 17 : 12;
-    this.lantern.group.getWorldPosition(this.tmpV);
-    this.group.worldToLocal(this.tmpV);
-    this.lanternLight.position.copy(this.tmpV);
+    // Candle flame, not the hand/pivot or an arbitrary point in the coat.
+    this.lantern.group.localToWorld(a.lampSource.value.set(0, -0.10, 0));
+    this.lanternLight.position.copy(this.group.worldToLocal(this.limit.copy(a.lampSource.value)));
     this.lantern.glow.visible = on;
     this.lantern.glass.emissiveIntensity = on ? 2.4 * flick : 0;
   }
+
+  private tilt(joint: THREE.Bone | undefined, x: number, y: number, z: number): void {
+    if (!joint) return;
+    this.tmpQ.setFromEuler(this.tmpE.set(x, y, z)).premultiply(this.turnQ).multiply(this.targetTurn.copy(this.turnQ).invert());
+    joint.getWorldQuaternion(this.targetTurn).premultiply(this.tmpQ);
+    this.limb.orient(joint, this.targetTurn);
+  }
+
 }
 
 // ---------------------------------------------------------------------------
