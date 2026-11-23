@@ -5,9 +5,9 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { BRAZIER, BrazierId, HEARTH, LightZone, WALL_LAMP } from '../config';
 import { B1_Y, BELL_POS, BRAZIER_POS, DOORS, INTERACTS, LAMP_POS, PROPS, RAISED_Y } from '../sim/level';
 import { World } from '../sim/state';
-import { archLeaf, archPath, boxMesh, cyl, halfArchLeaf, lerp, mesh, put } from './geom';
+import { archLeaf, archPath, boxMesh, cyl, lerp, mesh, put } from './geom';
 import { glowTexture, grimeTexture, Materials, smokeTexture } from './materials';
-import { findNode, loadProp, mergeByMaterial, sackGeometry, sackTie } from './propAssets';
+import { findNode, heroFinish, heroOutline, heroSolid, loadProp, mergeByMaterial, sackGeometry, sackTie } from './propAssets';
 import { variants } from './materialVariants';
 import type { Quality } from './view';
 
@@ -386,6 +386,136 @@ function zoneDisc(zn: LightZone, tex: THREE.Texture, y: number): THREE.Mesh {
 
 const BRAZIER_IDS = Object.keys(BRAZIER.zones) as BrazierId[];
 
+function chapelOak(m: Materials): THREE.MeshStandardMaterial {
+  return heroFinish(variants(m).woodPlank, 'chapel-oak', /* glsl */`
+    float y = vHeroPos.y;
+    float foot = (1.0 - smoothstep(0.025, 0.41, y)) * (0.67 + 0.23 * sin(vHeroPos.x * 47.0));
+    float dripY = min(abs(y - 0.39), abs(y - 1.62));
+    float drip = (1.0 - smoothstep(0.008, 0.093, dripY)) * pow(0.5 + 0.5 * sin(vHeroPos.x * 103.0), 3.0);
+    float handling = 1.0 - smoothstep(0.025, 0.155,
+      length((vHeroPos.xy - vec2(0.735, 1.16)) * vec2(1.0, 0.73)));
+    diffuseColor.rgb *= 1.33 - 0.48 * foot - 0.22 * drip;
+    roughnessFactor -= 0.17 * handling + 0.09 * foot;
+  `);
+}
+
+/** The arch, gaps and hardware are cut into each leaf, then batched in its original hinge space. */
+function buildChapelLeaf(
+  pivot: THREE.Group, w: number, h: number, out: number,
+  oak: THREE.Material, iron: THREE.Material, touched: THREE.Material,
+): void {
+  const spring = h * (2.2 / 3.2), control = spring + (h - spring) * 0.72;
+  const top = (x: number) => {
+    // Same quadratic as the existing jamb: x(t) = w*t².
+    const t = Math.sqrt(x / w);
+    return spring * (1 - t) ** 2 + 2 * control * t * (1 - t) + h * t ** 2 - 0.021;
+  };
+  const board = (l: number, r: number, seed: number, bottom: number, upper: (x: number) => number,
+    depth: number, z: number, across = false) => {
+    const profile: [number, number][] = [[l + 0.006, bottom + 0.006], [r - 0.004, bottom], [r, bottom + 0.018]];
+    for (let i = 0; i <= 6; i++) {
+      const x = THREE.MathUtils.lerp(r, l, i / 6);
+      profile.push([x, upper(x)]);
+    }
+    const g = heroSolid(heroOutline(profile), depth, 0.005);
+    const p = g.attributes.position, n = g.attributes.normal, uv = g.attributes.uv;
+    // One real board per scan strip (never wrap a baked seam across a physical plank).
+    const centers = [0.064, 0.137, 0.243, 0.322, 0.429, 0.527, 0.629, 0.714, 0.82, 0.908, 0.961];
+    for (let i = 0; i < p.count; i++) {
+      const px = p.getX(i), py = p.getY(i), pz = p.getZ(i);
+      const edge = Math.abs(n.getX(i)) > 0.6;
+      const u = across ? (py - (upper(l) + bottom) * 0.5) * 0.33
+        : edge ? pz * 0.5 : (px - (l + r) * 0.5) * 0.21;
+      const v = across ? px * 0.84 : py * 0.34;
+      uv.setXY(i, centers[seed % centers.length] + u, v + seed * 0.231);
+    }
+    const plank = mesh(g, oak);
+    plank.position.z = z;
+    pivot.add(plank);
+  };
+  const edges = [0.011 / w, 0.186, 0.397, 0.575, 0.785, 1 - 0.008 / w];
+  for (let i = 0; i < edges.length - 1; i++) {
+    const s = i + (out < 0 ? 0 : 3);
+    board(edges[i] * w + 0.0015, edges[i + 1] * w - 0.0015, s * 3,
+      0.018 + (s % 3) * 0.0035, top, 0.087 + (s % 3) * 0.003, (s % 3 - 1) * 0.003);
+    if (i > 0) {
+      // The grooves are blind: a recessed oak spline backs each seam without filling the bevel.
+      const x = edges[i] * w;
+      board(x - 0.013, x + 0.014, s, 0.031, (u) => top(u) - 0.014, 0.03, 0);
+    }
+  }
+  for (const [i, y] of [0.46, 1.69, 2.00].entries()) {
+    board(0.057, w - 0.046, i + 4, y - 0.055, () => y + 0.052, 0.045, -out * 0.062, true);
+  }
+  // Interior bracing bears on those ledges, transferring the free corner's weight back to the hinge.
+  const braceStart = new THREE.Vector3(0.09, 0.50, -out * 0.066);
+  const braceEnd = new THREE.Vector3(w - 0.094, 1.64, -out * 0.066);
+  const braceLen = braceStart.distanceTo(braceEnd);
+  const brace = heroSolid(heroOutline([[-0.047, 0.015], [0.046, -0.02], [0.045, braceLen - 0.025], [-0.043, braceLen + 0.019]]), 0.047, 0.006);
+  const bp = brace.attributes.position, buv = brace.attributes.uv;
+  for (let i = 0; i < bp.count; i++) buv.setXY(i, 0.63 + bp.getX(i) * 0.57, 0.26 + bp.getY(i) * 0.64);
+  const diagonal = mesh(brace, oak);
+  diagonal.position.copy(braceStart);
+  diagonal.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), braceEnd.sub(braceStart).normalize());
+  pivot.add(diagonal);
+
+  const xTip = w - 0.122;
+  const boss = (x: number, y: number, z: number, r = 0.013) => {
+    const g = new THREE.CylinderGeometry(r * 0.60, r, 0.012, 6).rotateX(z > 0 ? HALF_PI : -HALF_PI);
+    pivot.add(mesh(g, touched).translateX(x).translateY(y).translateZ(z));
+  };
+  const plate = (outline: THREE.Shape, depth: number, bevel: number, z: number) => {
+    const part = mesh(heroSolid(outline, depth, bevel), iron);
+    part.position.z = z;
+    pivot.add(part);
+  };
+  for (const y of [0.46, 1.69]) {
+    const s = new THREE.Shape();
+    s.moveTo(0.01, y - 0.04);
+    s.quadraticCurveTo(0.21, y - 0.03, xTip - 0.137, y - 0.022);
+    s.quadraticCurveTo(xTip - 0.095, y - 0.024, xTip - 0.071, y - 0.058);
+    s.quadraticCurveTo(xTip - 0.051, y - 0.016, xTip, y);
+    s.quadraticCurveTo(xTip - 0.051, y + 0.016, xTip - 0.071, y + 0.058);
+    s.quadraticCurveTo(xTip - 0.095, y + 0.024, xTip - 0.137, y + 0.022);
+    s.quadraticCurveTo(0.21, y + 0.03, 0.01, y + 0.04);
+    s.closePath();
+    plate(s, 0.023, 0.005, out * 0.057);
+    const eye = mesh(new THREE.CylinderGeometry(0.034, 0.034, 0.093, 10), iron);
+    eye.position.set(0.022, y, out * 0.06); pivot.add(eye);
+    const cap = mesh(new THREE.CylinderGeometry(0.026, 0.034, 0.024, 8), touched);
+    cap.position.set(0.022, y + 0.056, out * 0.06); pivot.add(cap);
+    for (const x of [0.101, w * 0.31, w * 0.53, xTip - 0.092]) {
+      boss(x, y, out * 0.073);
+      if (x > 0.14) boss(x, y, -out * 0.09, 0.011);
+    }
+  }
+  const x = w - 0.165;
+  const handleY = 1.22;
+  // A lobed escutcheon takes the load; a captive eye supports the drop ring away from the oak.
+  const escutcheon = new THREE.Shape();
+  escutcheon.moveTo(x, handleY + 0.116);
+  escutcheon.quadraticCurveTo(x + 0.032, handleY + 0.075, x + 0.052, handleY + 0.077);
+  escutcheon.quadraticCurveTo(x + 0.044, handleY + 0.034, x + 0.081, handleY);
+  escutcheon.quadraticCurveTo(x + 0.044, handleY - 0.034, x + 0.052, handleY - 0.077);
+  escutcheon.quadraticCurveTo(x + 0.032, handleY - 0.075, x, handleY - 0.116);
+  escutcheon.quadraticCurveTo(x - 0.032, handleY - 0.075, x - 0.052, handleY - 0.077);
+  escutcheon.quadraticCurveTo(x - 0.044, handleY - 0.034, x - 0.081, handleY);
+  escutcheon.quadraticCurveTo(x - 0.044, handleY + 0.034, x - 0.052, handleY + 0.077);
+  escutcheon.quadraticCurveTo(x - 0.032, handleY + 0.075, x, handleY + 0.116);
+  escutcheon.closePath();
+  plate(escutcheon, 0.018, 0.004, out * 0.057);
+  for (const side of [-1, 1]) {
+    boss(x, handleY + side * 0.080, out * 0.073, 0.012);
+    const eye = mesh(new THREE.TorusGeometry(0.025, 0.009, 6, 12).rotateY(HALF_PI), iron);
+    eye.position.set(x, handleY + 0.031, side * 0.078); pivot.add(eye);
+    const ring = mesh(new THREE.TorusGeometry(0.060, 0.012, 7, 20), touched);
+    ring.scale.set(0.94, 1.09, 1);
+    ring.rotation.x = side * 0.09;
+    ring.position.set(x, handleY - 0.040, side * 0.103); pivot.add(ring);
+  }
+  mergeByMaterial(pivot);
+}
+
 export class Props {
   readonly group = new THREE.Group();
   readonly hearthLight = new THREE.PointLight(0xff9a48, 0, 16, 1.6);
@@ -538,15 +668,21 @@ export class Props {
     put(this.frontR, front.hinge.x, frontBase, front.box.z1);
     this.frontL.rotation.y = HALF_PI;
     this.frontR.rotation.y = -HALF_PI;
-    for (const d of [this.frontL, this.frontR]) {
-      d.add(mesh(halfArchLeaf(frontHalf, frontHeight * (2.2 / 3.2), frontHeight, 0.1), m.wood));
-      for (const y of [0.5, 1.7]) {
-        const strap = boxMesh(m.iron, frontHalf * 0.78, 0.07, 0.12, 1); strap.position.set(frontHalf * 0.42, y, 0);
-        d.add(strap);
-      }
-      const ring = mesh(new THREE.TorusGeometry(0.08, 0.014, 5, 10), m.iron); ring.position.set(frontHalf * 0.84, 1.15, 0);
-      ring.scale.z = 4; d.add(ring);
-    }
+    this.frontL.name = 'chapel-west-south-leaf';
+    this.frontR.name = 'chapel-west-north-leaf';
+    const doorOak = chapelOak(m);
+    const strapIron = heroFinish(m.iron, 'chapel-scale', /* glsl */`
+      // Oxide scale softens reflections; recessed iron is not glossy black paint.
+      diffuseColor.rgb = diffuseColor.rgb * 1.15 + vec3(0.014, 0.014, 0.013);
+      metalnessFactor *= 0.74;
+    `);
+    const handIron = heroFinish(m.iron, 'chapel-hand-iron', /* glsl */`
+      diffuseColor.rgb = diffuseColor.rgb * 1.68 + vec3(0.022, 0.023, 0.024);
+      roughnessFactor = max(0.40, roughnessFactor * 0.76);
+      metalnessFactor *= 0.81;
+    `);
+    buildChapelLeaf(this.frontL, frontHalf, frontHeight, -1, doorOak, strapIron, handIron);
+    buildChapelLeaf(this.frontR, frontHalf, frontHeight, 1, doorOak, strapIron, handIron);
     g.add(this.frontL, this.frontR);
 
     // 庭院壁灯（PRP-02）：卷草锻铁挂臂 + 悬挂六角铁灯笼（玻璃 + 顶盖），对标概念图

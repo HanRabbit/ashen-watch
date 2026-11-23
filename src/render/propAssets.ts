@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { trackPending } from './materials';
+import { texturesReady, trackPending } from './materials';
 
 const loader = new GLTFLoader();
 loader.setMeshoptDecoder(MeshoptDecoder);
@@ -181,6 +181,47 @@ export function applyWear(mat: THREE.MeshStandardMaterial, o: WearOpts): void {
   mat.needsUpdate = true;
 }
 
+
+/** A small chamfer cut *into* an XY outline. The stated thickness and silhouette include the bevel. */
+export function heroSolid(outline: THREE.Shape, depth: number, bevel: number): THREE.ExtrudeGeometry {
+  const g = new THREE.ExtrudeGeometry(outline, {
+    depth: depth - 2 * bevel, bevelThickness: bevel, bevelSize: bevel, bevelOffset: -bevel,
+    bevelSegments: 1, curveSegments: 6,
+  });
+  g.translate(0, 0, bevel - depth / 2);
+  return g;
+}
+
+export function heroOutline(points: [number, number][]): THREE.Shape {
+  const shape = new THREE.Shape(points.map(([x, y]) => new THREE.Vector2(x, y)));
+  shape.closePath();
+  return shape;
+}
+
+/** A prop-local finish layered over a shared PBR family, without mutating it or loading more maps.
+ * Positions are in asset/pivot space (after batching), so wear follows the object when it moves.
+ */
+export function heroFinish(base: THREE.MeshStandardMaterial, key: string, finish: string): THREE.MeshStandardMaterial {
+  const mat = base.clone();
+  // MeshStandardMaterial.clone() doesn't carry shader hooks or future async map assignments.
+  mat.onBeforeCompile = (shader, renderer) => {
+    base.onBeforeCompile.call(base, shader, renderer);
+    shader.vertexShader = 'varying vec3 vHeroPos;\n' + shader.vertexShader.replace(
+      '#include <begin_vertex>', '#include <begin_vertex>\nvHeroPos = position;');
+    shader.fragmentShader = 'varying vec3 vHeroPos;\n' + shader.fragmentShader.replace(
+      '#include <metalnessmap_fragment>', '#include <metalnessmap_fragment>\n{\n' + finish + '\n}');
+  };
+  mat.customProgramCacheKey = () => `${base.customProgramCacheKey()}:hero-${key}`;
+  trackPending(texturesReady.then(() => {
+    mat.map = base.map;
+    mat.normalMap = base.normalMap;
+    mat.roughnessMap = base.roughnessMap;
+    mat.aoMap = base.aoMap;
+    mat.normalScale.copy(base.normalScale);
+    mat.needsUpdate = true;
+  }));
+  return mat;
+}
 
 /** 麻袋形体：底部摊平贴地、袋身鼓腹、扎口颈 + 塌落袋口、布褶垂坠（非球面）。 */
 export function sackGeometry(seed: number, r: number, h: number, slump: number): THREE.BufferGeometry {

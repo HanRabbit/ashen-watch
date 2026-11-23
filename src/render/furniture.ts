@@ -6,7 +6,7 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { BARRELS, PROPS, RAISED_Y, WELL } from '../sim/level';
 import { Batch } from './geom';
 import { Materials, scaleUV, tiledBox, trackPending } from './materials';
-import { applyWear, loadProp, mergeByMaterial, sackGeometry, sackTie } from './propAssets';
+import { applyWear, heroFinish, heroOutline, heroSolid, loadProp, mergeByMaterial, sackGeometry, sackTie } from './propAssets';
 import { Variants, variants } from './materialVariants';
 
 const R = RAISED_Y;
@@ -136,6 +136,239 @@ function makeBanner(m: Materials, v: Variants, w: number, h: number, seed: numbe
   return g;
 }
 
+/** Well: sawn coping over a staggered stone curb, socketed oak trusses and a hand-cranked windlass. */
+function courtyardWell(m: Materials, v: Variants): THREE.Group {
+  const g = new THREE.Group();
+  g.name = 'courtyard-well';
+  const stone = heroFinish(v.wallTrim, 'well-stone', /* glsl */`
+    vec3 p = vHeroPos;
+    float r = length(p.xz);
+    vec2 streakUV = vec2(p.x + p.z * 0.83, p.y);
+    float drips = smoothstep(0.45, 0.74, awFbm(streakUV * vec2(12.0, 2.6)));
+    float inland = 1.0 - smoothstep(0.66, 0.76, r);
+    float splash = (1.0 - smoothstep(0.085, 0.36, p.y)) * (0.65 + 0.35 * drips);
+    float runoff = drips * smoothstep(0.24, 0.58, p.y) * (1.0 - smoothstep(0.67, 0.81, p.y));
+    float damp = max(inland * 0.93, max(splash, runoff * 0.76));
+    float rim = smoothstep(0.752, 0.82, p.y);
+    float hand = rim * (1.0 - smoothstep(0.08, 0.52, distance(p.xz, vec2(-0.21, 0.80))));
+    float grain = awFbm(streakUV * 32.0 + p.xz * 9.0);
+    float patina = awFbm(streakUV * 4.2 + p.xz * 2.8);
+    float shade = mix(0.35, 1.0, smoothstep(0.05, 0.75, p.z));
+    float moss = smoothstep(0.37, 0.72, patina * 0.78 + grain * 0.22)
+      * (1.0 - smoothstep(0.21, 0.59, p.y)) * shade;
+    diffuseColor.rgb *= (0.84 + 0.27 * patina + 0.14 * grain) * (1.0 - 0.56 * damp);
+    diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.037, 0.046, 0.023) * (0.70 + 0.55 * grain), moss * 0.58);
+    roughnessFactor = mix(max(0.55, roughnessFactor - 0.15 * hand), 0.42, damp * 0.78);
+  `);
+  const mortar = heroFinish(v.wallRough, 'well-mortar', /* glsl */`
+    float grain = awFbm(vHeroPos.xz * 19.0 + vHeroPos.y * 23.0);
+    diffuseColor.rgb *= mix(0.23, 0.40, grain) * smoothstep(-0.23, 0.6, vHeroPos.y);
+    roughnessFactor = 0.84;
+  `);
+  const slate = heroFinish(v.roofShingle, 'well-slate', /* glsl */`
+    float eave = smoothstep(0.25, 0.65, abs(vHeroPos.z));
+    diffuseColor.rgb *= mix(1.19, 0.73, eave);
+    roughnessFactor = max(0.51, roughnessFactor - 0.12 * eave);
+  `);
+  const oak = heroFinish(v.woodPlank, 'well-oak', /* glsl */`
+    float foot = (1.0 - smoothstep(0.8, 1.12, vHeroPos.y)) * smoothstep(0.62, 0.82, abs(vHeroPos.x));
+    diffuseColor.rgb *= 1.12 - 0.51 * foot;
+    roughnessFactor -= 0.10 * foot;
+  `);
+  const wornIron = heroFinish(m.iron, 'well-hand-iron', /* glsl */`
+    diffuseColor.rgb = diffuseColor.rgb * 1.55 + vec3(0.012, 0.012, 0.011);
+    roughnessFactor = max(0.39, roughnessFactor * 0.75);
+    metalnessFactor *= 0.83;
+  `);
+  const add = (mat: THREE.Material, geo: THREE.BufferGeometry, x = 0, y = 0, z = 0) => {
+    const part = new THREE.Mesh(geo, mat);
+    part.position.set(x, y, z); g.add(part);
+    return part;
+  };
+  // Deterministic hand-cut deviations; joints stagger between lifts, not across one flat texture.
+  const rnd = (n: number) => THREE.MathUtils.euclideanModulo(Math.sin(n * 37.19 + 0.8) * 17393.13, 1);
+  const tau = Math.PI * 2;
+  const masonry = (n: number, inner: number, outer: number, lo: number, hi: number, phase: number, bevel: number) => {
+    const edges = Array.from({ length: n + 1 }, (_, i) =>
+      (i + phase + (rnd(i % n + phase * 71) - 0.5) * 0.36) * tau / n);
+    for (let i = 0; i < n; i++) {
+      const seed = i + phase * 89;
+      const gap = 0.005 + rnd(seed + 27) * 0.011;
+      const a = edges[i] + gap, b = edges[i + 1] - gap;
+      const mid = (a + b) / 2;
+      const r = outer + (rnd(seed) - 0.5) * 0.069;
+      const point = (t: number, d: number): [number, number] => [Math.cos(t) * d, Math.sin(t) * d];
+      const chip = 0.003 + 0.027 * rnd(seed + 36);
+      const poly = heroOutline([
+        point(a, inner + chip * 0.3), point(a, r - chip), point(THREE.MathUtils.lerp(a, b, 0.18), r),
+        point(mid, r + (rnd(seed + 16) - 0.37) * 0.035), point(THREE.MathUtils.lerp(a, b, 0.77), r - chip * 0.36),
+        point(b, r - chip), point(b, inner + 0.009), point(mid, inner - chip * 0.47),
+      ]);
+      const y = (lo + hi) / 2 + (rnd(seed + 25) - 0.5) * 0.032;
+      const cut = bevel * (0.59 + rnd(seed + 15) * 0.83);
+      const geo = heroSolid(poly, hi - lo + (rnd(seed + 9) - 0.5) * 0.032, cut).rotateX(-HALF_PI);
+      const p = geo.attributes.position, normals = geo.attributes.normal, uv = geo.attributes.uv;
+      // Pick the unjointed part of the scan. Profile variations change the edges, not just the albedo.
+      const u0 = 0.555 + rnd(seed + 19) * 0.15, v0 = 0.378 + rnd(seed + 29) * 0.038;
+      for (let k = 0; k < p.count; k++) {
+        const x = p.getX(k), z = p.getZ(k), yy = p.getY(k);
+        const tang = x * -Math.sin(mid) - z * Math.cos(mid);
+        const rad = x * Math.cos(mid) - z * Math.sin(mid);
+        const up = Math.abs(normals.getY(k)) > 0.5;
+        const lean = tang * (rnd(seed + 11) - 0.5) * 0.10 + (rad - r) * (rnd(seed + 6) - 0.5) * 0.085;
+        // Small spall at an exposed rim block, easing in toward the sheltered throat.
+        const spall = hi > 0.8 && i === 2 && yy > 0 && rad > outer - 0.13
+          ? Math.max(0, 0.027 - Math.abs(tang) * 0.12) : 0;
+        p.setY(k, yy + lean + Math.sin(tang * 32 + seed) * 0.005 - spall);
+        uv.setXY(k, u0 + tang * 0.42, v0 + (up ? (rad - r) * 0.39 : yy * 0.48));
+      }
+      geo.computeVertexNormals();
+      add(stone, geo, 0, y);
+    }
+  };
+  masonry(15, 0.59, 1.244, -0.039, 0.06, 0.18, 0.012); // footings bed into the existing cobbles
+  masonry(11, 0.59, 0.953, 0.044, 0.297, 0.58, 0.022);
+  masonry(12, 0.61, 0.918, 0.273, 0.507, 1.04, 0.021);
+  masonry(11, 0.61, 0.908, 0.484, 0.712, 0.62, 0.023);
+  masonry(9, 0.605, 0.964, 0.69, 0.849, 0.88, 0.029); // wider hand-worn coping
+  // Recessed mortar backing and the darker wet throat, not a solid cylinder across the opening.
+  add(mortar, new THREE.CylinderGeometry(0.852, 0.893, 0.715, 36, 1, true), 0, 0.35);
+  add(mortar, new THREE.CylinderGeometry(0.667, 0.646, 0.73, 36, 1, true).scale(-1, 1, 1), 0, 0.35);
+  const water = new THREE.MeshStandardMaterial({ color: 0x191d20, roughness: 0.28, metalness: 0.05 });
+  add(water, new THREE.CircleGeometry(0.665, 32).rotateX(-HALF_PI), 0, 0.027);
+
+  // All timber is cut with the grain along its axis, including the angled braces and rafters.
+  const timber = (a: [number, number, number], b: [number, number, number], width: number, depth: number, seed: number) => {
+    const start = new THREE.Vector3(...a), end = new THREE.Vector3(...b);
+    const h = start.distanceTo(end);
+    const geo = heroSolid(heroOutline([
+      [-width * 0.5, 0], [width * 0.5, 0], [width * 0.48, h * 0.38],
+      [width * 0.5, h], [-width * 0.48, h], [-width * 0.54, h * 0.64],
+    ]), depth, Math.min(0.013, width * 0.15, depth * 0.22));
+    const uv = geo.attributes.uv, p = geo.attributes.position, normals = geo.attributes.normal;
+    for (let k = 0; k < p.count; k++) {
+      const s = Math.abs(normals.getZ(k)) >= Math.abs(normals.getX(k)) ? p.getX(k) / width : p.getZ(k) / depth;
+      uv.setXY(k, 0.062 + (seed % 7) * 0.127 + s * 0.067, p.getY(k) * 0.51 + rnd(seed));
+    }
+    const member = add(oak, geo, ...a);
+    member.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), end.sub(start).normalize());
+  };
+  const pin = (x: number, y: number, z: number, alongX: boolean, r = 0.019, l = 0.026) => {
+    const geo = new THREE.CylinderGeometry(r * 0.8, r, l, 6);
+    if (alongX) geo.rotateZ(HALF_PI); else geo.rotateX(HALF_PI);
+    add(m.iron, geo, x, y, z);
+  };
+  const ridge = 2.58, eave = 1.81, run = 0.655;
+  timber([-1.07, 2.46, 0], [1.07, 2.46, 0], 0.105, 0.11, 6);
+  for (const [i, x] of [-0.808, 0.808].entries()) {
+    timber([x, 0.78, 0], [x + 0.009, 2.47, 0], 0.156, 0.177, 14 + i * 3);
+    timber([x, 1.83, -0.58], [x, 1.83, 0.58], 0.124, 0.117, 9 + i);
+    timber([x, 1.12, 0], [x * 0.48, 1.85, 0], 0.103, 0.108, 12 + i);
+    for (const side of [-1, 1]) {
+      timber([x, 1.39, 0], [x, 1.87, side * 0.41], 0.08, 0.095, i * 5 + side + 3);
+      timber([x, eave - 0.025, side * 0.67], [x, ridge - 0.085, 0], 0.101, 0.096, i * 3 + side + 8);
+      pin(x + Math.sign(x) * 0.084, 1.82, side * 0.37, true);
+      pin(x, 1.29, side * 0.094, false);
+    }
+  }
+  const pitch = Math.atan2(ridge - eave, run);
+  const slope = Math.hypot(ridge - eave, run);
+  for (const side of [-1, 1]) {
+    // Individual split slates overlap up the pitch. Non-periodic tail lengths and chipped corners.
+    const field = new THREE.Group();
+    field.rotation.x = side * pitch;
+    field.position.set(0, eave, side * run);
+    g.add(field);
+    for (let row = 0; row < 5; row++) {
+      const start = row * slope / 5;
+      timber([-1.027, eave + start * Math.sin(pitch) - 0.042, side * (run - start * Math.cos(pitch))],
+        [1.027, eave + start * Math.sin(pitch) - 0.042, side * (run - start * Math.cos(pitch))], 0.044, 0.052, row + 4);
+      const n = 8 + row % 2;
+      const edges = Array.from({ length: n + 1 }, (_, k) => -1.077 + 2.154 * k / n + (k > 0 && k < n ? 0.041 * (rnd(k + row * 19) - 0.5) : 0));
+      for (let k = 0; k < n; k++) {
+        const seed = row * 29 + k + (side === 1 ? 300 : 0);
+        const l = edges[k] + 0.002, r = edges[k + 1] - 0.002;
+        const tail = start + (rnd(seed) - 0.5) * 0.035;
+        const head = Math.min(slope + 0.016, start + slope / 5 + 0.08);
+        const chip = 0.013 + 0.025 * rnd(seed + 17);
+        const tile = heroSolid(heroOutline([[l, tail + chip], [l + chip, tail], [r - chip * 0.65, tail + 0.004],
+          [r, tail + chip], [r, head], [l + 0.008, head]]), 0.023, 0.004);
+        const p = tile.attributes.position, uv = tile.attributes.uv;
+        const u0 = 0.041 + 0.14 * (k % 7), v0 = 0.025 + 0.112 * (Math.floor(rnd(seed + 50) * 8));
+        for (let j = 0; j < p.count; j++) uv.setXY(j, u0 + (p.getX(j) - l) * 0.34, v0 + (p.getY(j) - tail) * 0.29);
+        // From the XY profile into the local roof plane. The higher course lies on top of the lap.
+        tile.rotateX(-side * HALF_PI);
+        tile.translate(0, 0.011 + row * 0.009 + rnd(seed + 7) * 0.004, 0);
+        field.add(new THREE.Mesh(tile, slate));
+      }
+    }
+  }
+  // Split ridge covers wrap the apex and hide the heads of the last courses.
+  for (let i = 0; i < 7; i++) {
+    const l = -1.08 + i * 0.308;
+    for (const side of [-1, 1]) {
+      const cap = heroSolid(heroOutline([[l, -0.066], [l + 0.321, -0.072], [l + 0.312, 0.062], [l + 0.004, 0.067]]), 0.029, 0.006);
+      cap.rotateX(-HALF_PI - side * pitch * 0.8);
+      add(slate, cap, 0, ridge + 0.02, side * 0.046);
+    }
+  }
+
+  const axleY = 1.465;
+  const drum = new THREE.CylinderGeometry(0.077, 0.075, 1.38, 12).rotateZ(HALF_PI);
+  const drumUV = drum.attributes.uv;
+  for (let i = 0; i < drumUV.count; i++) drumUV.setXY(i, 0.45 + drumUV.getX(i) * 0.07, drumUV.getY(i) * 0.66);
+  add(oak, drum, 0, axleY);
+  add(m.iron, new THREE.CylinderGeometry(0.025, 0.025, 1.92, 10).rotateZ(HALF_PI), 0, axleY);
+  for (const x of [-0.91, -0.663, 0.663, 0.91]) {
+    const r = Math.abs(x) < 0.9 ? 0.082 : 0.04;
+    add(m.iron, new THREE.CylinderGeometry(r, r, 0.031, 12).rotateZ(HALF_PI), x, axleY);
+  }
+  const crank = new THREE.CatmullRomCurve3([
+    new THREE.Vector3(-0.935, axleY, 0), new THREE.Vector3(-0.974, axleY - 0.03, 0.042),
+    new THREE.Vector3(-0.974, axleY - 0.153, 0.17), new THREE.Vector3(-1.016, axleY - 0.19, 0.195),
+  ]);
+  add(m.iron, new THREE.TubeGeometry(crank, 14, 0.022, 6, false));
+  add(wornIron, new THREE.CapsuleGeometry(0.028, 0.116, 3, 10).rotateZ(HALF_PI), -1.092, axleY - 0.19, 0.195);
+
+  const spool: THREE.Vector3[] = [];
+  for (let i = 0; i <= 88; i++) {
+    const t = i / 88, a = t * 16 * tau;
+    spool.push(new THREE.Vector3(-0.205 + t * 0.375, axleY - Math.sin(a) * 0.089, Math.cos(a) * 0.089));
+  }
+  const ropeX = spool.at(-1)!.x;
+  // Leave the drum at its side tangent, then hang under load from the bail.
+  spool.push(new THREE.Vector3(ropeX, axleY - 0.115, 0.089), new THREE.Vector3(ropeX, 1.195, 0.088));
+  add(m.cloth, new THREE.TubeGeometry(new THREE.CatmullRomCurve3(spool), 250, 0.0125, 6, false));
+  const bucket = new THREE.Group();
+  bucket.position.set(ropeX, 0.855, 0.088);
+  g.add(bucket);
+  const staveDepth = 0.016;
+  for (let i = 0; i < 12; i++) {
+    const a = i * tau / 12;
+    const l = 0.024, r = 0.032;
+    const shape = heroOutline([[-l, 0], [l, 0], [r, 0.21], [-r, 0.21]]);
+    const stave = heroSolid(shape, staveDepth, 0.003).rotateX(0.17).translate(0, 0, 0.093);
+    const uv = stave.attributes.uv, p = stave.attributes.position;
+    for (let j = 0; j < p.count; j++) uv.setXY(j, 0.048 + (i % 7) * 0.127 + p.getX(j) * 0.9, 0.16 + p.getY(j) * 1.9);
+    const plank = new THREE.Mesh(stave, oak);
+    plank.rotation.y = a; bucket.add(plank);
+  }
+  bucket.add(new THREE.Mesh(new THREE.CylinderGeometry(0.096, 0.095, 0.017, 12), oak));
+  for (const [y, r] of [[0.042, 0.103], [0.173, 0.127]]) {
+    const hoop = new THREE.Mesh(new THREE.LatheGeometry([
+      new THREE.Vector2(r - 0.006, -0.011), new THREE.Vector2(r + 0.001, -0.011),
+      new THREE.Vector2(r + 0.003, 0.012), new THREE.Vector2(r - 0.006, 0.012),
+    ], 12), m.iron);
+    hoop.position.y = y; bucket.add(hoop);
+  }
+  const bail = new THREE.Mesh(new THREE.TorusGeometry(0.131, 0.008, 6, 16, Math.PI), wornIron);
+  bail.position.y = 0.204; bucket.add(bail);
+  mergeByMaterial(g);
+  g.rotation.y = -0.22;
+  g.position.set(WELL.x, 0, -WELL.z);
+  return g;
+}
+
 export function buildFurniture(m: Materials): THREE.Group {
   const group = new THREE.Group();
   group.name = 'furniture';
@@ -152,47 +385,7 @@ export function buildFurniture(m: Materials): THREE.Group {
   const wineCloth = new THREE.MeshPhysicalMaterial({ color: 0x5b1f24, roughness: 0.95, sheen: 0.5, sheenRoughness: 0.8, sheenColor: new THREE.Color(0x6a4a44) });
   const barrelSlots: { x: number; z: number; y0: number; h: number; ry: number; r?: number }[] = [];
 
-  // —— 井台（hero）：GLB 石圈+木柱斜撑+木瓦顶+辘轳绳筒吊桶；程序化兜底 ——
-  const wellFallback = new THREE.Group();
-  {
-    const f = wellFallback;
-    const ring = new THREE.Mesh(scaleUV(new THREE.CylinderGeometry(WELL.r - 0.15, WELL.r - 0.1, 0.85, 14, 1, true), 2), v.wallTrim);
-    ring.position.set(WELL.x, 0.425, -WELL.z); ring.castShadow = ring.receiveShadow = true; f.add(ring);
-    const rim = new THREE.Mesh(scaleUV(new THREE.TorusGeometry(WELL.r - 0.12, 0.09, 6, 14), 2), v.wallTrim);
-    rim.rotation.x = HALF_PI; rim.position.set(WELL.x, 0.85, -WELL.z); rim.castShadow = true; f.add(rim);
-    for (const sx of [-1, 1]) {
-      const post = new THREE.Mesh(tiledBox(0.16, 1.7, 0.16, 1), v.woodBeam);
-      post.position.set(WELL.x + sx * 1.05, 1.6, -WELL.z); post.castShadow = true; f.add(post);
-      const brace = new THREE.Mesh(tiledBox(0.1, 0.7, 0.1, 1), v.woodBeam);
-      brace.position.set(WELL.x + sx * 0.85, 2.1, -WELL.z); brace.rotation.z = sx * 0.6; brace.castShadow = true; f.add(brace);
-    }
-    const drum = new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.11, 1.9, 8), v.woodBeam);
-    drum.rotation.z = HALF_PI; drum.position.set(WELL.x, 2.05, -WELL.z); drum.castShadow = true; f.add(drum);
-    for (const sx of [-1, 1]) {
-      const slope = new THREE.Mesh(tiledBox(1.5, 0.08, 2.3, 1), v.roofShingle);
-      slope.position.set(WELL.x + sx * 0.62, 2.72, -WELL.z); slope.rotation.z = -sx * 0.55; slope.castShadow = true; f.add(slope);
-    }
-    const rope = new THREE.Mesh(new THREE.CylinderGeometry(0.015, 0.015, 0.9, 5), m.cloth);
-    rope.position.set(WELL.x + 0.25, 1.6, -WELL.z); f.add(rope);
-    const bucket = new THREE.Mesh(new THREE.CylinderGeometry(0.13, 0.1, 0.2, 8), v.woodBeam);
-    bucket.position.set(WELL.x + 0.25, 1.05, -WELL.z); bucket.castShadow = true; f.add(bucket);
-    group.add(f);
-  }
-  const well = loadProp({
-    name: 'well', size: 3.3, rotY: 0.15,
-    norm: {
-      Well: { color: 0xd0d4da, roughness: 0.86, metalness: 0, wear: { kind: 'stone', seed: 11, center: [WELL.x, -WELL.z], rimY: 0.85 } },
-      Roof: { color: 0xb8bcc2, roughness: 0.8, metalness: 0, wear: { kind: 'stone', seed: 3 } },
-      Bucket: { color: 0xb0a890, roughness: 0.8, metalness: 0, wear: { kind: 'wood', seed: 5 } },
-      rope: { color: 0xa89878, roughness: 0.95, metalness: 0 },
-    },
-    onReady: () => { group.remove(wellFallback); },
-  });
-  well.position.set(WELL.x, 0, -WELL.z);
-  group.add(well);
-  // 底座台阶圈（concept/03 井底石阶）
-  b.geo(v.floorCobble, scaleUV(new THREE.CylinderGeometry(1.42, 1.5, 0.12, 18), 2), WELL.x, 0.06, WELL.z);
-  b.geo(v.floorCobble, scaleUV(new THREE.CylinderGeometry(1.02, 1.08, 0.08, 18), 2), WELL.x, 0.14, WELL.z);
+  group.add(courtyardWell(m, v));
 
   // 不随状态变化的陈设（碰撞盒见 level.ts 的 PROPS）
   for (const p of PROPS) {
