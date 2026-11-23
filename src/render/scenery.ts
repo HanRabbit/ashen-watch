@@ -101,13 +101,16 @@ function geology(x: number, z: number, hills: Massif[]): number {
   // A tilted spur with a solid summit and tapering ridges, not a separate pedestal.
   const dx = x - KEEP.x, dz = z - KEEP.z;
   const along = (dx * .85 + dz * .53) / 84, across = (-dx * .53 + dz * .85) / 49;
-  const crag = Math.hypot(along, across) + (n - .5) * .32;
-  const west = smooth(-27, -57, dx);
+  const crag = Math.pow(Math.abs(along) ** 2.5 + Math.abs(across) ** 2.5, .4) + (n - .5) * .35;
+  const west = 1 - smooth(-59, -27, dx);
   const ribs = relief(dx * .045 + dz * .11, dz * .045, 87) - .5;
   const flutes = Math.abs(noise(dx * .083 + dz * .18, dz * .046, 88) * 2 - 1);
-  const bluff = (KEEP.y + 2.3) * (1 - smooth(.24 + west * .19, 1.03, crag));
-  const spur = 30 * (1 - smooth(.15, 1.13, Math.hypot((dx + 43) / 53, (dz + 22) / 35)));
-  const incision = (ribs * 21 + flutes * 3.5) * smooth(.25, .62, crag);
+  // The steep face ends on a lower talus apron. The accent runs across the slope
+  // so the keep's elevation reads as a rocky escarpment, not a rounded plinth.
+  const bluff = (KEEP.y - 15) * (1 - smooth(.25 + west * .12, .73, crag))
+    + 17.3 * (1 - smooth(.47, 1.16, crag));
+  const spur = 30 * (1 - smooth(.15, 1.13, Math.hypot((dx + 41) / 53, (dz + 27) / 37)));
+  const incision = (ribs * 28 + flutes * 4.1) * smooth(.25, .62, crag);
   y = Math.max(y, Math.max(bluff, spur * .85) + Math.min(bluff, spur) * .11 + (n - .5) * 8 + incision - 2);
   // A broad bench at the pass keeps the approach, gate and adjacent rooflines tied together.
   if (x > 31 && x < 163 && z < -29 && z > -78) {
@@ -233,8 +236,8 @@ function grain(): THREE.DataTexture {
   return map;
 }
 
-// Cheap world-space aerial perspective. Light the visible surface first, then add the
-// air between it and the camera; low saddles and ravines collect haze without fog cards.
+// Subtle aerial perspective on opaque scenery only. Full-scene volumetrics belong
+// to the lighting rig; don't obscure the close slopes or add a second fog layer.
 const AERIAL = /* glsl */`
 uniform vec3 uLandAir;
 uniform float uLandNight;
@@ -245,8 +248,9 @@ vec3 landAir(vec3 base, float drift, float density) {
   float low = exp(-max(vLandPos.y - 4.0, 0.0) * .042);
   float cloudBank = exp(-abs(vLandPos.y - 18.0) * .083);
   float join = smoothstep(53.0, 173.0, d);
-  float veil = (low * (.08 + .18 * drift) + cloudBank * smoothstep(.24, .75, drift) * .26) * join;
-  float distanceHaze = smoothstep(50.0, 572.0, d) * .85;
+  float veil = (low * (.045 + .10 * drift) + cloudBank * smoothstep(.24, .75, drift) * .13) * join;
+  veil *= mix(1.0, 1.3, uLandNight);
+  float distanceHaze = smoothstep(74.0, 572.0, d) * .81;
   float t = min(.94, (distanceHaze + veil) * density);
   vec3 moon = vec3(.155, .217, .330);
   return mix(base * mix(vec3(1.0), moon, uLandNight), uLandAir, t);
@@ -258,7 +262,7 @@ function palette(): { land: THREE.MeshBasicMaterial; trees: THREE.MeshBasicMater
   const map = grain();
   const air = { value: new THREE.Color(0x7f8b95) }, night = { value: 0 };
   const make = (kind: 'land' | 'trees' | 'stone' | 'roof') => {
-    const mat = new THREE.MeshBasicMaterial({ vertexColors: true, fog: false, side: kind === 'trees' ? THREE.DoubleSide : THREE.FrontSide });
+    const mat = new THREE.MeshBasicMaterial({ vertexColors: true, fog: false });
     mat.customProgramCacheKey = () => `aw-landscape:${kind}`;
     mat.onBeforeCompile = shader => {
       Object.assign(shader.uniforms, { uLandAir: air, uLandNight: night, uLandGrain: { value: map } });
@@ -289,7 +293,8 @@ function palette(): { land: THREE.MeshBasicMaterial; trees: THREE.MeshBasicMater
         vec2 cell = abs(fract(brick) - .5);
         vec2 mortar = smoothstep(vec2(.465) - scaleAA, vec2(.49) + scaleAA, cell);
         float grain = texture2D(uLandGrain, vLandPos.xz * .09 + vLandPos.y * .047).r;
-        base *= mix(.87, 1.14, grain) * (1.0 - max(mortar.x * .52, mortar.y) * .20);
+        float age = texture2D(uLandGrain, (vLandPos.xz + vLandPos.y * vec2(.15, .08)) * .025).b;
+        base *= mix(.80, 1.24, grain) * mix(.74, 1.09, age) * (1.0 - max(mortar.x * .52, mortar.y) * .20);
       `;
       shader.fragmentShader = `${AERIAL}\nuniform sampler2D uLandGrain;\n${kind === 'land' ? 'varying vec2 vBiome;\n' : ''}${shader.fragmentShader}`
         .replace('#include <tonemapping_fragment>', `vec3 base = gl_FragColor.rgb;
@@ -322,15 +327,14 @@ function palette(): { land: THREE.MeshBasicMaterial; trees: THREE.MeshBasicMater
 }
 const warmWindow = new THREE.Color(0xffb45f);
 
-// Opaque geometry gives correct depth from every bearing, including the GTAO override pass.
-// Two distance tiers share an instanced palette. Mid-distance trees use two cut-out
-// (geometrically shaped, not alpha-blended) profiles instead of a second 3-D crown mesh.
+// Opaque crowns give correct depth from every bearing, including the GTAO override pass.
+// The far tier has fewer rings and lobes, but still has volume; nothing faces the camera.
 function fir(seed: number, near: boolean): THREE.BufferGeometry {
   const r = rng(seed);
   const profile = near ? [
     [.13, .095], [.22, .196], [.29, .114], [.41, .173], [.48, .082],
     [.59, .128], [.66, .062], [.77, .091], [.83, .032], [1, .002],
-  ] : [[.11, .08], [.22, .183], [.32, .098], [.45, .146], [.55, .079], [.63, .108], [.72, .048], [1, .002]];
+  ] : [[-.04, .019], [.17, .095], [.23, .196], [.34, .10], [.50, .151], [.58, .065], [.73, .092], [1, .002]];
   const bark = new THREE.Color(0x5c5043), shade = new THREE.Color(0x26342f), lit = new THREE.Color(0x526351);
   const p: number[] = [], c: number[] = [], index: number[] = [];
   const tint = new THREE.Color();
@@ -347,36 +351,21 @@ function fir(seed: number, near: boolean): THREE.BufferGeometry {
       add(.018 * Math.cos(a), -.045, .018 * Math.sin(a), 0, true);
       add(.011 * Math.cos(a), .35, .011 * Math.sin(a), 0, true);
       const k = i * 2, m = (k + 2) % 8;
-      index.push(k, m, k + 1, m, m + 1, k + 1);
+      index.push(k, k + 1, m, m, k + 1, m + 1);
     }
-    const branches = 5;
-    for (let j = 0; j < profile.length; j++) {
-      const [h, w] = profile[j];
-      for (let i = 0; i < branches; i++) {
-        const a = TAU * i / branches + (j % 2) * .21;
-        const t = w * mix(.64, 1.29, r()) * (i % 2 ? .70 : 1);
-        const sway = h * h * .051 * Math.sin(seed);
-        add(t * Math.cos(a) + sway, h + (r() - .5) * .09 * (1 - h), t * Math.sin(a),
-          .16 + .44 * (.5 - .5 * Math.cos(a)) + .19 * r() + (j % 2 ? 0 : .19));
-        if (j + 1 < profile.length) {
-          const k = 8 + j * branches + i, m = 8 + j * branches + ((i + 1) % branches);
-          index.push(k, m, k + branches, m, m + branches, k + branches);
-        }
-      }
-    }
-  } else {
-    for (let side = 0; side < 2; side++) {
-      const k = p.length / 3;
-      add(side ? 0 : -.016, -.04, side ? -.016 : 0, .13);
-      add(side ? 0 : .020, -.04, side ? .020 : 0, .13);
-      for (const [h, w] of profile) {
-        const l = -w * mix(.72, 1.18, r()), b = w * mix(.72, 1.18, r());
-        add(side ? 0 : l, h, side ? l : 0, .25 + r() * .28);
-        add(side ? 0 : b, h, side ? b : 0, .40 + r() * .29);
-      }
-      for (let j = 0; j < profile.length; j++) {
-        const i = k + j * 2;
-        index.push(i, i + 1, i + 2, i + 1, i + 3, i + 2);
+  }
+  const branches = near ? 5 : 3, root = p.length / 3;
+  for (let j = 0; j < profile.length; j++) {
+    const [h, w] = profile[j];
+    for (let i = 0; i < branches; i++) {
+      const a = TAU * i / branches + (j % 2) * .21;
+      const t = w * mix(.74, 1.22, r()) * (near && i % 2 ? .70 : 1);
+      const sway = h * h * .051 * Math.sin(seed);
+      add(t * Math.cos(a) + sway, h + (r() - .5) * .08 * (1 - h), t * Math.sin(a),
+        .16 + .44 * (.5 - .5 * Math.cos(a)) + .19 * r() + (j % 2 ? 0 : .19));
+      if (j + 1 < profile.length) {
+        const k = root + j * branches + i, m = root + j * branches + ((i + 1) % branches);
+        index.push(k, k + branches, m, m, k + branches, m + branches);
       }
     }
   }
@@ -616,7 +605,7 @@ export function buildScenery(_materials: Materials): Scenery {
   }
   architecture(group, ground, paints);
   plant(group, ground, paints.trees);
-  // Refresh once per main frame, even if the first visible object is not terrain.
+  // Refresh once per render, even if the first visible object is not terrain.
   let frame = -1;
   for (const mesh of group.children) mesh.onBeforeRender = (renderer, scene) => {
     if (frame === renderer.info.render.frame) return;
