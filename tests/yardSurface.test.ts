@@ -44,7 +44,7 @@ it('keeps scanned paving continuous across the shaft splits without sealing the 
 
 it('keeps the broken flags in three local pockets, below a boot sole clearance and outside the shafts', () => {
   const mat = new MeshStandardMaterial(), batch = new Batch(), scene = new Group();
-  addYardBreaks(batch, { flag: mat }, { rock: mat, floorDirt: mat, floorFlagWorn: mat });
+  addYardBreaks(batch, { flag: mat }, { rock: mat, floorFlagWorn: mat });
   batch.build(scene);
   const areas = [
     { x0: -3.0, x1: -0.98, z0: 10.0, z1: 11.1 },

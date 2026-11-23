@@ -90,10 +90,10 @@ describe('门洞通行', () => {
   it('正对一整面实墙时停在墙前，不会被横向带走', () => {
     const d = new Driver();
     d.w.phase = 'day';
-    d.w.player.x = -6; d.w.player.z = 3;
+    d.w.player.x = 2.45; d.w.player.z = 3; // Unbroken south curtain, east of the gate.
     d.yaw = Math.PI;
     d.wait(3, { forward: 1 });
-    expect(Math.abs(d.w.player.x + 6)).toBeLessThan(0.02);
+    expect(Math.abs(d.w.player.x - 2.45)).toBeLessThan(0.02);
     expect(d.w.player.z).toBeCloseTo(0.5 + PLAYER.radius, 2);
   });
 

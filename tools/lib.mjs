@@ -1,6 +1,7 @@
 // 浏览器公共工具：用本机已安装的 Chrome / Edge 打开构建产物（不下载浏览器）。
 import { chromium } from 'playwright-core';
 import fs from 'node:fs';
+import { hardwareArgs, verifyHardware } from './hardware-gpu.mjs';
 import path from 'node:path';
 
 export const ROOT = path.resolve(import.meta.dirname, '..');
@@ -15,14 +16,10 @@ fs.mkdirSync(OUT, { recursive: true });
 process.env.TEMP = process.env.TMP = process.env.TMPDIR = TMP;
 
 export async function launch({ channel = 'chrome', headless = false, width = Number(process.env.AW_W) || 1920, height = Number(process.env.AW_H) || 1080 } = {}) {
-  // channel 写 chromium 时用 Playwright 自带的浏览器（没有装 Chrome / Edge 的环境，如 CI 容器），并用软件渲染提供 WebGL
-  const bundled = channel === 'chromium';
-  const angle = process.env.AW_ANGLE ?? (bundled ? 'swiftshader' : '');
   const browser = await chromium.launch({
-    channel: bundled && angle === 'swiftshader' ? undefined : channel, headless,
-    args: [`--window-size=${width},${height + 90}`, '--autoplay-policy=no-user-gesture-required', '--disable-features=CalculateNativeWinOcclusion',
-      ...(angle ? ['--use-gl=angle', `--use-angle=${angle}`, '--ignore-gpu-blocklist'] : []),
-      ...(angle === 'swiftshader' ? ['--enable-unsafe-swiftshader'] : [])],
+    channel, headless,
+    args: [`--window-size=${width},${height + 90}`, '--autoplay-policy=no-user-gesture-required',
+      '--disable-features=CalculateNativeWinOcclusion', ...hardwareArgs()],
   });
   const recordVideo = process.env.AW_VIDEO === '1' ? { dir: OUT, size: { width, height } } : undefined;
   const context = await browser.newContext({ viewport: { width, height }, deviceScaleFactor: 1, recordVideo });
@@ -33,6 +30,8 @@ export async function launch({ channel = 'chrome', headless = false, width = Num
     Element.prototype.requestPointerLock = function () { return orig.call(this); };
   });
   const page = await context.newPage();
+  try { await verifyHardware(page); }
+  catch (error) { await browser.close(); throw error; }
   const errors = [];
   page.on('pageerror', (e) => errors.push(`pageerror: ${e.message}`));
   page.on('console', (m) => { if (m.type() === 'error') errors.push(`console: ${m.text()}`); });

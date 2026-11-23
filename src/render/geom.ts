@@ -11,13 +11,71 @@ export function put<T extends THREE.Object3D>(o: T, x: number, y: number, z: num
 /** 模拟朝向（0 为朝北，顺时针为正）转为 three.js 的 rotation.y。模型约定面朝本地 -Z。 */
 export const yawToRot = (yaw: number): number => -yaw;
 
-/** 把静态几何按材质合并，减少绘制调用。 */
+// Keep the old sort/cull sphere: unused vertices (e.g. sphere UV poles) did not
+// survive the old index expansion and must not move the centre of a merged batch.
+function computeIndexedBatchSphere(geometry: THREE.BufferGeometry): void {
+  const positions = geometry.getAttribute('position');
+  const index = geometry.index!;
+  const bounds = new THREE.Box3(), vertex = new THREE.Vector3();
+  for (let i = 0; i < index.count; i++) bounds.expandByPoint(vertex.fromBufferAttribute(positions, index.getX(i)));
+  const sphere = geometry.boundingSphere = new THREE.Sphere();
+  bounds.getCenter(sphere.center);
+  let radiusSquared = 0;
+  for (let i = 0; i < index.count; i++) {
+    vertex.fromBufferAttribute(positions, index.getX(i));
+    radiusSquared = Math.max(radiusSquared, sphere.center.distanceToSquared(vertex));
+  }
+  sphere.radius = Math.sqrt(radiusSquared);
+}
+
+function mergeBatch(list: THREE.BufferGeometry[]): THREE.BufferGeometry | null {
+  let vertices = 0, corners = 0;
+  for (const g of list) {
+    const count = g.getAttribute('position').count;
+    vertices += count;
+    corners += g.index?.count ?? count;
+  }
+  // position/normal/uv are Float32 in the static batches. Keep the index only
+  // when saved attribute bytes exceed its cost, including mixed triangle soup.
+  const IndexArray = vertices > 0xffff ? Uint32Array : Uint16Array;
+  const attributes = Object.values(list[0].attributes);
+  const stride = attributes.reduce((sum, attribute) => sum + attribute.itemSize * attribute.array.BYTES_PER_ELEMENT, 0);
+  if ((corners - vertices) * stride <= corners * IndexArray.BYTES_PER_ELEMENT) {
+    const expanded = list.map(g => g.index ? g.toNonIndexed() : g);
+    const merged = mergeGeometries(expanded, false);
+    for (let i = 0; i < list.length; i++) if (expanded[i] !== list[i]) expanded[i].dispose();
+    return merged;
+  }
+  for (const g of list) {
+    if (g.index) continue;
+    const indices = new IndexArray(g.getAttribute('position').count);
+    for (let i = 0; i < indices.length; i++) indices[i] = i;
+    g.setIndex(new THREE.BufferAttribute(indices, 1));
+  }
+  const merged = mergeGeometries(list, false);
+  if (merged) computeIndexedBatchSphere(merged);
+  return merged;
+}
+
+/** 把静态几何按材质合并，减少绘制调用，并保留有收益的共享顶点。 */
 export class Batch {
   private items = new Map<THREE.Material, THREE.BufferGeometry[]>();
 
+  private observer?: (g: THREE.BufferGeometry) => void;
+
+  /** Visit transformed geometries added during a construction step without
+   * splitting its material batches or retaining mutable mesh references. */
+  observeGeometry(visitor: (g: THREE.BufferGeometry) => void, build: () => void): void {
+    const previous = this.observer;
+    this.observer = visitor;
+    try { build(); } finally { this.observer = previous; }
+  }
+
   add(geo: THREE.BufferGeometry, mat: THREE.Material, m: THREE.Matrix4): void {
-    const g = geo.index ? geo.toNonIndexed() : geo;
+    // Indexed inputs continue to belong to the caller; nonindexed inputs are transferred.
+    const g = geo.index ? new THREE.BufferGeometry().copy(geo) : geo;
     g.applyMatrix4(m);
+    this.observer?.(g);
     for (const name of Object.keys(g.attributes)) {
       if (name !== 'position' && name !== 'normal' && name !== 'uv') g.deleteAttribute(name);
     }
@@ -44,13 +102,13 @@ export class Batch {
 
   build(parent: THREE.Object3D, shadows = true): void {
     for (const [mat, list] of this.items) {
-      const merged = mergeGeometries(list, false);
+      const merged = mergeBatch(list);
+      for (const g of list) g.dispose();
       if (!merged) continue;
       const mesh = new THREE.Mesh(merged, mat);
       mesh.castShadow = shadows;
       mesh.receiveShadow = shadows;
       parent.add(mesh);
-      for (const g of list) g.dispose();
     }
     this.items.clear();
   }

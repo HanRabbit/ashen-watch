@@ -2,7 +2,8 @@
 // （颜色 + 法线 + 粗糙度，见 public/textures/CREDITS.md），加载前或离线时回退到画布程序化贴图。
 // 锻铁、破布、残旗、纸张等仍程序化生成。贴图在画布上生成，不依赖构建期资源。
 import * as THREE from 'three';
-import { STONE_POOL_GLSL } from './stoneWater';
+import { MAIN_COURT } from '../sim/courtPlan';
+import { PUDDLE_CENTERS, STONE_POOL_GLSL } from './stoneWater';
 import { FLOOR_HISTORY_GLSL, YARD_WEATHER_GLSL } from './yardWeather';
 export { PUDDLE_CENTERS } from './stoneWater';
 
@@ -460,7 +461,7 @@ export function rugTexture(): { map: THREE.CanvasTexture; normalMap: THREE.Canva
 // 扫描贴图保留真实的灰缝；庭院低洼处用同一高度图与世界坐标生成积水。
 // 视差遮挡贴图（POM）只在有独立高度图的材质上启用。
 
-/** 全局 POM 步数开关：high=16 步，low=0（关闭）。view.ts 以后可调用 setMaterialsQuality。 */
+/** High/cinematic use relief mapping only where the projected displacement is resolvable. */
 const AW_STEPS = { value: 16 };
 export function setMaterialsQuality(q: 'high' | 'low'): void {
   AW_STEPS.value = q === 'low' ? 0 : 16;
@@ -480,13 +481,10 @@ export interface AwUniforms {
   uAwPool: { value: number };
   /** 浅灰砂浆占比大的乱石扫描贴图需要单独做灰缝校正。 */
   uAwRubble: { value: number };
-  /** Dressed paver scan, blended where the courtyard was laid or repaired. */
-  uAwBlendAlbedo: { value: THREE.Texture };
-  uAwBlendNormal: { value: THREE.Texture };
-  uAwBlendRough: { value: THREE.Texture };
-  uAwBlendAo: { value: THREE.Texture };
-  uAwBlendDisp: { value: THREE.Texture };
-  uAwHasBlend: { value: number };
+  /** AO recess interval, loose aggregate fraction, and calibrated mineral finish flag. */
+  uAwMineral: { value: THREE.Vector4 };
+  /** Continuous phase displacement, in UV units; zero for single-face/atlas UVs. */
+  uAwScanDrift: { value: THREE.Vector2 };
   uAwYard: { value: number };
   /** 抹灰剥落露石（礼拜堂室内），1 启用。 */
   uAwPeel: { value: number };
@@ -505,6 +503,23 @@ const AW_FALLBACK_HEIGHT = (() => {
   return t;
 })();
 
+// Linear AO isn't normalized between scans: castle wall faces sit around .70,
+// cobbles around .43, and flagstone around .95. Low AO identifies recesses, not
+// all mortar or low slabs; diffuse and the in-world moisture sources add context.
+const AW_MINERAL_SCANS: Record<string, [number, number, number]> = {
+  castle_wall_varriation: [.38, .70, .0],
+  monastery_stone_floor: [.62, .94, .0],
+  stone_pavers: [.70, .93, .0],
+  medieval_blocks_03: [.92, .986, .0],
+  rustic_stone_wall_02: [.64, .92, .0],
+  cobblestone_large_01: [.17, .49, .0],
+  worn_tile_floor: [.74, .93, .0],
+  brown_mud_leaves_01: [.56, .88, .85],
+  brown_mud: [.57, .85, .84],
+  rock_face: [.49, .86, .45],
+  grey_plaster: [.83, .94, .65],
+};
+
 export function awUniforms(floor: number, wet: number, desat: number, tint: [number, number, number], hs: number, band: [number, number] = [0, 0]): AwUniforms {
   return {
     uAwSteps: AW_STEPS,
@@ -518,12 +533,8 @@ export function awUniforms(floor: number, wet: number, desat: number, tint: [num
     uAwStreakBand: { value: new THREE.Vector2(band[0], band[1]) },
     uAwPool: { value: 0 },
     uAwRubble: { value: 0 },
-    uAwBlendAlbedo: { value: AW_FALLBACK_HEIGHT },
-    uAwBlendNormal: { value: AW_FALLBACK_HEIGHT },
-    uAwBlendRough: { value: AW_FALLBACK_HEIGHT },
-    uAwBlendAo: { value: AW_FALLBACK_HEIGHT },
-    uAwBlendDisp: { value: AW_FALLBACK_HEIGHT },
-    uAwHasBlend: { value: 0 },
+    uAwMineral: { value: new THREE.Vector4(0, 1, 0, 0) },
+    uAwScanDrift: { value: new THREE.Vector2() },
     uAwYard: { value: 0 },
     uAwPeel: { value: 0 },
   };
@@ -553,28 +564,46 @@ const AW_FRAG_PREFIX = /* glsl */`
 varying vec3 vAwWorldPos;
 varying vec3 vAwWorldNormal;
 uniform float uAwSteps, uAwFloor, uAwWet, uAwDesat, uAwHeightScale, uAwHasDisp, uAwPool, uAwRubble;
-uniform float uAwHasBlend, uAwYard, uAwPeel;
+uniform float uAwYard, uAwPeel;
+uniform vec2 uAwScanDrift;
 uniform vec2 uAwStreakBand;
+uniform vec4 uAwMineral;
 uniform vec4 uAwWear[3];
 float awPolish;
 uniform vec3 uAwTint;
 uniform sampler2D uAwHeightMap;
-uniform sampler2D uAwBlendAlbedo, uAwBlendNormal, uAwBlendRough, uAwBlendDisp, uAwBlendAo;
-vec2 awUv, awDx, awDy;
-const vec2 awDressedPhase = vec2(0.27, 0.41);
-float awWet, awMoss, awPuddle, awBlend;
+vec2 awUv, awDx, awDy, awScanBasisUv;
+float awWet, awMoss, awPuddle, awLime;
+float awScanAO, awCavity, awGrit, awGrain;
+vec3 awGrainSlope;
 ${STONE_POOL_GLSL}
 ${YARD_WEATHER_GLSL}
 ${FLOOR_HISTORY_GLSL}
+bool awNearPool(vec2 p) {
+  // Skip the noisy footprint away from every basin. 1.09r includes its maximum ruffle.
+  return ${PUDDLE_CENTERS.map(([x, z, r]) =>
+    `all(lessThan(abs(p - vec2(${x.toFixed(2)}, ${(-z).toFixed(2)})), vec2(${(r * 1.09).toFixed(3)})))`).join(' ||\n    ')};
+}
+// Same four hashes for the grain's pigment and tangent slope. The analytic slope
+// is camera-independent and doesn't differentiate the distance/mip fade.
+vec3 awFineGrain(vec2 p) {
+  vec2 i = floor(p), f = fract(p);
+  vec2 t = f * f * (3.0 - 2.0 * f), dt = 6.0 * f * (1.0 - f);
+  float a = awHash(i), b = awHash(i + vec2(1, 0));
+  float c = awHash(i + vec2(0, 1)), d = awHash(i + vec2(1, 1));
+  return vec3(mix(mix(a, b, t.x), mix(c, d, t.x), t.y) - 0.5,
+              mix(b - a, d - c, t.y) * dt.x, mix(c - a, d - b, t.x) * dt.y);
+}
 float awHeight(vec2 uv) {
-  float h = textureGrad(uAwHeightMap, uv, awDx, awDy).r;
-  if (awBlend > 0.001) h = mix(h, textureGrad(uAwBlendDisp, uv + awDressedPhase, awDx, awDy).r, awBlend);
-  return h;
+  return textureGrad(uAwHeightMap, uv, awDx, awDy).r;
 }
 vec2 awPom(vec2 uv, vec3 vTs) {
-  if (uAwSteps < 1.0 || uAwHasDisp < 0.5) return uv;
+  if (uAwSteps < 1.0 || uAwHasDisp < 0.5 || uAwHeightScale <= 0.0) return uv;
   // 掠射钳制（圣经 7）：视线与面夹角极小时衰减步长与偏移，退化为普通法线贴图，杜绝整面发黑/撕裂
   float graze = smoothstep(0.10, 0.35, abs(vTs.z));
+  // A relief shift below a fraction of a pixel isn't worth a texture march.
+  float footprint = max(length(awDx), length(awDy));
+  graze *= 1.0 - smoothstep(uAwHeightScale * 0.55, uAwHeightScale * 1.4, footprint);
   if (graze < 0.02) return uv;
   int steps = int(uAwSteps);
   float layerH = 1.0 / float(steps);
@@ -603,28 +632,41 @@ const AW_MAP_BLOCK = /* glsl */`
   vec2 awW = vAwWorldPos.xz;
   float awUp = clamp(awN.y, 0.0, 1.0);
   float awCourtY = 1.0 - smoothstep(0.03, 0.16, abs(vAwWorldPos.y));
+  bool awInCourt = all(greaterThanEqual(awW, vec2(${MAIN_COURT.x0.toFixed(2)}, ${(-MAIN_COURT.z1).toFixed(2)})))
+                && all(lessThanEqual(awW, vec2(${MAIN_COURT.x1.toFixed(2)}, ${(-MAIN_COURT.z0).toFixed(2)})));
   vec4 awGround = vec4(0.0);
-  if (uAwYard > 0.5 && awUp * awCourtY > 0.01) awGround = awYardSurface(awW) * awUp * awCourtY;
-  awBlend = awGround.x * uAwHasBlend;
+  float awYardAtGrade = uAwYard * (awInCourt ? awUp * awCourtY : 0.0);
+  if (awYardAtGrade > 0.01) awGround = awYardSurface(awW) * awYardAtGrade;
   vec3 dp1 = dFdx(vAwWorldPos), dp2 = dFdy(vAwWorldPos);
-  // The undisplaced UV derivatives stay valid inside divergent POM steps, and prevent
-  // mip selection from jumping as the parallax intersection crosses a stone joint.
-  awDx = dFdx(vMapUv); awDy = dFdy(vMapUv);
+  vec2 awWallUv = vec2(vAwWorldPos.x + vAwWorldPos.z, vAwWorldPos.y);
+  vec2 awWeather = mix(awWallUv, awW, abs(awN.y));
+  // Bend the long-period scan phase instead of cross-fading two sets of mortar
+  // joints. Exposed masonry keeps its bed direction; earth can wander both axes.
+  // Every map uses the same varying, and derivatives exclude the POM search.
+  vec2 scanUv = vMapUv;
+  if (any(greaterThan(uAwScanDrift, vec2(0.0)))) {
+    vec2 p = awWeather;
+    scanUv += uAwScanDrift * vec2(
+      .66 * sin(dot(p,vec2(.44,.61))+1.4) + .34 * sin(dot(p,vec2(-.17,1.04))+.2),
+      .59 * sin(dot(p,vec2(.24,-.67))+3.1) + .41 * sin(dot(p,vec2(.98,.28))+2.8));
+  }
+  awScanBasisUv = scanUv;
+  awDx = dFdx(scanUv); awDy = dFdy(scanUv);
   vec3 dp2p = cross(dp2, awN), dp1p = cross(awN, dp1);
   vec3 T = dp2p * awDx.x + dp1p * awDy.x;
   vec3 B = dp2p * awDx.y + dp1p * awDy.y;
   float invmax = inversesqrt(max(dot(T, T), dot(B, B)) + 1e-8);
   mat3 awTBN = mat3(T * invmax, B * invmax, awN);
-  awUv = awPom(vMapUv, awV * awTBN);
-  // State all surface layers in the same UV space; world-space weathering is independent of repeats.
-  vec2 awWallUv = vec2(vAwWorldPos.x + vAwWorldPos.z, vAwWorldPos.y);
-  vec2 awWeather = mix(awWallUv, awW, abs(awN.y));
+  awUv = awPom(scanUv, awV * awTBN);
   float awMacro = awFbm(awWeather * 0.29 + 3.7);
   float awMacro2 = awFbm(awWeather * 1.08 + 11.3);
   float awVert = 1.0 - abs(awN.y);
   // Salt and capillary damp rise higher in protected bays; lower wall is not a constant painted stripe.
-  float awRise = mix(0.42, 1.10, smoothstep(0.29, 0.72, awNoise(vec2(awWallUv.x * 0.46, 8.4))));
-  float awBase = (1.0 - smoothstep(0.02, awRise, abs(vAwWorldPos.y))) * mix(0.32, 0.83, awMacro2) * awVert;
+  float awBase = 0.0;
+  if (awVert > 0.01 && abs(vAwWorldPos.y) < 1.10) {
+    float awRise = mix(0.42, 1.10, smoothstep(0.29, 0.72, awNoise(vec2(awWallUv.x * 0.46, 8.4))));
+    awBase = (1.0 - smoothstep(0.02, awRise, abs(vAwWorldPos.y))) * mix(0.32, 0.83, awMacro2) * awVert;
+  }
   float awTopMoss = awUp * smoothstep(0.48, 0.75, awMacro2) * (1.0 - uAwFloor);
   float awStreak = 0.0;
   if (uAwStreakBand.y > uAwStreakBand.x) {
@@ -643,24 +685,74 @@ const AW_MAP_BLOCK = /* glsl */`
   // Diffuse/normal/AO already carry the scanned joints. A thresholded height mask
   // cannot distinguish a low slab from mortar and paints away its surface detail.
   vec4 awSample = textureGrad(map, awUv, awDx, awDy);
-  if (awBlend > 0.001) awSample = mix(awSample, textureGrad(uAwBlendAlbedo, awUv + awDressedPhase, awDx, awDy), awBlend);
   float awLum = dot(awSample.rgb, vec3(0.2126, 0.7152, 0.0722));
+  awScanAO = 1.0;
+  awCavity = 0.0;
+  #ifdef USE_AOMAP
+    awScanAO = textureGrad(aoMap, awUv, awDx, awDy).r;
+    awCavity = 1.0 - smoothstep(uAwMineral.x, uAwMineral.y, awScanAO);
+  #endif
+  float awMortar = 0.0;
   if (uAwRubble > 0.0) {
-    // Toned lime mortar, not white hand-painted outlines. Keep grain and spatial variation.
-    float awMortar = smoothstep(0.18, 0.46, awLum) * uAwRubble;
-    awSample.rgb *= 1.0 - awMortar * mix(0.46, 0.66, awMacro2);
+    // Pale lime in sheltered joints, not all bright face texels. Leave the
+    // scanned grit and the darker exposed aggregate in place.
+    float awLimeTone = smoothstep(0.24, 0.56, awLum);
+    awMortar = awLimeTone * mix(0.34, 1.0, awCavity) * uAwRubble;
+    awSample.rgb *= 1.0 - awLimeTone * mix(0.29, 0.53, max(awMortar, awCavity * 0.66));
     awLum = dot(awSample.rgb, vec3(0.2126, 0.7152, 0.0722));
   }
+  // Sub-centimetre grain in world space, faded before it crosses the pixel grid.
+  // The scan supplies the larger chips/pores; this adds no sampler or tiling layer.
+  float awGrainUp = awN.y * awN.y;
+  vec2 awGrainUV = (mix(awWallUv, awW, awGrainUp) + vec2(8.31, 14.6)) * 112.0;
+  float awGrainWidth = max(length(dFdx(awGrainUV)), length(dFdy(awGrainUV)));
+  float awGrainFade = uAwMineral.w * (1.0 - smoothstep(0.22, 0.72, awGrainWidth));
+  awGrain = 0.0;
+  awGrainSlope = vec3(0.0);
+  if (awGrainFade > 0.001) {
+    vec3 grain = awFineGrain(awGrainUV) * awGrainFade;
+    awGrain = grain.x;
+    awGrainSlope = mix(vec3(grain.y, grain.z, grain.y), vec3(grain.y, 0.0, grain.z), awGrainUp);
+  }
+  awGrit = max(max(awMortar, 0.68 * awCavity), uAwMineral.z) * uAwMineral.w;
   awSample.rgb = mix(awSample.rgb, vec3(awLum), uAwDesat) * uAwTint;
   diffuseColor *= awSample;
   diffuseColor.rgb *= mix(0.79, 1.19, awMacro) * mix(0.90, 1.08, awMacro2);
-  // The dressed run uses larger, lower-contrast quarry stone. Grit below the dripline
-  // stains the existing stones instead of masking them with a rectangular dirt carpet.
-  diffuseColor.rgb *= mix(vec3(1.0), vec3(0.85, 0.88, 0.92), awBlend);
+  diffuseColor.rgb *= 1.0 + awGrain * mix(0.10, 0.28, awGrit);
+  diffuseColor.rgb *= mix(vec3(1.0), vec3(1.13, 1.02, 0.88),
+    uAwMineral.w * smoothstep(0.32, 0.67, awMacro2) * (1.0 - 0.54 * awCavity));
+  #ifdef AW_COMPACTED_EARTH
+    // The walkway shoulders were compressed by feet and cart wheels. Low wet
+    // seams settle into clay; sparse grit is light precisely where it stays dry.
+    // Do not paint a leaf carpet over the whole ground mesh.
+    float rag = awNoise(awW * 3.2 + vec2(7.3,19.1));
+    float rut = smoothstep(.22,.79,.48*awMacro+.52*rag-.30*awGround.y);
+    float dry = smoothstep(.23,.77,.61*awMacro2+.39*rag + .13*awGround.y);
+    float soilLift = .89 + .24 * dry - .17 * rut;
+    diffuseColor.rgb *= soilLift * mix(vec3(.87,.92,.97),vec3(1.11,1.04,.93),dry);
+    awGround.w = max(awGround.w, .62*rut*(1.0-.59*dry));
+  #endif
   float awSilt = awGround.z * mix(0.22, 0.61, awMacro2);
   vec3 awSiltColor = vec3(0.061, 0.054, 0.042) * mix(0.71, 1.34, awMacro2);
   diffuseColor.rgb = mix(diffuseColor.rgb, awSiltColor * 0.66 + diffuseColor.rgb * 0.27, awSilt);
   awMoss = max(awMoss, awSilt * 0.54 * smoothstep(0.33, 0.65, awMacro2));
+  // The former hall was lime-rendered on the inside. Traces remain in the lee
+  // of the gable and behind the lower western return. Fractures and exposed
+  // outer faces show bare rock. Keep the colour, roughness and relief coupled.
+  awLime = 0.0;
+  if (uAwRubble > 0.5 && vAwWorldPos.x < -10.45 && awVert > 0.75) {
+    vec3 q = vAwWorldPos * vec3(1.0,1.0,-1.0);
+    float gable = awN.z * smoothstep(23.99,24.23,q.z) * (1.0-smoothstep(24.38,24.65,q.z));
+    float westBay = awN.x * (1.0-smoothstep(.1,.35,abs(q.x+15.24)));
+    float outline = min(length((q.xy-vec2(-15.3,1.98))*vec2(.46,.78)),
+      length((q.zy-vec2(11.34,1.41))*vec2(.43,.91)) + (1.0-max(0.0,westBay))*2.0);
+    float rag = (awMacro2-.49)*.86 + (awNoise(awWallUv*5.4)-.5)*.20;
+    float grain = awNoise(awWallUv*29.0);
+    awLime = clamp(max(gable,westBay),0.0,1.0) * (1.0-smoothstep(.62,.77,outline+rag));
+    awLime *= smoothstep(.11,.34,q.y) * (.75+.23*grain);
+    vec3 lime = vec3(.185,.162,.126) * (.64+.65*awMacro2+.11*grain);
+    diffuseColor.rgb = mix(diffuseColor.rgb, lime + .11*diffuseColor.rgb, awLime);
+  }
   if (uAwPeel > 0.5) {
     float awPeel = smoothstep(0.56, 0.74, awFbm(awWallUv * 1.4 + 2.0));
     diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.10, 0.11, 0.12) * (0.7 + 0.6 * awMacro), awPeel * 0.85);
@@ -671,15 +763,10 @@ const AW_MAP_BLOCK = /* glsl */`
   #ifdef AW_FLOOR_HISTORY
     awMudCover = 0.0;
     if (awN.y > 0.75) {
-      float joint = 0.0;
-      #ifdef USE_AOMAP
-        float ao = textureGrad(aoMap, awUv, awDx, awDy).r;
-        if (awBlend > 0.001) ao = mix(ao, textureGrad(uAwBlendAo, awUv + awDressedPhase, awDx, awDy).r, awBlend);
-        joint = 1.0 - smoothstep(0.48, 0.93, ao);
-      #endif
-      vec3 deposits = awDeposit(vec2(awW.x, -awW.y), awGround, awMacro2, joint);
-      vec2 soilUV = mat2(0.91, 0.415, -0.415, 0.91) * awW * 0.61;
-      vec3 mulch = textureGrad(uAwHumus, soilUV, dFdx(soilUV), dFdy(soilUV)).rgb;
+      vec3 deposits = awDeposit(vec2(awW.x, -awW.y), awGround, awMacro2, awCavity);
+      awGrit = max(awGrit, deposits.x * 0.80);
+      const mat2 soilTransform = mat2(0.91, 0.415, -0.415, 0.91) * 0.61;
+      vec3 mulch = textureGrad(uAwHumus, soilTransform * awW, soilTransform * dp1.xz, soilTransform * dp2.xz).rgb;
       float lum = dot(mulch, vec3(0.30,0.60,0.10));
       vec3 earth = mix(vec3(lum), mulch, 0.56) * vec3(0.68,0.51,0.39);
       earth = mix(earth, vec3(lum) * vec3(.52,.55,.30), deposits.z * smoothstep(.39,.65,awMacro) * .72);
@@ -690,44 +777,54 @@ const AW_MAP_BLOCK = /* glsl */`
     }
   #endif
   // Damp mineral keeps a broad lobe; only pooled water flattens and sharpens it.
-  float awFloorDamp = smoothstep(0.16, 0.8, awMacro2);
-  awFloorDamp = mix(awFloorDamp, max(awFloorDamp * 0.56, awGround.w * 0.96), uAwYard);
-  awWet = uAwWet * mix(max(awBase, awStreak * 0.57), awFloorDamp, uAwFloor);
+  float awFloorDamp = smoothstep(0.28, 0.76, awMacro2);
+  awFloorDamp = max(awFloorDamp * mix(1.0, 0.45, awYardAtGrade), awGround.w);
+  float awDampSource = mix(max(awBase, awStreak * 0.57), awFloorDamp, uAwFloor);
   awPuddle = 0.0;
-  if (uAwPool > 0.0 && uAwHasDisp > 0.5 && awCourtY * awUp > 0.0) {
-    awPuddle = awPoolFootprint(awW);
-    // Higher stone crests break the meniscus; the depression retains water in the joints.
-    awPuddle *= awUp * awCourtY * uAwPool * (1.0 - 0.75 * smoothstep(0.75, 0.93, awHeight(awUv)));
+  if (uAwPool > 0.0 && awInCourt && awCourtY * awUp > 0.01 && awNearPool(awW)) {
+    float footprint = awPoolFootprint(awW);
+    // Dark porous rim first, then continuous water in the hollow. Crowns split
+    // the edge; the scan topography and AO never turn isolated pores into mirrors.
+    awDampSource = max(awDampSource, smoothstep(0.0, 0.55, footprint) * awUp * awCourtY);
+    float crest = smoothstep(0.011, 0.034, vAwWorldPos.y) * (1.0 - 0.70 * awCavity);
+    awPuddle = smoothstep(0.26 + 0.22 * crest, 0.87 + 0.04 * crest, footprint)
+      * smoothstep(0.69, 0.98, awUp) * awCourtY * uAwPool
+      * (1.0 - 0.38 * crest);
   }
-  diffuseColor.rgb *= 1.0 - 0.24 * awWet;
-  diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * vec3(0.30, 0.35, 0.38), awPuddle);
+  float awWick = mix(1.0, mix(0.42, 1.36, max(awCavity, awGrit * 0.66)), uAwMineral.w);
+  awWet = clamp(uAwWet * awDampSource * awWick, 0.0, 1.0);
+  diffuseColor.rgb *= 1.0 - mix(0.24, 0.37, uAwMineral.w) * awWet;
+  diffuseColor.rgb *= mix(vec3(1.0), vec3(0.46, 0.50, 0.53), awPuddle);
 }
 `;
 
 const AW_ROUGH_BLOCK = /* glsl */`
-// Compress the raw scan range for dielectric stone; polished traffic is not a mirror.
-if (awBlend > 0.001) roughnessFactor = mix(roughnessFactor, textureGrad(uAwBlendRough, awUv + awDressedPhase, awDx, awDy).g, awBlend);
-roughnessFactor = mix(0.58, 1.0, roughnessFactor);
-roughnessFactor -= 0.12 * awWet + 0.10 * awPolish;
-roughnessFactor = mix(roughnessFactor, 0.94, awMoss * 0.35);
+// Use the scanned response on faces; the aggregate between them wears much
+// less and stays broad even when damp. Only a connected pool gets a tight lobe.
+if (uAwMineral.w > 0.5) {
+  float faceRough = mix(0.69, 0.97, roughnessFactor) - awPolish * (0.10 + 0.07 * (1.0 - awCavity));
+  roughnessFactor = mix(faceRough, 0.98, awGrit * 0.82);
+  roughnessFactor += 0.065 * awGrain - awWet * mix(0.12, 0.065, awGrit);
+} else {
+  roughnessFactor = mix(0.58, 1.0, roughnessFactor) - 0.12 * awWet - 0.10 * awPolish;
+}
+roughnessFactor = mix(roughnessFactor, 0.94, max(awLime * .82, awMoss * 0.35));
 #ifdef AW_FLOOR_HISTORY
-roughnessFactor = mix(roughnessFactor, 0.91 - 0.16 * awWet, awMudCover);
+roughnessFactor = mix(roughnessFactor, 0.97 - 0.085 * awWet + 0.045 * awGrain, awMudCover);
 #endif
-roughnessFactor = mix(roughnessFactor, 0.23, awPuddle);
+roughnessFactor = mix(roughnessFactor, 0.20, awPuddle);
 `;
 
 const AW_NORMAL_BLOCK = /* glsl */`
-#ifdef USE_NORMALMAP_TANGENTSPACE
-if (awBlend > 0.001) {
-  vec3 awBN = textureGrad(uAwBlendNormal, awUv + awDressedPhase, awDx, awDy).xyz * 2.0 - 1.0;
-  awBN.xy *= normalScale;
-  normal = normalize(mix(normal, normalize(tbn * awBN), awBlend));
-}
-#endif
 #ifdef AW_FLOOR_HISTORY
-normal = normalize(mix(normal, nonPerturbedNormal, awMudCover * 0.34));
+normal = mix(normal, nonPerturbedNormal, awMudCover * 0.20);
 #endif
-normal = normalize(mix(normal, nonPerturbedNormal, awPuddle * 0.9 + awMoss * 0.09));
+normal = mix(normal, nonPerturbedNormal, max(awLime * 0.73, awMoss * 0.12));
+vec3 awSlope = mat3(viewMatrix) * awGrainSlope;
+normal -= (awSlope - nonPerturbedNormal * dot(awSlope, nonPerturbedNormal))
+  * mix(0.033, 0.083, max(awGrit, awLime)) * (1.0 - 0.45 * awWet);
+// Standing water follows level, not the bump-mapped stone or its sloping crown.
+normal = normalize(mix(normal, viewMatrix[1].xyz, awPuddle * 0.95));
 `;
 
 function stoneMapUV(chunk: string, slot: string, uv: string): string {
@@ -746,23 +843,31 @@ export function stoneShader(mat: THREE.MeshStandardMaterial, u: AwUniforms): voi
     shader.fragmentShader = AW_FRAG_PREFIX + shader.fragmentShader
       .replace('#include <map_fragment>', AW_MAP_BLOCK)
       .replace('#include <roughnessmap_fragment>', stoneMapUV(THREE.ShaderChunk.roughnessmap_fragment, 'roughnessMap', 'vRoughnessMapUv') + AW_ROUGH_BLOCK)
+      .replace('#include <normal_fragment_begin>', THREE.ShaderChunk.normal_fragment_begin
+        .replace(/\bvNormalMapUv\b/g, 'awScanBasisUv'))
       .replace('#include <normal_fragment_maps>', stoneMapUV(THREE.ShaderChunk.normal_fragment_maps, 'normalMap', 'vNormalMapUv') + AW_NORMAL_BLOCK)
-      .replace('#include <aomap_fragment>', stoneMapUV(THREE.ShaderChunk.aomap_fragment, 'aoMap', 'vAoMapUv')
-        .replace('reflectedLight.indirectDiffuse *= ambientOcclusion;', /* glsl */`
-          if (awBlend > 0.001) {
-            float awDressedAO = textureGrad(uAwBlendAo, awUv + awDressedPhase, awDx, awDy).r;
-            ambientOcclusion = mix(ambientOcclusion, 1.0 + (awDressedAO - 1.0) * aoMapIntensity, awBlend);
-          }
-          reflectedLight.indirectDiffuse *= ambientOcclusion;
-        `))
+      // Reuse the parallax-aligned AO already sampled for pore/aggregate classification.
+      .replace('#include <aomap_fragment>', THREE.ShaderChunk.aomap_fragment
+        // Scan AO levels are not comparable between source photos. A flat stone
+        // shouldn't receive another baked shadow on top of probe/scene AO.
+        .replace('texture2D( aoMap, vAoMapUv ).r', 'mix(awScanAO, 1.0 - 0.28 * awCavity, uAwMineral.w)')
+        .replace('dotNV, ambientOcclusion, material.roughness',
+          'dotNV, mix(ambientOcclusion, 1.0, awPuddle), material.roughness'))
       .replace('#include <lights_physical_fragment>', /* glsl */`
         #include <lights_physical_fragment>
-        // Water IOR ≈ 1.33: F0 ≈ 0.02, versus 0.04 for the base dielectric stone.
-        material.specularColor = mix(material.specularColor, vec3(0.02), awPuddle);
-        material.specularColorBlended = mix(material.specularColorBlended, vec3(0.02), awPuddle);
+        // The aggregate and air in dry mortar make a weaker unresolved interface
+        // than a worn face. Pore water darkens the mineral without a clearcoat.
+        float awF0Weight = mix(0.86, 0.48, awGrit) * (1.0 - 0.14 * awWet);
+        float awGrazingWeight = mix(0.90, 0.63, awGrit);
+        material.specularColor *= mix(1.0, awF0Weight, uAwMineral.w);
+        material.specularF90 *= mix(1.0, awGrazingWeight, uAwMineral.w);
+        // Water IOR ≈ 1.33: F0 ≈ .02. Restore the interface's grazing response only here.
+        material.specularColor = mix(material.specularColor, vec3(0.020), awPuddle);
+        material.specularF90 = mix(material.specularF90, 1.0, awPuddle);
+        material.specularColorBlended = mix(material.specularColor, diffuseColor.rgb, metalnessFactor);
       `);
   };
-  mat.customProgramCacheKey = () => 'aw-stone';
+  mat.customProgramCacheKey = () => 'aw-stone-mineral';
 }
 
 export interface Materials {
@@ -782,27 +887,56 @@ export interface Materials {
   far: THREE.MeshBasicMaterial;
 }
 
+// Scan UVs belong to the geometry. Materials using the same scan and encoding
+// can share the decoded image, mip chain and sampler, including in flight.
+const scanLoader = new THREE.TextureLoader();
+const scanCache = new Map<string, Promise<THREE.Texture>>();
+function loadScan(name: string, slot: string, srgb: boolean): Promise<THREE.Texture> {
+  const url = `textures/${name}_${slot}.jpg`;
+  const key = `${url}:${srgb}`;
+  let loading = scanCache.get(key);
+  if (!loading) {
+    loading = scanLoader.loadAsync(url).then(t => {
+      t.wrapS = t.wrapT = THREE.RepeatWrapping;
+      t.colorSpace = srgb ? THREE.SRGBColorSpace : THREE.NoColorSpace;
+      t.anisotropy = 8;
+      return t;
+    }).catch(error => {
+      scanCache.delete(key);
+      throw error;
+    });
+    scanCache.set(key, loading);
+  }
+  return loading;
+}
+
 /** 异步加载一套外部贴图并替换到材质上；失败时保留程序化兜底。 */
 export function enhance(mat: THREE.MeshStandardMaterial, name: string, normalScale: number, pending: Promise<void>[]): void {
-  const loader = new THREE.TextureLoader();
-  const grab = (slot: string, srgb: boolean, apply: (t: THREE.Texture) => void): void => {
-    pending.push(new Promise<void>((resolve) => {
-      loader.load(`textures/${name}_${slot}.jpg`, (t) => {
-        t.wrapS = t.wrapT = THREE.RepeatWrapping;
-        t.colorSpace = srgb ? THREE.SRGBColorSpace : THREE.NoColorSpace;
-        t.anisotropy = 8;
-        apply(t);
-        mat.needsUpdate = true;
-        resolve();
-      }, undefined, () => resolve());
-    }));
+  const grab = (slot: string, srgb: boolean, apply: (t: THREE.Texture) => void): Promise<boolean> => {
+    const installed = loadScan(name, slot, srgb).then(texture => {
+      apply(texture);
+      mat.needsUpdate = true;
+      return true;
+    }, () => false); // Keep this slot's fallback if the download fails.
+    pending.push(installed.then(() => undefined));
+    return installed;
   };
-  grab('diff', true, (t) => { mat.map = t; });
-  grab('nor', false, (t) => { mat.normalMap = t; mat.normalScale.set(normalScale, normalScale); });
+  const albedo = grab('diff', true, (t) => { mat.map = t; });
+  const normal = grab('nor', false, (t) => { mat.normalMap = t; mat.normalScale.set(normalScale, normalScale); });
   grab('rough', false, (t) => { mat.roughnessMap = t; });
   grab('ao', false, (t) => { mat.aoMap = t; mat.aoMapIntensity = 1.0; });
   const u = mat.userData.aw as AwUniforms | undefined;
-  if (u && u.uAwHeightScale.value > 0) grab('disp', false, (t) => { u.uAwHeightMap.value = t; u.uAwHasDisp.value = 1; });
+  if (u) {
+    const mineral = AW_MINERAL_SCANS[name];
+    if (mineral) u.uAwMineral.value.set(...mineral, 1);
+    if (u.uAwHeightScale.value > 0) {
+      // Don't apply the height of one material to unrelated fallback UVs.
+      u.uAwHasDisp.value = 0;
+      pending.push(Promise.all([albedo, normal, loadScan(name, 'disp', false)]).then(([a, n, t]) => {
+        if (a && n) { u.uAwHeightMap.value = t; u.uAwHasDisp.value = 1; }
+      }, () => { /* No POM with a missing or incomplete scan. */ }));
+    }
+  }
 }
 
 /** Unvarnished timber stays matte even when its scan contains very dark roughness texels. */
@@ -811,37 +945,18 @@ export function weatheredWoodRoughness(mat: THREE.MeshStandardMaterial): void {
   const baseKey = mat.customProgramCacheKey();
   mat.onBeforeCompile = (shader, renderer) => {
     baseCompile.call(mat, shader, renderer);
-    shader.fragmentShader = shader.fragmentShader.replace('#include <roughnessmap_fragment>',
-      '#include <roughnessmap_fragment>\nroughnessFactor = mix(0.68, 1.0, roughnessFactor);');
+    shader.fragmentShader = shader.fragmentShader.replace('#include <roughnessmap_fragment>', /* glsl */`
+      #include <roughnessmap_fragment>
+      // Keep weathered wood broadly matte, with the raised fibre subtly drier.
+      float awFibre = dot(diffuseColor.rgb, vec3(.2126,.7152,.0722));
+      roughnessFactor = clamp(mix(.76, .97, roughnessFactor) + .055 * smoothstep(.025,.16,awFibre), .76, .98);
+      `);
   };
   mat.customProgramCacheKey = () => `aw-weathered-wood:${baseKey}`;
 }
 
 /** 所有外部贴图加载完成（含失败回退）后兑现。供截图工具等待，避免拍到未加载的兜底贴图。 */
 export let texturesReady: Promise<void> = Promise.resolve();
-
-/** Courtyard flagstone substrate and dressed repair pavers. Enable the latter atomically. */
-function loadFlagstone(mat: THREE.MeshStandardMaterial, normalScale: number, pending: Promise<void>[]): void {
-  const u = mat.userData.aw as AwUniforms;
-  enhance(mat, 'monastery_stone_floor', normalScale, pending);
-  const loader = new THREE.TextureLoader();
-  const blend = (slot: string, srgb: boolean): Promise<THREE.Texture> =>
-    loader.loadAsync(`textures/stone_pavers_${slot}.jpg`).then((t) => {
-      t.wrapS = t.wrapT = THREE.RepeatWrapping;
-      t.colorSpace = srgb ? THREE.SRGBColorSpace : THREE.NoColorSpace;
-      t.anisotropy = 8;
-      return t;
-    });
-  pending.push(Promise.all([blend('diff', true), blend('nor', false), blend('rough', false), blend('disp', false), blend('ao', false)])
-    .then(([albedo, normal, rough, disp, ao]) => {
-      u.uAwBlendAlbedo.value = albedo;
-      u.uAwBlendNormal.value = normal;
-      u.uAwBlendRough.value = rough;
-      u.uAwBlendDisp.value = disp;
-      u.uAwBlendAo.value = ao;
-      u.uAwHasBlend.value = 1;
-    }, () => { /* 主路扫描贴图保留。 */ }));
-}
 
 /** 把额外的异步资源（如 glTF 模型）并入 texturesReady 的等待链。 */
 export function trackPending(p: Promise<void>): void {
@@ -871,7 +986,7 @@ export function makeMaterials(): Materials {
     flag: std(flagS, { color: 0xffffff, roughness: 0.82, normalScale: new THREE.Vector2(0.95, 0.95) }),
     wood: std(woodS, { color: 0x9a8262, roughness: 0.82, normalScale: new THREE.Vector2(0.7, 0.7) }),
     woodFloor: std(woodFloorS, { color: 0x6b5a48, roughness: 0.8, normalScale: new THREE.Vector2(0.6, 0.6) }),
-    iron: std(ironS, { color: 0x2a2b2e, roughness: 0.69, metalness: 1.0, normalScale: new THREE.Vector2(0.32, 0.32) }),
+    iron: std(ironS, { color: 0x2a2b2e, roughness: 0.85, metalness: 0.83, normalScale: new THREE.Vector2(0.22, 0.22) }),
     cloth: new THREE.MeshPhysicalMaterial({ map: clothS.map, normalMap: clothS.normalMap, roughnessMap: clothS.roughnessMap, color: 0x7a6a52, roughness: 0.95, sheen: 0.5, sheenRoughness: 0.7, sheenColor: new THREE.Color(0x8a7a60), normalScale: new THREE.Vector2(0.4, 0.4) }),
     banner: new THREE.MeshPhysicalMaterial({ map: bannerTexture(), color: 0xffffff, roughness: 0.95, sheen: 0.35, sheenRoughness: 0.8, sheenColor: new THREE.Color(0x6a4a44), side: THREE.DoubleSide, alphaTest: 0.4 }),
     roof: std(roofS, { color: 0xffffff, roughness: 0.9, normalScale: new THREE.Vector2(0.9, 0.9) }),
@@ -897,7 +1012,7 @@ export function makeMaterials(): Materials {
         diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.106, 0.045, 0.017), awRust * 0.8);
         awWet = awRust;
       }`)
-      .replace('#include <roughnessmap_fragment>', THREE.ShaderChunk.roughnessmap_fragment + '\nroughnessFactor = mix(roughnessFactor, 0.88, awWet);')
+      .replace('#include <roughnessmap_fragment>', THREE.ShaderChunk.roughnessmap_fragment + '\nroughnessFactor = mix(mix(0.60, 0.92, roughnessFactor), 0.94, awWet);')
       .replace('#include <metalnessmap_fragment>', THREE.ShaderChunk.metalnessmap_fragment + '\nmetalnessFactor = mix(metalnessFactor, 0.25, awWet);');
   };
   m.iron.customProgramCacheKey = () => 'aw-iron';
@@ -906,9 +1021,13 @@ export function makeMaterials(): Materials {
   const rubble = awUniforms(0, 0.5, 0.64, [0.88, 0.92, 0.98], 0.013, [2.2, 4.15]);
   const darkRubble = awUniforms(0, 0.5, 0.63, [0.74, 0.78, 0.85], 0.013, [4.4, 6.85]);
   rubble.uAwRubble.value = darkRubble.uAwRubble.value = 1;
+  rubble.uAwScanDrift.value.set(.16, .035);
+  darkRubble.uAwScanDrift.value.copy(rubble.uAwScanDrift.value);
   stoneShader(m.stone, rubble);
   stoneShader(m.stoneDark, darkRubble);
-  const flag = awUniforms(1, 0.65, 0.67, [1.00, 1.04, 1.12], 0.013);
+  // Actual crowns and bevels are modeled. The very shallow scan-height trace
+  // stays within the inset single-face crops; it never supplies a second joint.
+  const flag = awUniforms(1, 0.54, 0.52, [0.94, 0.98, 1.02], .0018);
   flag.uAwPool.value = 1;
   flag.uAwYard.value = 1;
   stoneShader(m.flag, flag);
@@ -935,10 +1054,10 @@ export function makeMaterials(): Materials {
   weatheredWoodRoughness(m.wood);
 
   // 外部 CC0 贴图增强（石、木、瓦、碎石），2K：颜色/法线/粗糙度/AO/高度。
-  enhance(m.stone, 'castle_wall_varriation', 0.73, pending);
-  enhance(m.stoneDark, 'castle_wall_varriation', 0.73, pending);
-  loadFlagstone(m.flag, 0.95, pending);
-  enhance(m.wood, 'medieval_wood', 0.8, pending);
+  enhance(m.stone, 'castle_wall_varriation', 0.72, pending);
+  enhance(m.stoneDark, 'castle_wall_varriation', 0.72, pending);
+  enhance(m.flag, 'monastery_stone_floor', 0.86, pending);
+  enhance(m.wood, 'weathered_planks', 0.62, pending);
   enhance(m.woodFloor, 'brown_planks_05', 0.7, pending);
   enhance(m.roof, 'roof_slates_02', 0.9, pending);
 

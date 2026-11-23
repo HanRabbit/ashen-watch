@@ -6,8 +6,7 @@ All model materials are re-normalized to the art bible §4.5/§5 palette in code
 
 - `hunter.glb` — "Hunter Avatar" by 3DRaven — https://sketchfab.com/3d-models/93c6c4f6455849bb9095d02a309fdded — license CC-BY.
   Mixamo rig (79 joints) + baked Idle clip. Top hat collapsed in code and replaced with a
-  procedural hood + shoulder mantle + knee cloak; Walk/Run clips authored procedurally on the
-  same rig. Body texture desaturated/darkened to bible leather/cloth values.
+  procedural hood + shoulder mantle + knee cloak; locomotion retargeted from the Quaternius animation library (below). Body texture desaturated/darkened to bible leather/cloth values.
 - `reaper.glb` — "Reaper" by Hanako.com — https://sketchfab.com/3d-models/1ea16626fced4a04ad33e6d5d564bef0 — license CC-BY.
   Static mesh; scythe node hidden. Grey ghost base with cloth-flutter / dissolve shader,
   added tattered rag layers (shoulders / waist / hem), hood void and dim cold eyes.
@@ -25,3 +24,17 @@ its antlered bipedal dancer silhouette violated the bible; no external model is 
   Pebbled leather base for belt / straps / cuffs, tinted to bible leather `#4a3a2c`.
 
 Every external texture has a procedural canvas fallback in code so the game runs offline.
+
+## Locomotion performances — Quaternius (CC0 1.0)
+
+`Walk_Loop`, `Jog_Fwd_Loop`, and `Sprint_Loop` are from the Standard edition of
+[Universal Animation Library](https://quaternius.com/packs/universalanimationlibrary.html) by Quaternius.
+[Author’s original download](https://opengameart.org/content/universal-animation-library) ·
+[CC0 1.0 Universal](https://creativecommons.org/publicdomain/zero/1.0/). The original archive’s [license notice](licenses/Quaternius-UAL.txt) is included here.
+
+Rebuild from the archive’s `Godot/AnimationLibrary_Godot_Standard.glb`:
+`node tools/bake-watchman-motion.mjs /path/to/AnimationLibrary_Godot_Standard.glb`.
+The bake samples the authored body-space joint trajectories at 64 phases per loop, aligns left
+contact across speeds, and stores only millimetre-quantized landmarks. No source mesh, skin,
+or unrelated clips ship. In game, the hands, knees and feet can adapt to the watchman’s
+proportions, carried lantern and actual ground instead of inheriting the mannequin’s bind pose.

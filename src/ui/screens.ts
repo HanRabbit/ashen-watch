@@ -170,8 +170,8 @@ export class Screens {
       </div>
       <h3>镜头与显示</h3>
       <div class="btns">
-        <button class="${s.quality === 'cinematic' ? 'on' : ''}" data-act="quality" data-arg="cinematic">电影画质<small>屏幕空间反射、环境光遮蔽、体积光晕、LUT 调色与 MSAA。推荐独立显卡</small></button>
-        <button class="${s.quality === 'high' ? 'on' : ''}" data-act="quality" data-arg="high">高画质<small>环境光遮蔽、光晕、泛光与调色，关闭屏幕空间反射</small></button>
+        <button class="${s.quality === 'cinematic' ? 'on' : ''}" data-act="quality" data-arg="cinematic">电影画质<small>屏幕空间反射、环境光遮蔽、带阴影的体积雾、LUT 调色与 MSAA。推荐独立显卡</small></button>
+        <button class="${s.quality === 'high' ? 'on' : ''}" data-act="quality" data-arg="high">高画质<small>环境光遮蔽、低分辨率体积雾、泛光与调色，关闭屏幕空间反射</small></button>
         <button class="${s.quality === 'low' ? 'on' : ''}" data-act="quality" data-arg="low">低画质<small>关闭后期与粒子，降低阴影分辨率。集成显卡保帧率</small></button>
       </div>
       ${slider('sensitivity', '鼠标灵敏度', 0.2, 3, s.sensitivity)}

@@ -1,3 +1,4 @@
+import type { CourtContact } from './courtContact';
 // 角色模型（CHR-01…03）与动画（ANM-01、02、04）：守夜人、灰影、黑影。
 // art pass 3：守夜人 = Objaverse CC-BY 骨骼模型 + 程序化兜帽/披肩/及膝斗篷/皮革腰带（圣经 §9）；
 // 灰影 = 破袍 Reaper + 附加布条层与兜帽暗腔；黑影 = 全程序化四足破布体 RagWraith（concept/05）。
@@ -17,8 +18,9 @@ import { cyl, lerp, mesh, yawToRot } from './geom';
 import { Materials, glowTexture, smokeTexture } from './materials';
 import { makeClapper, makeLantern } from './props';
 import { SoftParticles } from './vfx';
-import { WatchmanPace } from './locomotion';
-import { HangingAngle, LimbSolver, supportCeiling } from './locomotionRig';
+import { type FootContact, WatchmanPace } from './locomotion';
+import { HangingAngle, LimbSolver, supportCeiling, watchmanFacing, WatchmanRoot } from './locomotionRig';
+import { createMotionPose, sampleWatchmanMotion } from './watchmanMotion';
 
 type Lantern = ReturnType<typeof makeLantern>;
 
@@ -292,25 +294,29 @@ function makeCloakOutfit(tex: CharTextures | null, lamp: HunterAsset['lampSource
   mantle.add(collar);
   mantle.position.set(0, 0.02, 0);
 
-  // A knee-length open-back work cloak, hung from the shoulder yoke. Long
+  // An open-front work cloak, hung from the shoulder yoke. Long
   // folds and two small hem losses read as heavy wool, not a fringe of spikes.
-  const cloakGeo = new THREE.CylinderGeometry(0.215, 0.255, 0.61, 44, 16, true, -1.49, 2.98);
+  const cloakLength = 0.55;
+  const cloakGeo = new THREE.CylinderGeometry(0.215, 0.255, cloakLength, 44, 16, true, -1.49, 2.98);
   const cp = cloakGeo.attributes.position as THREE.BufferAttribute;
   for (let i = 0; i < cp.count; i++) {
     const x = cp.getX(i), y = cp.getY(i), z = cp.getZ(i);
-    const ang = Math.atan2(x, z), down = (0.305 - y) / 0.61;
+    const ang = Math.atan2(x, z), down = 0.5 - y / cloakLength;
     const fold = 1 + (0.045 + down * 0.11) * Math.sin(ang * 9 + 0.8 * down)
       + down * 0.05 * Math.sin(ang * 17 - down * 1.5);
     const hem = down ** 4;
     const notch = 0.035 * Math.exp(-((ang + 0.61) ** 2) / 0.018)
       + 0.026 * Math.exp(-((ang - 0.84) ** 2) / 0.010);
-    cp.setXYZ(i, x * fold, y + hem * (notch + 0.012 * Math.sin(ang * 10) - 0.044 * Math.cos(ang)),
-      z * fold + down * (0.045 + 0.065 * Math.abs(Math.sin(ang))));
+    // Flare the open side panels behind the thigh sweep while retaining the
+    // long center-back folds and the original shoulder attachment.
+    const side = Math.abs(Math.sin(ang));
+    cp.setXYZ(i, x * fold, y + hem * (notch + 0.012 * Math.sin(ang * 10) - 0.044 * Math.cos(ang) + 0.05 * side),
+      z * fold + down * (0.065 + 0.085 * side));
   }
   cloakGeo.computeVertexNormals();
   const cloakPivot = new THREE.Group();
   const cape = mesh(cloakGeo, cloakMat);
-  cape.position.y = -0.305;
+  cape.position.y = -cloakLength / 2;
   cloakPivot.add(cape);
   cloakPivot.position.set(0, 0.025, 0.021);
 
@@ -426,7 +432,7 @@ class ProceduralPlayer {
     this.group.position.set(at.x, gy(at), -at.z);
     this.group.rotation.y = yawToRot(yaw);
     const speed = pace.speed / PLAYER.sprintSpeed;
-    const sw = pace.swing * (0.34 + pace.run * 0.24) * Math.sign(pace.forward);
+    const sw = pace.swing * (0.34 + pace.run * 0.24);
     for (const [i, leg] of [this.legL, this.legR].entries()) {
       const f = pace.feet[i];
       const dx = f.x - at.x, dz = f.z - at.z;
@@ -436,7 +442,7 @@ class ProceduralPlayer {
       leg.rotation.z = Math.atan2(side, Math.max(0.35, gy(at) + leg.position.y - f.y));
       leg.scale.y = THREE.MathUtils.clamp(Math.hypot(gy(at) + leg.position.y - f.y, forward, side) / 0.89, 0.67, 1.06);
     }
-    this.armL.rotation.x = lerp(this.armL.rotation.x, -sw * 0.7, 0.3);
+    this.armL.rotation.x = -sw * 0.7;
     const lan = w.lantern;
     this.raise = lerp(this.raise, lan.raised ? 1 : 0, Math.min(1, dt * 9));
     this.armR.rotation.x = w.inv.hasLantern ? lerp(0.25, 2.25, this.raise) + sw * 0.08 : sw * 0.7;
@@ -825,6 +831,17 @@ type CloakFlutter = { uTime: { value: number }; uSway: { value: number } };
 export type RenderedFootPlant = Readonly<{ x: number; y: number; z: number; planted: boolean; plantId: number }>;
 export type WatchmanFootPlants = Readonly<{ left: RenderedFootPlant; right: RenderedFootPlant }>;
 
+// Measure the authored cycles' neutral hip height instead of injecting their
+// very different absolute stance heights into Hunter's calibrated skeleton.
+const clipHipHeights = (() => {
+  const pose = createMotionPose();
+  return [[0, 0], [1, 0], [1, 1]].map(([jog, run]) => {
+    let sum = 0;
+    for (let i = 0; i < 32; i++) sum += sampleWatchmanMotion(pose, i / 32, jog, run).hips.y;
+    return sum / 32;
+  });
+})();
+
 export class PlayerModel {
   readonly group = new THREE.Group();
   readonly lanternLight = new THREE.PointLight(0xffa550, 0, 13, 1.5);
@@ -833,6 +850,7 @@ export class PlayerModel {
   private clapper: THREE.Group;
   private asset: HunterAsset | null = null;
   private readonly pace = new WatchmanPace();
+  private readonly displayRoot = new WatchmanRoot();
   private readonly limb = new LimbSolver();
   private readonly flutter: CloakFlutter = { uTime: { value: 0 }, uSway: { value: 0 } };
   private lastWorld: World | null = null;
@@ -846,6 +864,18 @@ export class PlayerModel {
   private readonly cloakRoll = new HangingAngle();
   private readonly rest = new Map<THREE.Bone, { position: THREE.Vector3; rotation: THREE.Quaternion }>();
   private readonly legLengths = [0, 0];
+  private readonly armLengths = [0, 0];
+  private readonly motion = createMotionPose();
+  private readonly motionVector = new THREE.Vector3();
+  private readonly motionAxis = new THREE.Vector3();
+  private readonly pelvisCenter = new THREE.Vector3();
+  private pelvisFacing = 0;
+  private chestFacing = 0;
+  private neutralPelvis = 0;
+  private sourcePelvis = 0;
+  private readonly gripLocal = new THREE.Vector3();
+  private readonly carryTarget = new THREE.Vector3();
+  private carryReady = false;
   private readonly footReadback = new THREE.Vector3();
   private poseReady = false;
   private readonly target = new THREE.Vector3();
@@ -855,9 +885,21 @@ export class PlayerModel {
   private readonly limit = new THREE.Vector3();
   private readonly ground = (x: number, z: number, y: number): number => {
     // Match solid stair surfaces, not the smoothed visual root or a floor above the boot.
-    for (const tread of STAIR_MASS) if (Math.abs(tread.h - y) < 0.69 && inArea(tread, x, z)) return tread.h;
+    let nearestTread: number | undefined;
+    let error = 0.69;
+    for (const tread of STAIR_MASS) {
+      if (!inArea(tread, x, z)) continue;
+      const delta = Math.abs(tread.h - y);
+      if (delta < error) { nearestTread = tread.h; error = delta; }
+    }
+    if (nearestTread !== undefined) return nearestTread;
     const flat = supportY(x, z, y);
-    return flat && Math.abs(flat.y - y) < 0.47 ? flat.y : y;
+    if (!flat || Math.abs(flat.y - y) >= 0.47) return y;
+    // The gameplay floor stays flat. Only the outdoor foot solver follows
+    // the tops of stones, compacted soil and the grate; never pull a boot on
+    // a stair, in the cellar or on the rampart toward the yard below it.
+    if (flat.floor === '1F' && flat.y === 0 && this.courtContact) return this.courtContact.heightAt(x, z) ?? flat.y;
+    return flat.y;
   };
   private raise = 0;
   private raiseVelocity = 0;
@@ -869,7 +911,7 @@ export class PlayerModel {
   private tmpE = new THREE.Euler();
   private tmpV = new THREE.Vector3();
 
-  constructor(m: Materials, tex: THREE.Texture) {
+  constructor(m: Materials, tex: THREE.Texture, private readonly courtContact?: CourtContact) {
     this.lantern = makeLantern(m, tex);
     this.clapper = makeClapper(m);
     this.procedural = new ProceduralPlayer(m, tex, this.lanternLight, this.lantern, this.clapper);
@@ -885,18 +927,26 @@ export class PlayerModel {
     this.procedural.group.visible = false;
     this.group.add(a.root);
     for (const bone of Object.values(a.bones)) this.rest.set(bone, { position: bone.position.clone(), rotation: bone.quaternion.clone() });
-    for (const [i, side] of ['L', 'R'].entries()) {
+    for (const [i, side] of (['L', 'R'] as const).entries()) {
       const { bones } = a;
+      const shoulder = bones[`arm${side}`], elbow = bones[`foreArm${side}`], wrist = bones[`hand${side}`];
+      if (shoulder && elbow && wrist) {
+        elbow.getWorldPosition(this.joint);
+        this.armLengths[i] = this.joint.distanceTo(shoulder.getWorldPosition(this.tmpV))
+          + this.joint.distanceTo(wrist.getWorldPosition(this.tmpV));
+      }
       const hip = bones[`upLeg${side}`], knee = bones[`leg${side}`], ankle = bones[`foot${side}`];
       if (hip && knee && ankle) {
         knee.getWorldPosition(this.joint);
+        this.limb.calibrate(hip, knee, ankle);
         this.legLengths[i] = this.joint.distanceTo(hip.getWorldPosition(this.tmpV))
           + this.joint.distanceTo(ankle.getWorldPosition(this.tmpV));
       }
     }
+    this.calibrateHunter(a);
     a.mixer.clipAction(a.idle).play();
     // 提灯挂右手；兜帽挂头；披肩/斗篷/腰带挂胸椎
-    this.lantern.group.position.set(0, -0.152, 0);
+    this.lantern.group.position.set(0, -0.115, 0);
     this.grip.add(this.lantern.group);
     const { hood, mantle, cloakPivot, belt } = makeCloakOutfit(tex, a.lampSource, this.flutter);
     a.headAnchor.add(hood);
@@ -905,6 +955,41 @@ export class PlayerModel {
     this.clapper.position.set(-0.16, -0.42, 0.16);
     this.clapper.rotation.z = 0.5;
     a.chestAnchor.add(this.clapper);
+  }
+
+  private calibrateHunter(a: HunterAsset): void {
+    const b = a.bones;
+    if (b.hips && b.upLegL && b.upLegR && this.legLengths.every(length => length > 0)) {
+      b.upLegL.getWorldPosition(this.joint);
+      b.upLegR.getWorldPosition(this.tmpV);
+      this.pelvisFacing = Math.atan2(this.tmpV.z - this.joint.z, this.tmpV.x - this.joint.x);
+      this.pelvisCenter.copy(this.joint).lerp(this.tmpV, 0.5);
+      const hip = b.hips.getWorldPosition(this.limit);
+      this.sourcePelvis = hip.y;
+      const hipRise = hip.y - this.pelvisCenter.y;
+      this.pelvisCenter.sub(hip).applyAxisAngle(this.axisY, this.pelvisFacing).add(hip).y = 0;
+      this.neutralPelvis = hipRise + (this.legLengths[0] + this.legLengths[1]
+        - a.feet[0].soleOffset.y - a.feet[1].soleOffset.y) * 0.5 - 0.021;
+    }
+    if (b.armL && b.armR) {
+      b.armL.getWorldPosition(this.joint);
+      b.armR.getWorldPosition(this.tmpV);
+      this.chestFacing = Math.atan2(this.tmpV.z - this.joint.z, this.tmpV.x - this.joint.x);
+      // The cloak/hood were authored in actor axes. Keep that alignment when
+      // straightening the asymmetric source Idle under the outfit.
+      a.chestAnchor.quaternion.premultiply(this.anchorCorrection(a.chestAnchor, this.chestFacing));
+      a.headAnchor.quaternion.premultiply(this.anchorCorrection(a.headAnchor, this.chestFacing));
+    }
+    if (b.handR) {
+      const middle = b.handR.children.find(child => /Middle1_/.test(child.name));
+      if (middle) this.gripLocal.copy(middle.position).multiplyScalar(0.68);
+    }
+  }
+
+  private anchorCorrection(anchor: THREE.Object3D, angle: number): THREE.Quaternion {
+    anchor.parent!.getWorldQuaternion(this.targetTurn);
+    return this.tmpQ.setFromAxisAngle(this.axisY, -angle)
+      .premultiply(this.targetTurn.clone().invert()).multiply(this.targetTurn);
   }
 
   triggerHurt(): void {
@@ -926,19 +1011,28 @@ export class PlayerModel {
   update(w: World, at: Grounded, yaw: number, dt: number, time: number): void {
     if (w !== this.lastWorld) { this.pace.reset(); this.rotS = null; this.pelvisY = null; this.lastWorld = w; }
     const targetYaw = yawToRot(yaw);
-    if (this.rotS === null) this.rotS = targetYaw;
-    const difference = targetYaw - this.rotS;
-    this.rotS += Math.atan2(Math.sin(difference), Math.cos(difference)) * (1 - Math.exp(-14 * dt));
+    this.rotS = this.rotS === null ? targetYaw : watchmanFacing(this.rotS, targetYaw, dt);
     const y = gy(at);
     const terrainY = this.ground(at.x, at.z, w.player.y);
     this.pace.update({ x: at.x, y: w.player.y, z: at.z }, -this.rotS, dt, this.ground);
     const pace = this.pace;
+    const root = this.displayRoot;
+    root.update(at.x, at.z, dt, pace.resetThisFrame);
     if (!this.asset) {
-      this.procedural.update(w, at, -this.rotS, dt, time, pace);
+      this.procedural.update(w, { x: root.x, y, z: root.z }, -this.rotS, dt, time, pace);
       return;
     }
     const a = this.asset, b = a.bones;
-    this.group.position.set(at.x, y, -at.z);
+    const motion = sampleWatchmanMotion(this.motion, pace.clipPhase, pace.jog, pace.sprint);
+    const weight = pace.clipWeight;
+    const clipHipYaw = Math.atan2(motion.upLegR.z - motion.upLegL.z, motion.upLegR.x - motion.upLegL.x);
+    const clipChestYaw = Math.atan2(motion.armR.z - motion.armL.z, motion.armR.x - motion.armL.x);
+    const clipChestLean = Math.atan2(motion.neck.z - motion.hips.z, motion.neck.y - motion.hips.y);
+    const clipChestRoll = -Math.atan2(motion.armR.y - motion.armL.y, motion.armR.x - motion.armL.x);
+    const clipRestY = lerp(lerp(clipHipHeights[0], clipHipHeights[1], pace.jog), clipHipHeights[2], pace.sprint);
+    const hipDelta = THREE.MathUtils.clamp((motion.hips.y - clipRestY) * 0.39, -0.042, 0.038);
+    const gaitHipYaw = lerp(-pace.swing * 0.075, clipHipYaw * 0.72, weight);
+    this.group.position.set(root.x, y, -root.z);
     this.group.rotation.y = this.rotS;
     // Overlay the procedural pose on a fresh base even if a future idle clip
     // omits some IK-driven joints or the hip translation track.
@@ -951,6 +1045,7 @@ export class PlayerModel {
     if (pace.resetThisFrame) {
       this.pelvisY = this.solvedPelvisY = null;
       this.raise = raiseGoal;
+      this.carryReady = false;
       this.raiseVelocity = 0;
       this.lampPitch.reset(); this.lampRoll.reset(); this.cloakPitch.reset(); this.cloakRoll.reset();
     }
@@ -962,81 +1057,125 @@ export class PlayerModel {
     this.hurt = Math.max(0, this.hurt - dt * 3);
     this.turnQ.setFromAxisAngle(this.axisY, this.rotS);
     if (b.hips) {
-      // The pelvis follows the continuous ramp, not step-by-step quantized
-      // ground. Fixed support boots then cap its height before solving IK.
-      const plantedY = pace.feet.reduce((low, f) => f.planted ? Math.min(low, f.y) : low, terrainY);
-      const baseY = Math.min(y, lerp(y, Math.max(y - 0.30, plantedY), 0.47));
-      this.pelvisY = this.pelvisY === null ? baseY : lerp(this.pelvisY, baseY, smooth(20));
-      const shift = this.limit.set(pace.support * (0.021 + pace.activity * 0.017) + pace.lateral * 0.008, 0,
-        -pace.forward * 0.013).applyQuaternion(this.turnQ);
-      shift.y = this.pelvisY - y - 0.049 - pace.run * 0.021 - pace.compression * 0.026
-        + Math.abs(pace.swing) * 0.021;
+      // Hunter's only baked pose is a staggered Idle: its hip line is ~43°
+      // off the walking axis. Centre the hip joints before applying gait.
+      this.tilt(b.hips, 0, this.pelvisFacing + gaitHipYaw, 0);
+      // Follow the smoothed player height. A lower planted tread can cap
+      // the reachable hips, but does not additionally pull the desired rest down.
+      const baseY = Math.min(y, terrainY + 0.11);
+      this.pelvisY = this.pelvisY === null ? baseY : lerp(this.pelvisY, baseY, smooth(22));
+      const clipSway = (motion.upLegL.x + motion.upLegR.x) * 0.5;
+      const shift = this.limit.set(-this.pelvisCenter.x + lerp(pace.support * 0.025, clipSway * 0.55, weight) + pace.lateral * 0.006, 0,
+        -this.pelvisCenter.z - pace.forward * 0.007).applyQuaternion(this.turnQ);
+      b.hips.getWorldPosition(this.tmpV);
+      const base = this.tmpV.y;
+      let preferred = this.pelvisY + this.neutralPelvis + (base - y - this.sourcePelvis) * (1 - 0.88 * pace.activity)
+        + hipDelta * weight - pace.compression * lerp(0.024 + pace.run * 0.013, 0.012, weight) + pace.float * 0.022;
       let ceiling = Infinity;
-      for (const [i, side] of ['L', 'R'].entries()) {
+      for (const [i, side] of (['L', 'R'] as const).entries()) {
         const hip = b[`upLeg${side}`], f = pace.feet[i];
         if (!hip || !this.legLengths[i]) continue;
         hip.getWorldPosition(this.joint);
-        const contact = f.planted ? f : pace.pendingPlant;
-        if (!contact) continue;
-        const horizontal = Math.hypot(this.joint.x + shift.x - contact.x, this.joint.z + shift.z + contact.z);
-        const maxY = supportCeiling(contact.y + a.feet[i].ankleHeight, horizontal, this.legLengths[i]) - this.joint.y;
-        if (f.planted) ceiling = Math.min(ceiling, maxY);
-        else {
-          // An airborne foot can yield to IK reach; prepare the pelvis for
-          // its constraint only during the last part of the landing arc.
-          const t = pace.landingWeight;
-          shift.y -= Math.max(0, shift.y - maxY) * t;
-        }
+        const cap = (contact: Readonly<FootContact>, reserve: number): number => {
+          this.ankleTarget(contact, a.feet[i]);
+          const horizontal = Math.hypot(this.joint.x + shift.x - this.target.x, this.joint.z + shift.z - this.target.z);
+          return supportCeiling(this.target.y, horizontal, this.legLengths[i], reserve) + base - this.joint.y;
+        };
+        // A far-away boot is still near the ground for the first part of
+        // toe-off. It must not stop limiting the pelvis the exact frame its
+        // plant flag flips: that used to produce a vertical pop in a pivot.
+        // Apply the same reach constraint to the airborne target itself.
+        ceiling = Math.min(ceiling, cap(f, f.planted ? 0.012 : 0.004));
+        const landing = pace.landing(i);
+        if (landing) preferred -= Math.max(0, preferred - cap(landing, 0.012)) * pace.landingWeight(i);
       }
-      b.hips.getWorldPosition(this.tmpV);
-      const base = this.tmpV.y;
-      const preferred = base + shift.y;
-      const rate = this.solvedPelvisY !== null && preferred < this.solvedPelvisY ? 39 : 22;
-      this.solvedPelvisY = Math.min(base + ceiling, this.solvedPelvisY === null ? preferred : lerp(this.solvedPelvisY, preferred, smooth(rate)));
-      this.tmpV.add(shift).y = this.solvedPelvisY;
+      const relax = this.solvedPelvisY !== null && preferred < this.solvedPelvisY ? 42 : 34;
+      const previousY = this.solvedPelvisY;
+      this.solvedPelvisY = Math.min(ceiling, previousY === null ? preferred
+        : Math.min(previousY + 3.8 * dt, lerp(previousY, preferred, smooth(relax))));
+      b.hips.getWorldPosition(this.tmpV).add(shift).y = this.solvedPelvisY;
       b.hips.parent?.worldToLocal(this.tmpV);
       b.hips.position.copy(this.tmpV);
     }
-    this.tilt(b.spine, pace.forward * 0.035 + pace.accelForward * 0.005 + this.hurt * 0.32, pace.swing * 0.093 - pace.turn * 0.020, -pace.lateral * 0.022 + pace.support * 0.024);
-    this.tilt(b.spine1, pace.forward * 0.016, pace.swing * 0.035, -pace.lateral * 0.014);
-    this.tilt(b.head, -pace.forward * 0.021, -pace.swing * 0.051, pace.lateral * 0.018);
+    this.tilt(b.spine, lerp(pace.forward * 0.021 + pace.run * 0.051,
+      THREE.MathUtils.clamp(clipChestLean - 0.105, -0.042, 0.18), weight) + pace.accelForward * 0.004 + this.hurt * 0.32,
+      this.chestFacing - this.pelvisFacing - gaitHipYaw + lerp(pace.swing * 0.09, clipChestYaw * 0.78, weight) - pace.turn * 0.020,
+      -pace.lateral * 0.019 + lerp(pace.support * 0.016, clipChestRoll * 0.48, weight));
+    this.tilt(b.spine1, (1 - weight) * pace.forward * 0.005, (1 - weight) * pace.swing * 0.048, -pace.lateral * 0.012);
+    this.tilt(b.head, -pace.forward * 0.016 - pace.run * 0.026, -pace.swing * 0.099, pace.lateral * 0.012);
 
-    for (const [i, side] of ['L', 'R'].entries()) {
+    for (const [i, side] of (['L', 'R'] as const).entries()) {
       const f = pace.feet[i], boot = a.feet[i];
       const hip = b[`upLeg${side}`], knee = b[`leg${side}`], ankle = b[`foot${side}`];
       if (!hip || !knee || !ankle) continue;
-      this.target.set(f.x, f.y + boot.ankleHeight, -f.z);
-      this.pole.set(i === 0 ? -0.14 : 0.14, 0, -1).applyQuaternion(this.turnQ);
+      this.ankleTarget(f, boot);
+      const sourceUpper = motion[`upLeg${side}`];
+      const legAxis = this.motionAxis.subVectors(motion[`foot${side}`], sourceUpper).normalize();
+      const kneeBend = this.motionVector.subVectors(motion[`leg${side}`], sourceUpper);
+      kneeBend.addScaledVector(legAxis, -kneeBend.dot(legAxis)).normalize();
+      // The clip supplies lateral knee tracking, but the bend remains forward
+      // even when the floor asks a retargeted foot to land off the clip's axis.
+      this.pole.set(lerp(i === 0 ? -0.12 : 0.12, THREE.MathUtils.clamp(kneeBend.x, -0.33, 0.33), weight), 0, -1)
+        .applyQuaternion(this.turnQ);
       this.limb.solve(hip, knee, ankle, this.target, this.pole);
-      this.tmpQ.setFromEuler(this.tmpE.set(f.pitch, -f.yaw, 0, 'YXZ')).multiply(boot.orientation);
-      this.limb.orient(ankle, this.tmpQ);
+      this.limb.orient(ankle, this.tmpQ.multiply(boot.orientation));
     }
 
     // Reach in body axes, with a separate elbow guide. The lamp does not inherit
     // the swinging arm's twist or cross the body when transitioning to raised.
-    for (const [i, side] of ['L', 'R'].entries()) {
+    for (const [i, side] of (['L', 'R'] as const).entries()) {
       const upper = b[`arm${side}`], lower = b[`foreArm${side}`], hand = b[`hand${side}`];
       if (!upper || !lower || !hand) continue;
       const sign = i === 0 ? -1 : 1;
       const carrying = i === 1 && w.inv.hasLantern;
-      const counter = pace.swing * (0.16 + pace.run * 0.16) * THREE.MathUtils.clamp(pace.forward, -1, 1) * sign;
+      const counter = -sign * pace.swing * (0.175 + pace.run * 0.125);
+      const part = this.motionVector.subVectors(motion[`hand${side}`], motion[`arm${side}`]);
+      const sourceElbow = motion[`foreArm${side}`];
+      const scale = this.armLengths[i] / Math.max(0.01, sourceElbow.distanceTo(motion[`arm${side}`])
+        + sourceElbow.distanceTo(motion[`hand${side}`]));
+      part.z *= -1;
+      part.multiplyScalar(scale);
       if (carrying) {
-        this.target.set(lerp(0.365, 0.33, this.raise), lerp(0.99, 1.58, this.raise), lerp(-0.12, -0.43, this.raise));
-        this.target.z += (counter * 0.15 + pace.accelForward * 0.004) * (1 - this.raise);
-        this.target.y += pace.compression * -0.016 + Math.sin(Math.PI * this.raise) * 0.04;
-      } else this.target.set(sign * 0.255, 0.81 + Math.abs(counter * 0.27), -0.045 + counter);
-      this.group.localToWorld(this.target);
+        const free = 1 - this.raise;
+        this.target.set(lerp(0.143, 0.098, this.raise), lerp(-0.346, 0.197, this.raise), lerp(-0.101, -0.352, this.raise));
+        this.target.z += (lerp(counter * 0.19, THREE.MathUtils.clamp((part.z + 0.073) * 0.28, -0.059, 0.062), weight)
+          + pace.accelForward * 0.003) * free;
+        this.target.y += -pace.compression * 0.009 + Math.sin(Math.PI * this.raise) * 0.025;
+      } else {
+        this.target.set(sign * 0.056, -0.432 + pace.run * 0.142 + Math.abs(counter) * 0.27,
+          lerp(-0.025, -0.10, pace.run) + counter).lerp(part, weight);
+      }
       upper.getWorldPosition(this.joint);
+      this.target.applyQuaternion(this.turnQ).add(this.joint);
       if (carrying) {
+        // The loaded hand rides on the shoulder, but the wrist can absorb
+        // small high-frequency shoulder motion rather than jerking the lamp.
+        this.group.worldToLocal(this.target);
+        if (this.carryReady) this.carryTarget.lerp(this.target, smooth(25));
+        else this.carryTarget.copy(this.target);
+        this.carryReady = true;
+        this.group.localToWorld(this.target.copy(this.carryTarget));
         const t = cameraClearT(this.joint.x, -this.joint.z, this.joint.y, this.target.x, -this.target.z, this.target.y, w.doors);
         if (t < 1) this.target.lerpVectors(this.joint, this.target, Math.max(0.24, t - 0.16));
       }
-      this.pole.set(sign * (carrying ? 0.45 : 0.3), carrying ? -0.75 : -0.2, 0.6).applyQuaternion(this.turnQ);
+      this.pole.set(sign * (carrying ? 0.45 : 0.3), carrying ? -0.75 : -0.2, 0.6);
+      if (!carrying) {
+        this.motionAxis.subVectors(sourceElbow, motion[`arm${side}`]);
+        this.motionAxis.z *= -1;
+        this.motionAxis.addScaledVector(part, -this.motionAxis.dot(part) / Math.max(0.001, part.lengthSq()));
+        // Blending a pole with its opposite would flip the elbow. Keep at
+        // least a small outward component in the handed local frame.
+        this.motionAxis.normalize();
+        this.motionAxis.x = sign * Math.max(0.22, sign * this.motionAxis.x);
+        this.pole.normalize().lerp(this.motionAxis, weight * 0.82);
+      }
+      this.pole.applyQuaternion(this.turnQ);
       this.limb.solve(upper, lower, hand, this.target, this.pole);
     }
+    if (!w.inv.hasLantern) this.carryReady = false;
     this.grip.visible = this.lantern.group.visible = w.inv.hasLantern;
     if (b.handR) {
-      b.handR.getWorldPosition(this.tmpV);
+      b.handR.localToWorld(this.tmpV.copy(this.gripLocal));
       this.grip.position.copy(this.group.worldToLocal(this.tmpV));
     }
     const freeHang = 1 - this.raise * 0.72;
@@ -1047,7 +1186,7 @@ export class PlayerModel {
     this.flutter.uTime.value = time;
     this.flutter.uSway.value = lerp(this.flutter.uSway.value, pace.activity * 0.44 + Math.abs(pace.turn) * 0.055, smooth(5));
     if (this.cloakPivot) {
-      this.cloakPivot.rotation.x = this.cloakPitch.update(0.02 - Math.max(0, pace.forward) * 0.063 - pace.accelForward * 0.009, dt, 10, 6);
+      this.cloakPivot.rotation.x = this.cloakPitch.update(0.02 - Math.max(0, pace.forward) * 0.063 - pace.run * 0.12 - pace.accelForward * 0.009, dt, 10, 6);
       this.cloakPivot.rotation.z = this.cloakRoll.update(-pace.lateral * 0.055 - pace.accelLateral * 0.009 + pace.turn * 0.023, dt, 10, 6);
     }
 
@@ -1062,6 +1201,14 @@ export class PlayerModel {
     this.lantern.glow.visible = on;
     this.lantern.glass.emissiveIntensity = on ? 2.4 * flick : 0;
     this.poseReady = true;
+  }
+
+  private ankleTarget(f: Readonly<FootContact>, boot: HunterAsset['feet'][number]): void {
+    // Track the point that touches the tread. Rotating about the ankle would
+    // move the sole marker sideways and vertically during toe-off and landing.
+    this.tmpQ.setFromEuler(this.tmpE.set(f.pitch, -f.yaw, 0, 'YXZ'));
+    this.tmpV.copy(boot.soleOffset).applyQuaternion(this.tmpQ);
+    this.target.set(f.x, f.y, -f.z).sub(this.tmpV);
   }
 
   private tilt(joint: THREE.Bone | undefined, x: number, y: number, z: number): void {

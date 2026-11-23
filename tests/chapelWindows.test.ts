@@ -12,8 +12,12 @@ it('keeps the great window open through both wall faces, with load-bearing stone
   });
   b.build(scene); scene.updateMatrixWorld(true);
   for (const side of [-1, 1]) {
-    const hits = (x: number, y: number) => new Raycaster(new Vector3(x,y,side), new Vector3(0,0,-side), 0, 2)
-      .intersectObjects(scene.children).map(hit => (hit.object as Mesh).material);
+    const cast = (x: number, y: number) => new Raycaster(new Vector3(x,y,side), new Vector3(0,0,-side), 0, 2)
+      .intersectObjects(scene.children);
+    const hits = (x: number, y: number) => cast(x,y).map(hit => (hit.object as Mesh).material);
+    const pane = cast(0.13, 2.2).find(hit => (hit.object as Mesh).material === glass);
+    expect(pane?.point.z).toBeCloseTo(-0.1354, 4);
+
     for (const [x,y] of [[0.13, 2.2], [0.75, 2.2], [-1.45, 2.2], [0.01, 6.23]]) {
       const through = hits(x,y);
       expect(through).toContain(glass);
@@ -23,4 +27,13 @@ it('keeps the great window open through both wall faces, with load-bearing stone
     expect(hits(0.461, 2.2)).toContain(trim);
     expect(hits(2.7, 1.8)).toContain(ash);
   }
+  const seat = new Vector3(0.21, 2.2, -0.1354);
+  const first = (side: number) => {
+    const origin = seat.clone().add(new Vector3(side, 0, side));
+    return new Raycaster(origin, seat.clone().sub(origin).normalize(), 0, 2).intersectObjects(scene.children)[0];
+  };
+  // The very same spot on the central light is hidden behind a mullion from
+  // the raking exterior angle, but is glass-first from the nave side.
+  expect((first(1).object as Mesh).material).toBe(trim);
+  expect((first(-1).object as Mesh).material).toBe(glass);
 });

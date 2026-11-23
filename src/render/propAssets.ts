@@ -53,8 +53,13 @@ export interface PropSpec {
 
 function applyNorm(mt: THREE.MeshStandardMaterial, n: MatNorm): void {
   if (n.color !== undefined) mt.color.setHex(n.color);
-  if (n.roughness !== undefined) { mt.roughness = n.roughness; mt.roughnessMap = null; }
-  if (n.metalness !== undefined) { mt.metalness = n.metalness; mt.metalnessMap = null; }
+  // Timber re-ranges the existing roughness texels instead of flattening them.
+  const timber = n.wear?.kind === 'wood';
+  if (n.roughness !== undefined) {
+    mt.roughness = n.roughness;
+    if (!timber) mt.roughnessMap = null;
+  }
+  if (!timber && n.metalness !== undefined) { mt.metalness = n.metalness; mt.metalnessMap = null; }
   if (n.emissive !== undefined) mt.emissive.setHex(n.emissive);
   if (n.emissiveIntensity !== undefined) mt.emissiveIntensity = n.emissiveIntensity;
   if (n.opacity !== undefined) { mt.opacity = n.opacity; mt.transparent = n.opacity < 1; }
@@ -88,20 +93,7 @@ const WEAR_BODY = /* glsl */`
   float sd = uWearSeed;
   float up = smoothstep(0.25, 0.7, wn.y);
   float side = 1.0 - abs(wn.y);
-  if (uWearKind < 0.5) {
-    // 木：桶底潮湿发黑 + 端面裂纹 + 边角磨亮露暖褐 + 侧面锈流斑
-    float damp = smoothstep(0.30, 0.06, wp.y);
-    diffuseColor.rgb *= mix(1.0, 0.45, damp);
-    roughnessFactor = mix(roughnessFactor, 0.38, damp);
-    float crack = smoothstep(0.78, 0.86, wearFbm(wp.xz * 22.0 + sd)) * up;
-    diffuseColor.rgb *= 1.0 - crack * 0.5;
-    float polish = smoothstep(0.62, 0.85, wearFbm(wp.xz * 3.0 + wp.y * 2.0 + sd)) * up;
-    roughnessFactor = mix(roughnessFactor, 0.6, polish);
-    diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * vec3(1.25, 1.12, 0.95), polish * 0.6);
-    float rust = smoothstep(0.70, 0.82, wearFbm(vec2((wp.x + wp.z) * 5.0, wp.y * 1.6) + sd)) * side;
-    diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.106, 0.045, 0.017), rust * 0.55);
-    roughnessFactor = mix(roughnessFactor, 0.88, rust);
-  } else if (uWearKind < 1.5) {
+  if (uWearKind < 1.5) {
     // 铁：凸起磨亮 + 凹处/下缘锈 + 滴水锈流
     float polish = smoothstep(0.66, 0.86, wearFbm(wp.xz * 4.0 + wp.y * 3.0 + sd)) * up;
     roughnessFactor = mix(roughnessFactor, 0.4, polish);
@@ -153,12 +145,112 @@ const WEAR_BODY = /* glsl */`
   }
 }
 `;
-export interface WearOpts { kind: 'wood' | 'iron' | 'stone' | 'soot' | 'cloth'; seed?: number; center?: [number, number]; rimY?: number; sootY?: number; sacks?: [number, number, number][]; }
-const wearKindId = { wood: 0, iron: 1, stone: 2, soot: 3, cloth: 4 };
+interface TimberWear {
+  kind: 'wood';
+  /** Only for atlases with real hardware in the packed blue channel. */
+  packedMetal?: boolean;
+  /** World-space contact with wet ground, in metres. Omit for sheltered timber. */
+  groundY?: number;
+  /** World-space height of a known handling surface, e.g. a seat or worktop. */
+  contactY?: number;
+}
+export type WearOpts = TimberWear | {
+  kind: 'iron' | 'stone' | 'soot' | 'cloth';
+  seed?: number; center?: [number, number]; rimY?: number; sootY?: number; sacks?: [number, number, number][];
+};
+const wearKindId = { iron: 1, stone: 2, soot: 3, cloth: 4 };
+
+/** Follow the baked/scanned grain rather than painting world-space noise across it.
+ * The optional ground and handling bands need only a height varying; the grain
+ * reuses the stock albedo and roughness samples. */
+function applyTimberWear(mat: THREE.MeshStandardMaterial, o: TimberWear): void {
+  const packedMetal = o.packedMetal === true && mat.metalnessMap !== null;
+  if (!packedMetal) {
+    mat.metalness = 0;
+    mat.metalnessMap = null;
+  }
+  // GLTFLoader shares the same texture (and thus UV transform/channel) for G and B.
+  const shareSample = packedMetal && mat.roughnessMap === mat.metalnessMap;
+  const ground = o.groundY !== undefined;
+  const contact = o.contactY !== undefined;
+  const height = ground || contact;
+  const prev = mat.onBeforeCompile;
+  const baseKey = mat.customProgramCacheKey();
+  mat.onBeforeCompile = (shader, renderer) => {
+    prev.call(mat, shader, renderer);
+    if (height) {
+      shader.vertexShader = 'varying float vTimberY;\n' + shader.vertexShader.replace(
+        '#include <worldpos_vertex>', '#include <worldpos_vertex>\nvTimberY = (modelMatrix * vec4(transformed, 1.0)).y;');
+      shader.fragmentShader = 'varying float vTimberY;\n' + shader.fragmentShader;
+    }
+    if (ground) {
+      shader.uniforms.uTimberGroundY = { value: o.groundY };
+      shader.fragmentShader = 'uniform float uTimberGroundY;\n' + shader.fragmentShader;
+    }
+    if (contact) {
+      shader.uniforms.uTimberContactY = { value: o.contactY };
+      shader.fragmentShader = 'uniform float uTimberContactY;\n' + shader.fragmentShader;
+    }
+    // Read B from the already fetched ORM texel when possible; keep Three's
+    // regular metalness path if the asset uses different textures/transforms.
+    shader.fragmentShader = shader.fragmentShader.replace('#include <metalnessmap_fragment>', (shareSample ? /* glsl */`
+#if defined(USE_ROUGHNESSMAP) && defined(USE_METALNESSMAP)
+  float metalnessFactor = metalness * texelRoughness.b;
+#else
+  #include <metalnessmap_fragment>
+#endif
+` : '#include <metalnessmap_fragment>') + /* glsl */`
+  float awWood = ${packedMetal ? '1.0 - smoothstep(0.18, 0.62, metalnessFactor)' : '1.0'};
+  float awFiber = 0.5;
+#ifdef USE_MAP
+  // Work from the untinted texel so a dark material tint cannot erase the grain mask.
+  awFiber = smoothstep(0.045, 0.32, dot(sampledDiffuseColor.rgb, vec3(0.2126, 0.7152, 0.0722)));
+  ${packedMetal ? 'diffuseColor.rgb = mix(sampledDiffuseColor.rgb, diffuseColor.rgb, awWood);' : ''}
+#endif
+  float awDry = max(0.87, roughness);
+#ifdef USE_ROUGHNESSMAP
+  // Use raw G, before both the glTF factor and the shared scan's matte floor.
+  awDry = mix(0.82, 0.97, texelRoughness.g);
+#endif
+  awDry = min(0.99, awDry + 0.045 * awFiber);
+  float awDamp = 0.0;
+  float awContact = 0.0;
+  ${ground ? /* glsl */`
+  float awAboveGround = vTimberY - uTimberGroundY;
+  // A foot band, not a global wetness gradient for anything below courtyard grade.
+  awDamp = smoothstep(-0.10, -0.015, awAboveGround) * (1.0 - smoothstep(0.025, 0.23, awAboveGround));
+  awDamp *= mix(0.94, 0.55, awFiber);
+  ` : ''}
+  ${contact ? /* glsl */`
+  awContact = (1.0 - smoothstep(0.012, 0.064, abs(vTimberY - uTimberContactY))) * mix(0.50, 0.80, awFiber);
+  ` : ''}
+  float awWoodRough = mix(awDry, 0.72, awContact);
+  awWoodRough = mix(awWoodRough, 0.66, awDamp);
+  roughnessFactor = mix(roughnessFactor, awWoodRough, awWood);
+  // Raised dry fibres read pale; handled wood is warmer and damp wood darker.
+  diffuseColor.rgb *= 1.0 + awWood * (awFiber * vec3(0.04, 0.08, 0.12)
+    + awContact * vec3(0.08, 0.02, -0.07) - awDamp * vec3(0.38, 0.34, 0.30));
+  float awWoodSpec = mix(1.0, 0.64 + 0.20 * max(awDamp, awContact), awWood);
+`).replace('#include <lights_physical_fragment>', /* glsl */`
+#include <lights_physical_fragment>
+  // Reduce the dielectric lobe, including grazing light; keep packed hardware unchanged.
+  material.specularColor *= awWoodSpec;
+  material.specularColorBlended *= awWoodSpec;
+  material.specularF90 *= awWoodSpec;
+`);
+  };
+  mat.customProgramCacheKey = () => `${baseKey}:aw-timber-${Number(packedMetal)}${Number(shareSample)}${Number(ground)}${Number(contact)}`;
+}
+
 /** 给材质叠加上圣经 5.2 的痕迹层（共享材质只注入一次）。 */
 export function applyWear(mat: THREE.MeshStandardMaterial, o: WearOpts): void {
   if (mat.userData.awWear) return;
-  mat.userData.awWear = true;
+  mat.userData.awWear = o.kind;
+  if (o.kind === 'wood') {
+    applyTimberWear(mat, o);
+    mat.needsUpdate = true;
+    return;
+  }
   const u = {
     uWearKind: { value: wearKindId[o.kind] },
     uWearSeed: { value: o.seed ?? 1 },
@@ -208,8 +300,13 @@ export function heroFinish(base: THREE.MeshStandardMaterial, key: string, finish
     base.onBeforeCompile.call(base, shader, renderer);
     shader.vertexShader = 'varying vec3 vHeroPos;\n' + shader.vertexShader.replace(
       '#include <begin_vertex>', '#include <begin_vertex>\nvHeroPos = position;');
+    // Wood's dry baseline should run first, so the authored contact finish can
+    // still adjust it. Retain the existing order for every other material family.
+    const insertBeforeNormals = base.userData.awWear === 'wood';
+    const hook = insertBeforeNormals ? '#include <normal_fragment_begin>' : '#include <metalnessmap_fragment>';
+    const layer = '{\n' + finish + '\n}';
     shader.fragmentShader = 'varying vec3 vHeroPos;\n' + shader.fragmentShader.replace(
-      '#include <metalnessmap_fragment>', '#include <metalnessmap_fragment>\n{\n' + finish + '\n}');
+      hook, insertBeforeNormals ? layer + '\n' + hook : hook + '\n' + layer);
   };
   mat.customProgramCacheKey = () => `${base.customProgramCacheKey()}:hero-${key}`;
   trackPending(texturesReady.then(() => {
@@ -338,7 +435,11 @@ export function loadProp(spec: PropSpec): THREE.Group {
           if ((replaced as THREE.MeshStandardMaterial).isMeshStandardMaterial) {
             const std = replaced as THREE.MeshStandardMaterial;
             const n = spec.norm?.[std.name] ?? spec.normDefault;
-            if (n) applyNorm(std, n);
+            // The relic chest shares one atlas between timber panels and metal
+            // fittings; a flat metalness override turns the entire chest metallic.
+            if (spec.name === 'chest' && std.name === 'treasure_chest' && !n?.wear) {
+              applyNorm(std, { ...n, wear: { kind: 'wood', packedMetal: true } });
+            } else if (n) applyNorm(std, n);
             else std.envMapIntensity = 0.7;
           }
           return replaced;

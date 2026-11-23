@@ -9,10 +9,11 @@
 | 文件前缀 | Poly Haven 资源 | 分辨率 | 用途 |
 |---|---|---|---|
 | `castle_wall_varriation` | castle_wall_varriation | 2K | 乱石幕墙（`stone`/`stoneDark`、`wallRubble`） |
-| `monastery_stone_floor` | monastery_stone_floor | 2K | 庭院主路不规则大石板（`flag`/`floorFlag`），含石板单元分割与积水 |
-| `medieval_wood` | medieval_wood | 2K | 发黑旧木：梁、门框、桶、家具（`wood`/`woodBeam`） |
+| `monastery_stone_floor` | monastery_stone_floor | 2K | 庭院主路不规则大石板（`flag`/`floorFlag`），按单块无缝石面取样，积水由场景洼地控制 |
+| `medieval_wood` | medieval_wood | 2K | 旧木模型与备用扫描 |
 | `brown_planks_05` | brown_planks_05 | 2K | 旧橡木地板底（`woodFloor`） |
 | `roof_slates_02` | roof_slates_02 | 2K | 主屋顶深灰石板瓦（`roof`） |
+| `brown_mud` | [Brown Mud](https://polyhaven.com/a/brown_mud) | 1K 颜色/法线；512 高度/AO/粗糙度 | 庭院压实泥土、碎屑和轮迹，CC0 |
 | `gravel_floor` | gravel_floor | 2K | 碎石地与城外地面（`gravel`） |
 | `stone_pavers` | stone_pavers | 2K | 庭院边缘旧石板（`floorFlagWorn`），错缝矩形石板 |
 
@@ -27,8 +28,8 @@
 | `cobblestone_large_01` | cobblestone_large_01 | 1K | `floorCobble` 井台/侧廊大卵石（去绿） |
 | `brown_mud_leaves_01` | brown_mud_leaves_01 | 1K | `floorDirt` 墙脚泥土落叶带 |
 | `worn_tile_floor` | worn_tile_floor | 1K | `floorInterior` 门房/礼拜堂室内石板 |
-| `weathered_planks` | weathered_planks | 1K | `woodPlank` 门扇/箱板/栅板 |
-| `wood_planks_dirt` | wood_planks_dirt | 1K | `woodFloorOld` 上廊/楼梯踏板 |
+| `weathered_planks` | weathered_planks | 1K | `wood`/`woodPlank` 旧门扇/箱板/栅板 |
+| `wood_planks_dirt` | wood_planks_dirt | 1K | `woodFloorOld`/`woodBeam` 上廊/楼梯踏板/风化梁 |
 | `grey_roof_tiles` | grey_roof_tiles | 1K | `roofShingle` 井棚/披檐/门楼瓦 |
 | `rock_face` | rock_face | 1K | `rock` 山崖/地窖开凿岩壁 |
 

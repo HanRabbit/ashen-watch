@@ -4,13 +4,14 @@
 // 模型与贴图来源、许可见 public/models/characters/CREDITS.md。
 import * as THREE from 'three';
 import { GLTFLoader, GLTF } from 'three/addons/loaders/GLTFLoader.js';
+import { WATCHMAN_SOLE_FORWARD } from './locomotion';
 
 export interface HunterAsset {
   /** 归一化根节点：脚底 y=0，面朝本地 -Z，身高约 1.75m。 */
   root: THREE.Group;
   mixer: THREE.AnimationMixer;
   idle: THREE.AnimationClip;
-  feet: { orientation: THREE.Quaternion; ankleHeight: number; soleLocal: THREE.Vector3 }[];
+  feet: { orientation: THREE.Quaternion; soleLocal: THREE.Vector3; soleOffset: THREE.Vector3 }[];
   /** World-space position of the light emitter, shared by body and outfit materials. */
   lampSource: { value: THREE.Vector3 };
   bones: Record<string, THREE.Bone>;
@@ -37,56 +38,129 @@ function loadGLB(url: string): Promise<GLTF> {
 }
 
 // ---------------------------------------------------------------------------
-// 角色布料 / 皮革贴图（ambientCG CC0）：加载失败回退画布织纹，离线可用。
+// Watchman outfit maps. Geometry, material shaders and UV repeat live in characters.ts.
 // ---------------------------------------------------------------------------
 
 export interface CharTex { map: THREE.Texture; normalMap: THREE.Texture; roughnessMap: THREE.Texture }
 export interface CharTextures { fabric: CharTex; leather: CharTex }
 
-function fallbackWeave(base: string, line: string): CharTex {
-  const S = 128;
-  const mk = (draw: (g: CanvasRenderingContext2D) => void, srgb: boolean): THREE.CanvasTexture => {
-    const c = document.createElement('canvas'); c.width = c.height = S;
-    const g = c.getContext('2d')!;
-    draw(g);
-    const t = new THREE.CanvasTexture(c);
-    t.wrapS = t.wrapT = THREE.RepeatWrapping;
-    t.colorSpace = srgb ? THREE.SRGBColorSpace : THREE.NoColorSpace;
-    return t;
-  };
-  const map = mk((g) => {
-    g.fillStyle = base; g.fillRect(0, 0, S, S);
-    g.strokeStyle = line; g.lineWidth = 1;
-    for (let i = 0; i < S; i += 4) { g.beginPath(); g.moveTo(i, 0); g.lineTo(i, S); g.stroke(); g.beginPath(); g.moveTo(0, i); g.lineTo(S, i); g.stroke(); }
-  }, true);
-  const normalMap = mk((g) => {
-    g.fillStyle = '#8080ff'; g.fillRect(0, 0, S, S);
-    g.fillStyle = 'rgba(120,120,255,0.7)';
-    for (let i = 0; i < S; i += 4) { g.fillRect(i, 0, 1, S); g.fillRect(0, i, S, 1); }
-  }, false);
-  const roughnessMap = mk((g) => { g.fillStyle = '#e0e0e0'; g.fillRect(0, 0, S, S); }, false);
-  return { map, normalMap, roughnessMap };
+function outfitMap(texture: THREE.Texture, srgb: boolean): THREE.Texture {
+  texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
+  texture.magFilter = THREE.LinearFilter;
+  texture.minFilter = THREE.LinearMipmapLinearFilter;
+  texture.generateMipmaps = true;
+  texture.anisotropy = 4;
+  texture.colorSpace = srgb ? THREE.SRGBColorSpace : THREE.NoColorSpace;
+  texture.needsUpdate = true;
+  return texture;
 }
 
-function loadTexSet(prefix: string, fallback: CharTex): Promise<CharTex> {
-  const loader = new THREE.TextureLoader();
-  const one = (file: string, srgb: boolean): Promise<THREE.Texture> =>
-    new Promise((res) => loader.load(`models/characters/${prefix}_${file}.jpg`, (t) => {
-      t.wrapS = t.wrapT = THREE.RepeatWrapping;
-      t.colorSpace = srgb ? THREE.SRGBColorSpace : THREE.NoColorSpace;
-      t.anisotropy = 4;
-      res(t);
-    }, undefined, () => res(null as unknown as THREE.Texture)));
-  return Promise.all([one('color', true), one('normal', false), one('rough', false)]).then(([map, normalMap, roughnessMap]) =>
-    map && normalMap && roughnessMap ? { map, normalMap, roughnessMap } : fallback);
+function scanPixels(image: HTMLImageElement | null, size: number): Uint8ClampedArray | undefined {
+  if (!image) return;
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = size;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return;
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(image, 0, 0, size, size);
+  return ctx.getImageData(0, 0, size, size).data;
+}
+
+const byte = (n: number) => Math.round(255 * THREE.MathUtils.clamp(n, 0, 1));
+
+function outfitNoise(u: number, v: number, nx: number, ny: number, seed: number): number {
+  const x = u * nx, y = v * ny;
+  const i = Math.floor(x), j = Math.floor(y);
+  const a = x - i, b = y - j;
+  const nextI = (i + 1) % nx, nextJ = (j + 1) % ny;
+  const hash = (x: number, y: number) => {
+    let h = Math.imul(x + 11, 0x1f123bb5) ^ Math.imul(y + 7, 0x5f356495) ^ seed;
+    h = Math.imul(h ^ (h >>> 15), 0x2c1b3c6d);
+    return ((h ^ (h >>> 13)) >>> 0) / 0x100000000;
+  };
+  const sx = a * a * (3 - 2 * a), sy = b * b * (3 - 2 * b);
+  const { lerp } = THREE.MathUtils;
+  return lerp(lerp(hash(i, j), hash(nextI, j), sx), lerp(hash(i, nextJ), hash(nextI, nextJ), sx), sy);
+}
+
+function finishFabric(image: HTMLImageElement | null): CharTex {
+  // The 2.5× outfit UV repeat is fractional. Use a half-period on both axes
+  // so wrapped hood/mantle UVs (and the rolled brow's V seam) still agree.
+  const tile = 128, size = tile * 2;
+  const scan = scanPixels(image, tile);
+  const nap = new Float32Array(tile * tile);
+  const color = new Uint8Array(size * size * 4);
+  const normal = new Uint8Array(color.length);
+  const rough = new Uint8Array(color.length);
+  for (let y = 0; y < tile; y++) for (let x = 0; x < tile; x++) {
+    const u = (x + 0.5) / tile, v = (y + 0.5) / tile;
+    // Irregular, directional yarn bundles are coarser than the scanned weave.
+    const yarn = outfitNoise(u, v, 12, 6, 23) - 0.5;
+    const slub = outfitNoise(u, v, 33, 12, 47) - 0.5;
+    nap[y * tile + x] = 0.66 * yarn + 0.34 * slub;
+  }
+  const height = (x: number, y: number) => nap[((y + tile) % tile) * tile + (x + tile) % tile];
+  for (let y = 0; y < tile; y++) for (let x = 0; x < tile; x++) {
+    const u = (x + 0.5) / tile, v = (y + 0.5) / tile;
+    const patina = outfitNoise(u, v, 3, 2, 89) - 0.5;
+    const fiber = height(x, y);
+    // The original scan contributes fine weave; larger nap/patina survive its minification.
+    // Canvas rows start at the top, while these DataTextures upload bottom row first.
+    const scanIndex = ((tile - 1 - y) * tile + x) * 4 + 1;
+    const scanned = scan ? scan[scanIndex] / 255 - 0.36 : 0;
+    const tone = 0.375 + (0.26 + 0.10 * patina) * fiber + 0.065 * patina + 0.3 * scanned;
+    const r = byte(tone + 0.012 * patina), g = byte(tone), b = byte(tone - 0.012 * patina);
+    // Shallow relief only from the nap, not from the broader color wear or dark creases.
+    const nx = 1.1 * (height(x - 1, y) - height(x + 1, y));
+    const ny = 1.4 * (height(x, y - 1) - height(x, y + 1));
+    const invLen = 1 / Math.hypot(nx, ny, 1);
+    const nr = byte(0.5 + 0.5 * nx * invLen), ng = byte(0.5 + 0.5 * ny * invLen), nb = byte(0.5 + 0.5 * invLen);
+    // The material multiplies by 0.98 and clamps to at least 0.84 after wear.
+    // The scan averaged 0.73, below that floor even before wear.
+    const pr = byte(0.965 + 0.045 * fiber - 0.050 * patina);
+    for (let by = 0; by < 2; by++) for (let bx = 0; bx < 2; bx++) {
+      const i = ((y + by * tile) * size + x + bx * tile) * 4;
+      color[i] = r; color[i + 1] = g; color[i + 2] = b; color[i + 3] = 255;
+      normal[i] = nr; normal[i + 1] = ng; normal[i + 2] = nb; normal[i + 3] = 255;
+      rough[i] = rough[i + 1] = rough[i + 2] = pr; rough[i + 3] = 255;
+    }
+  }
+  return {
+    map: outfitMap(new THREE.DataTexture(color, size, size), true),
+    normalMap: outfitMap(new THREE.DataTexture(normal, size, size), false),
+    roughnessMap: outfitMap(new THREE.DataTexture(rough, size, size), false),
+  };
+}
+
+function finishLeather(color: HTMLImageElement | null, normal: HTMLImageElement | null, rough: HTMLImageElement | null): CharTex {
+  const source = scanPixels(rough, 256);
+  const size = source ? 256 : 1;
+  const data = new Uint8Array(size * size * 4);
+  for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) {
+    const i = (y * size + x) * 4;
+    const scan = source ? source[((size - 1 - y) * size + x) * 4 + 1] / 255 : 0.37;
+    // Keep the pebbled scan distinct from cloth, without near-polished hardware highlights.
+    data[i] = data[i + 1] = data[i + 2] = byte(THREE.MathUtils.clamp(0.66 + 1.25 * (scan - 0.37), 0.58, 0.76));
+    data[i + 3] = 255;
+  }
+  const solid = (r: number, g: number, b: number) => new THREE.DataTexture(new Uint8Array([r, g, b, 255]), 1, 1);
+  return {
+    map: outfitMap(color ? new THREE.Texture(color) : solid(29, 26, 24), true),
+    normalMap: outfitMap(normal ? new THREE.Texture(normal) : solid(128, 128, 255), false),
+    roughnessMap: outfitMap(new THREE.DataTexture(data, size, size), false),
+  };
 }
 
 let texPending: Promise<CharTextures> | null = null;
 export function loadCharTextures(): Promise<CharTextures> {
   if (!texPending) {
+    const loader = new THREE.ImageLoader();
+    const scan = (name: string) => new Promise<HTMLImageElement | null>((resolve) =>
+      loader.load(`models/characters/${name}.jpg`, resolve, undefined, () => resolve(null)));
     texPending = Promise.all([
-      loadTexSet('fabric', fallbackWeave('#9a958c', 'rgba(60,56,50,0.35)')),
-      loadTexSet('leather', fallbackWeave('#8a7a66', 'rgba(40,32,24,0.4)')),
+      scan('fabric_color').then(finishFabric),
+      Promise.all([scan('leather_color'), scan('leather_normal'), scan('leather_rough')])
+        .then(([color, normal, rough]) => finishLeather(color, normal, rough)),
     ]).then(([fabric, leather]) => ({ fabric, leather }));
   }
   return texPending;
@@ -245,13 +319,13 @@ export function prepHunter(gltf: GLTF): HunterAsset {
   const feet = ['L', 'R'].map((side) => {
     const ankle = bones[`foot${side}`], toe = bones[`toe${side}`];
     const orientation = new THREE.Quaternion();
-    let ankleHeight = 0.125;
+    const soleOffset = new THREE.Vector3(0, -0.125, 0);
     const soleLocal = new THREE.Vector3();
     if (ankle && toe) {
       const forward = toe.getWorldPosition(new THREE.Vector3()).sub(ankle.getWorldPosition(new THREE.Vector3()));
       const yaw = Math.atan2(forward.x, -forward.z);
       orientation.setFromAxisAngle(new THREE.Vector3(0, 1, 0), yaw).multiply(ankle.getWorldQuaternion(new THREE.Quaternion()));
-      ankleHeight = Math.abs(forward.y) + 0.029;
+      let ankleHeight = Math.abs(forward.y) + 0.029;
       const ankleW = ankle.getWorldPosition(new THREE.Vector3());
       if (mesh) {
         // Measure the loaded boot's actual bottom. Toe-bone height alone puts
@@ -274,11 +348,12 @@ export function prepHunter(gltf: GLTF): HunterAsset {
         if (Number.isFinite(floor)) ankleHeight = THREE.MathUtils.clamp(ankleW.y - floor, 0.04, 0.18);
       }
       const toeAxis = forward.setY(0).normalize();
-      soleLocal.copy(ankleW).addScaledVector(toeAxis, 0.035);
+      soleLocal.copy(ankleW).addScaledVector(toeAxis, WATCHMAN_SOLE_FORWARD);
       soleLocal.y -= ankleHeight;
+      soleOffset.set(0, -ankleHeight, -WATCHMAN_SOLE_FORWARD);
       ankle.worldToLocal(soleLocal);
     }
-    return { orientation, ankleHeight, soleLocal };
+    return { orientation, soleLocal, soleOffset };
   });
 
   const mixer = new THREE.AnimationMixer(scene);

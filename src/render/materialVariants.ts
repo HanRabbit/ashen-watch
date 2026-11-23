@@ -81,7 +81,8 @@ export function variants(m: Materials): Variants {
 
   // —— 石墙族（冷灰，亮度互相 ±12% 内）——
   const wallRubble = m.stone; // 乱石幕墙：复用 castle_wall_varriation（已去饱和冷灰）
-  const wallAshlar = stoneMat('medieval_blocks_03', { floor: 0, wet: 0.3, desat: 0.72, tint: [0.68, 0.72, 0.80], hs: 0.02, ns: 1.0, rough: 0.85, band: [2.2, 4.15] }, pending);
+  // The ashlar height JPG is solid white; its real joint detail is in normal/AO.
+  const wallAshlar = stoneMat('medieval_blocks_03', { floor: 0, wet: 0.3, desat: 0.72, tint: [0.68, 0.72, 0.80], hs: 0, ns: 1.0, rough: 0.85, band: [2.2, 4.15] }, pending);
   // Worn cut stone rather than the granite scan's narrow, strongly ridged courses.
   const wallTrim = stoneMat('stone_pavers', { floor: 0, wet: 0.28, desat: 0.6, tint: [0.96, 0.99, 1.04], hs: 0.009, ns: 0.56, rough: 0.87, band: [2.2, 4.15] }, pending);
   // This local scan ships no height map. Keep real normal/AO but do not request a missing displacement file.
@@ -90,7 +91,10 @@ export function variants(m: Materials): Variants {
 
   // —— 地面族 ——
   const floorFlag = m.flag; // 主路：monastery_stone_floor 不规则大石板 + 洼地积水
-  const floorFlagWorn = stoneMat('stone_pavers', { floor: 1, wet: 0.48, desat: 0.6, tint: [1.06, 1.10, 1.18], hs: 0.012, ns: 0.8, rough: 0.88 }, pending);
+  const floorFlagWorn = stoneMat('stone_pavers', { floor: 1, wet: 0.48, desat: 0.58, tint: [1.06, 1.09, 1.14], hs: .0015, ns: 0.81, rough: 0.89 }, pending);
+  // Shared with interior floors; weather/pools are gated to the at-grade main court.
+  floorFlagWorn.userData.aw.uAwYard.value = 1;
+  floorFlagWorn.userData.aw.uAwPool.value = 1;
   const floorCobble = stoneMat('cobblestone_large_01', { floor: 1, wet: 0.42, desat: 0.72, tint: [0.78, 0.82, 0.88], hs: 0, ns: 0.8, rough: 0.9 }, pending);
   const floorDirt = stoneMat('brown_mud_leaves_01', { floor: 1, wet: 0.3, desat: 0.35, tint: [0.55, 0.50, 0.44], hs: 0, ns: 0.8, rough: 0.95 }, pending);
   const floorInterior = stoneMat('worn_tile_floor', { floor: 1, wet: 0.3, desat: 0.4, tint: [1.08, 1.12, 1.20], hs: 0, ns: 1.0, rough: 0.8 }, pending);
@@ -99,7 +103,7 @@ export function variants(m: Materials): Variants {
   // rendering/decal pass. Keep a neutral texel while the asynchronous scan is loading.
   const unloadedDirtMap = floorDirt.map;
   const soilReady = Promise.all(pending);
-  const bindHistory = (mat: THREE.MeshStandardMaterial, mode: 1 | 2) => {
+  const bindHistory = (mat: THREE.MeshStandardMaterial, mode: 1 | 2 | 3) => {
     mat.defines = { ...mat.defines, AW_FLOOR_HISTORY: mode };
     const u = mat.userData.aw;
     u.uAwHumus = { value: u.uAwHeightMap.value };
@@ -109,9 +113,10 @@ export function variants(m: Materials): Variants {
   };
   bindHistory(floorFlag, 1);
   bindHistory(floorInterior, 2);
+  bindHistory(floorCobble, 3);
 
   // —— 木族 ——
-  const woodBeam = woodMat('medieval_wood', 0x8a7258, 0.82, 0.7, pending);
+  const woodBeam = woodMat('wood_planks_dirt', 0x8a7764, 0.86, 0.55, pending);
   const woodPlank = woodMat('weathered_planks', 0x9a8262, 0.8, 0.7, pending);
   const woodFloorOld = woodMat('wood_planks_dirt', 0x8a7258, 0.82, 0.6, pending);
 

@@ -2,6 +2,7 @@
 // not the full hemisphere or a sharp reflection of open sky. Fire/lantern lighting is separate.
 import * as THREE from 'three';
 import { AREAS, type Rect } from '../sim/level';
+import { COURT_TRANSPORT_GLSL, loadCourtTransport } from './probeLighting';
 
 let installed = false;
 
@@ -23,6 +24,7 @@ export function installSkyExposure(): void {
   const room = ({ x0, x1, z0, z1 }: Rect) => `vec4(${x0.toFixed(2)}, ${z0.toFixed(2)}, ${x1.toFixed(2)}, ${z1.toFixed(2)})`;
   THREE.ShaderChunk.lights_pars_begin += /* glsl */`
 #if defined( STANDARD )
+  ${COURT_TRANSPORT_GLSL}
   uniform vec2 uAwPortal;
   uniform vec3 uAwPortalIrradiance;
   float awCovered( vec2 p, vec4 room ) {
@@ -78,14 +80,19 @@ export function installSkyExposure(): void {
 `);
   THREE.ShaderChunk.lights_fragment_end += /* glsl */`
 #if defined( STANDARD )
-    reflectedLight.indirectDiffuse *= awExposure.x;
     vec3 awN = transformNormalByInverseViewMatrix(geometryNormal, viewMatrix) * vec3(1.0, 1.0, -1.0);
+    float skyVisibility, nearOcclusion;
+    vec3 bouncedSky;
+    awCourtTransport(vAwExposurePosition, awN, skyVisibility, bouncedSky, nearOcclusion);
+    reflectedLight.indirectDiffuse *= awExposure.x * skyVisibility;
+    reflectedLight.indirectDiffuse += BRDF_Lambert(material.diffuseColor) * uAwPortalIrradiance * bouncedSky * 2.10;
     reflectedLight.indirectDiffuse += BRDF_Lambert(material.diffuseColor) * uAwPortalIrradiance
       * awOpeningIrradiance(vAwExposurePosition, awN, awExposure);
-    reflectedLight.indirectSpecular *= awExposure.x * (1.0 - 0.82 * awExposure.y);
+    reflectedLight.indirectSpecular *= (1.0 - 0.48 * nearOcclusion) * awExposure.x * (1.0 - 0.82 * awExposure.y);
 #endif
 `;
-  for (const shader of Object.values(THREE.ShaderLib)) {
-    if (shader.uniforms.fogColor) Object.assign(shader.uniforms, { uAwPortal: { value: new THREE.Vector2() }, uAwPortalIrradiance: { value: new THREE.Color(0) } });
+  const courtTransport = loadCourtTransport();
+  for (const shader of [THREE.ShaderLib.standard, THREE.ShaderLib.physical]) {
+    if (shader.uniforms.fogColor) Object.assign(shader.uniforms, { uAwCourtTransport: { value: courtTransport }, uAwPortal: { value: new THREE.Vector2() }, uAwPortalIrradiance: { value: new THREE.Color(0) } });
   }
 }

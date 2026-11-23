@@ -2,13 +2,22 @@
 // 洞口护墙、庭院掩体、柱列与 B1 封门。材质全部经 variants(m)（圣经 5.1）。
 // 只读 sim 数据；可交互模型统一由 props.ts 绘制。
 import * as THREE from 'three';
-import { AREAS, B1_CEILINGS, B1_FOUNDATION_BACKING, B1_Y, CHAPEL_SLABS, COLUMNS, DECK_SLABS, PLATFORM_SLAB, PROPS, RAISED_Y, S1_SHAFT, S2_SHAFT, STAIR_BODIES, STAIR_RAILS, STEP_RAMP, WALLS } from '../sim/level';
+import { isBaileyApronFabric } from '../sim/baileyApron';
+import { addReliefFooting } from './masonry';
+import { isWestCourtFabric } from '../sim/courtPlan';
+import { isNorthCourtFabric } from '../sim/northCourt';
+import { AREAS, B1_CEILINGS, B1_FOUNDATION_BACKING, B1_Y, CHAPEL_SLABS, COLUMNS, DECK_SLABS, NORTH_GUARD, PLATFORM_SLAB, PROPS, RAISED_Y, S1_SHAFT, S2_SHAFT, STAIR_BODIES, STAIR_RAILS, STEP_RAMP, WALLS } from '../sim/level';
 import { World } from '../sim/state';
 import { Batch } from './geom';
 import { Materials, scaleUV, tiledBox } from './materials';
 import { variants } from './materialVariants';
 import { addYardProp } from './yardProps';
 import { addYardArcade } from './yardArcade';
+import { addNorthWalkGuard } from './northCourt';
+import { mountRodin } from './rodinAssets';
+import { fractureRelief, reliefBlank, seatRelief } from './relief';
+import { reliefFinish } from './reliefFinish';
+import { addRampartEdge } from './rampartEdges';
 
 export interface Floors {
   group: THREE.Group;
@@ -28,12 +37,15 @@ export function buildFloors(m: Materials): Floors {
   const b1 = new Batch(); // Separate batch, but keep the cellar visible through both stairs.
   const g1 = new THREE.Group(); g1.name = 'floors-B1';
 
+  addNorthWalkGuard(b, NORTH_GUARD, v.wallTrim, m.iron, v.woodBeam);
+
   // —— 带 y0 的墙 / 护栏 / 垛墙 / 梯体护墙（staticLevel 跳过这些）——
   for (const w of WALLS) {
-    if (w.y0 === undefined) continue;
+    if (w.y0 === undefined || w.tag === 'gateScarp' || isWestCourtFabric(w) || isNorthCourtFabric(w) || isBaileyApronFabric(w)) continue; // Ruin and corbels are batched by staticLevel.
     const y0 = w.y0;
     if (w.tag === 'rail') {
-      // 锻铁护栏：立柱 + 上下横杆
+      if (addRampartEdge(b, v, w)) continue;
+      // 东廊和桥保留通透的锻铁护栏。
       const alongX = w.x1 - w.x0 > w.z1 - w.z0;
       const len = alongX ? w.x1 - w.x0 : w.z1 - w.z0;
       const n = Math.max(2, Math.round(len / 0.9));
@@ -133,15 +145,15 @@ export function buildFloors(m: Materials): Floors {
     if (p.tag === 'cart' || p.tag === 'scaffold' || p.tag === 'crateStack') {
       addYardProp(b, p, m, v);
     } else if (p.tag === 'wallStub') {
-      // Low fallen wall: tapered courses, exposed core and a jagged break.
-      const len = p.x1 - p.x0, depth = p.z1 - p.z0;
-      boxY(b, v.wallRubble, p.x0, p.z0, p.x1, p.z1, y0, y0 + 0.34, 1.5);
-      for (const [u, w, hf] of [[0.02, 0.27, 0.8], [0.29, 0.25, 1], [0.55, 0.22, 0.72], [0.79, 0.19, 0.5]]) {
-        boxY(b, v.wallRubble, p.x0 + len * u, p.z0 + depth * 0.1, p.x0 + len * (u + w), p.z1 - depth * 0.08, y0 + 0.33, y0 + hf * (p.h - y0), 1.5);
-      }
-      for (const [u, z, size, rot] of [[0.22, p.z0 + 0.08, 0.19, 1.2], [0.7, p.z1 - 0.13, 0.2, 0.6], [0.92, p.z0 + 0.16, 0.17, 1.8]]) {
-        b.geo(v.wallRough, scaleUV(new THREE.DodecahedronGeometry(size), 0.7), p.x0 + len * u, y0 + 0.11, z, rot);
-      }
+      const bed = reliefFinish(v.rock, y0);
+      const fallback = reliefBlank(bed);
+      addReliefFooting(fallback, bed, p, seatRelief(fallback, p).contact);
+      mountRodin(group, 'pilgrim-relief', fallback, v.rock, model => {
+        const { mesh, atlas } = fractureRelief(model);
+        const { contact } = seatRelief(model, p);
+        mesh.material = reliefFinish(v.rock, y0, atlas);
+        addReliefFooting(model, bed, p, contact);
+      });
     }
   }
   for (const c of COLUMNS) {

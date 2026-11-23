@@ -87,3 +87,20 @@ describe('movement-driven framing', () => {
     expect(camera.position.distanceTo(follow)).toBeLessThan(0.00001);
   });
 });
+
+it('limits a sudden heading change across the yaw seam and converges without a snap', () => {
+  const camera = new PerspectiveCamera(55, 16 / 9, .08, 610);
+  const rig = new CameraRig(camera), w = newWorld();
+  Object.assign(w.player, { x: -2.8, y: 0, z: 17.5, floor: '1F' });
+  const dt = 1 / 60;
+  rig.update(w, w.player, 2.96, 0, dt);
+  const initial = camera.quaternion.clone(), prev = initial.clone();
+  for (let i = 0; i < 100; i++) {
+    rig.update(w, w.player, -1.2, 0, dt);
+    expect(camera.quaternion.angleTo(prev)).toBeLessThan(.12);
+    prev.copy(camera.quaternion);
+  }
+  expect(camera.quaternion.angleTo(initial)).toBeGreaterThan(1.9);
+  rig.update(w, w.player, -1.2, 0, dt);
+  expect(camera.quaternion.angleTo(prev)).toBeLessThan(.001);
+});

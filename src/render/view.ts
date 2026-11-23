@@ -6,10 +6,11 @@ import { World } from '../sim/state';
 import { CameraRig } from './camera';
 import { GhostModels, PlayerModel } from './characters';
 import { clamp01, lerp, smooth } from './geom';
-import { glowTexture, makeMaterials } from './materials';
+import { glowTexture, makeMaterials, setMaterialsQuality } from './materials';
 import { Props } from './props';
 import { applySky, makeSkyMaterial, SkyState } from './sky';
 import { FogController, installHeightFog } from './post/fog';
+import { DAMP_FALLOFF, WEATHER_BASE, WEATHER_REACH } from './post/airVolume';
 import { PostPipeline } from './post/pipeline';
 import { installSoftShadows } from './post/shadows';
 import { installSpecularCap } from './post/specular';
@@ -40,42 +41,42 @@ interface Rig extends SkyState {
 
 const RIGS: Record<'morning' | 'day' | 'dusk' | 'night', Rig> = {
   morning: {
-    fog: 0x939ba3, fogNear: 30, fogFar: 140, fogDistMax: 0.56, groundMist: 0.020, freeHaze: 0.0058, mistColor: 0x778491, hazeColor: 0x959fa8, airForward: 0.23,
+    fog: 0x939ba3, fogNear: WEATHER_REACH, fogFar: 140, fogDistMax: 0.56, groundMist: 0.028, freeHaze: 0.0094, mistColor: 0x6a7882, hazeColor: 0x939da6, airForward: 0.24,
     hemiSky: 0xcdd5db, hemiGround: 0x736d64, hemi: 1.65,
-    sun: 0xffe2c0, sunI: 0.88, shadowI: 0.45, shadowRadius: 5.5, scatter: 0.12, sunDir: [-0.75, 0.5, -0.35], exposure: 1.0, window: 0.9,
+    sun: 0xffe2c0, sunI: 0.88, shadowI: 0.45, shadowRadius: 5.5, scatter: 0.35, sunDir: [-0.75, 0.5, -0.35], exposure: 1.0, window: 0.9,
     zenith: 0xa8b4c0, horizon: 0xd6dce1, ground: 0x4a4640,
     cloudLit: 0xc8d2da, cloudDark: 0x6a7480, cover: 0.75, rim: 0.22,
     discSize: 0.0, discI: 0, glow: 0.2, stars: 0,
-    envI: 0.72, bloom: 0.12, vignette: 0.5, grain: 0.02, sat: 0.92, contrast: 1.06, tintS: 0x14202c, tintH: 0xffe8c8, glowStrength: 0.12,
+    envI: 0.72, bloom: 0.12, vignette: 0.5, grain: 0.02, sat: 0.92, contrast: 1.06, tintS: 0x14202c, tintH: 0xffe8c8, glowStrength: 0.09,
   },
   day: {
     // 阴天：雾色比天空 horizon 略暗，远景被分层吞没但留轮廓（圣经 §4.7/§6 Distant）
-    fog: 0x818e9c, fogNear: 28, fogFar: 142, fogDistMax: 0.57, groundMist: 0.014, freeHaze: 0.0046, mistColor: 0x646e76, hazeColor: 0x929dab, airForward: 0.22,
+    fog: 0x818e9c, fogNear: WEATHER_REACH, fogFar: 142, fogDistMax: 0.57, groundMist: 0.0275, freeHaze: 0.0092, mistColor: 0x5b666f, hazeColor: 0x8996a2, airForward: 0.27,
     hemiSky: 0xc8d2da, hemiGround: 0x7e7972, hemi: 2.34,
-    sun: 0xe4ebef, sunI: 0.72, shadowI: 0.42, shadowRadius: 5.5, scatter: 0.08, sunDir: [-0.58, 0.68, -0.42], exposure: 1.0, window: 1.0,
+    sun: 0xe4ebef, sunI: 0.72, shadowI: 0.42, shadowRadius: 5.5, scatter: 0.32, sunDir: [-0.58, 0.68, -0.42], exposure: 1.0, window: 1.0,
     zenith: 0xb1bdc8, horizon: 0xcbd2da, ground: 0x504c46,
     cloudLit: 0xcbd3dc, cloudDark: 0x7e8a98, cover: 0.85, rim: 0.15,
     discSize: 0.0, discI: 0, glow: 0.25, stars: 0,
-    envI: 0.88, bloom: 0.12, vignette: 0.42, grain: 0.018, sat: 0.86, contrast: 1.05, tintS: 0x2a3640, tintH: 0xfff0d8, glowStrength: 0.05,
+    envI: 0.88, bloom: 0.10, vignette: 0.46, grain: 0.014, sat: 0.83, contrast: 1.09, tintS: 0x2a3640, tintH: 0xfff0d8, glowStrength: 0.04,
   },
   dusk: {
-    fog: 0x54505c, fogNear: 24, fogFar: 120, fogDistMax: 0.62, groundMist: 0.018, freeHaze: 0.0051, mistColor: 0x444758, hazeColor: 0x606475, airForward: 0.42,
+    fog: 0x54505c, fogNear: WEATHER_REACH, fogFar: 120, fogDistMax: 0.62, groundMist: 0.027, freeHaze: 0.0086, mistColor: 0x484c5a, hazeColor: 0x626a78, airForward: 0.34,
     hemiSky: 0x8a92a6, hemiGround: 0x3b332d, hemi: 1.1,
-    sun: 0xe09a62, sunI: 1.6, shadowI: 0.93, shadowRadius: 3.5, scatter: 0.25, sunDir: [0.8, 0.2, 0.3], exposure: 1.0, window: 0.45,
+    sun: 0xe09a62, sunI: 1.6, shadowI: 0.93, shadowRadius: 3.5, scatter: 0.46, sunDir: [0.8, 0.2, 0.3], exposure: 1.0, window: 0.45,
     zenith: 0x39445a, horizon: 0x9a7260, ground: 0x332c28,
     cloudLit: 0xb08a78, cloudDark: 0x4a4452, cover: 0.7, rim: 0.5,
     discSize: 0.035, discI: 2.6, glow: 0.7, stars: 0.18,
-    envI: 0.55, bloom: 0.25, vignette: 0.62, grain: 0.022, sat: 0.9, contrast: 1.08, tintS: 0x182030, tintH: 0xffb070, glowStrength: 0.3,
+    envI: 0.55, bloom: 0.25, vignette: 0.62, grain: 0.022, sat: 0.9, contrast: 1.08, tintS: 0x182030, tintH: 0xffb070, glowStrength: 0.24,
   },
   night: {
     // 月光从画面右上方来（与天空月盘同向），冷蓝 #7f9ccf；暗部保留约 20–30% 可读亮度。
-    fog: 0x202d40, fogNear: 22, fogFar: 110, fogDistMax: 0.68, groundMist: 0.022, freeHaze: 0.0062, mistColor: 0x202c3d, hazeColor: 0x304157, airForward: 0.46,
+    fog: 0x202d40, fogNear: WEATHER_REACH, fogFar: 110, fogDistMax: 0.68, groundMist: 0.025, freeHaze: 0.0078, mistColor: 0x202b39, hazeColor: 0x324359, airForward: 0.52,
     hemiSky: 0x7d90b4, hemiGround: 0x3c414b, hemi: 2.45,
-    sun: 0x7f9ccf, sunI: 1.20, shadowI: 0.94, shadowRadius: 3.4, scatter: 0.43, sunDir: [0.72, 0.42, -0.35], exposure: 1.15, window: 0.07,
+    sun: 0x7f9ccf, sunI: 1.20, shadowI: 0.94, shadowRadius: 3.4, scatter: 0.69, sunDir: [0.72, 0.42, -0.35], exposure: 1.15, window: 0.07,
     zenith: 0x111b29, horizon: 0x202f44, ground: 0x0a0e15,
     cloudLit: 0x657791, cloudDark: 0x162133, cover: 0.84, rim: 0.60,
     discSize: 0.017, discI: 4.2, glow: 0.34, stars: 1,
-    envI: 0.14, bloom: 0.23, vignette: 0.60, grain: 0.025, sat: 0.88, contrast: 1.08, tintS: 0x24364c, tintH: 0xffb25e, glowStrength: 0.45,
+    envI: 0.14, bloom: 0.19, vignette: 0.55, grain: 0.019, sat: 0.89, contrast: 1.05, tintS: 0x24364c, tintH: 0xffb25e, glowStrength: 0.32,
   },
 };
 
@@ -103,7 +104,6 @@ export class SceneView {
   private sky: THREE.Mesh;
   private portal = new THREE.Vector2();
   private portalIrradiance = new THREE.Color();
-  private mats: ReturnType<typeof makeMaterials>;
   private post: PostPipeline;
   private atmo: THREE.Object3D[] = [];
   private time = 0;
@@ -133,11 +133,10 @@ export class SceneView {
     this.fogCtl = new FogController(this.renderer, this.scene);
 
     const m = makeMaterials();
-    this.mats = m;
     this.level = buildStaticLevel(m);
     this.floors = buildFloors(m); // map:
     this.props = new Props(m);
-    this.player = new PlayerModel(m, glowTexture());
+    this.player = new PlayerModel(m, glowTexture(), this.level.courtContact);
     this.ghosts = new GhostModels();
     this.scene.add(this.level.group, this.props.group, this.player.group, this.ghosts.group, this.floors.group); // map:
     const landmarks = buildLandmarks(m); hideLegacy(this.level.group);
@@ -203,6 +202,7 @@ export class SceneView {
       if (mat && mat.transparent) this.atmo.push(o);
     });
     this.post = new PostPipeline(this.renderer, this.scene, this.camera, {
+      key: () => this.sun,
       ground: () => this.groundMeshes(),
       atmo: () => this.atmo,
       lights: () => [this.props.lampLight, this.player.lanternLight, this.props.brazierLight, this.props.hearthLight, this.props.windowLight],
@@ -216,6 +216,7 @@ export class SceneView {
     if (this.quality === q) return;
     this.quality = q;
     const heavy = q !== 'low';
+    setMaterialsQuality(heavy ? 'high' : 'low');
     // cinematic 用满设备像素比；high 保留 1.5 上限；low 直出 1x。
     this.renderer.setPixelRatio(q === 'cinematic' ? window.devicePixelRatio : q === 'high' ? Math.min(window.devicePixelRatio, 1.5) : 1);
     this.renderer.shadowMap.type = q === 'cinematic' ? THREE.VSMShadowMap : THREE.PCFShadowMap;
@@ -272,8 +273,9 @@ export class SceneView {
     this.portal.x = lerp(this.portal.x, Number(w.doors.gatehouse), fade);
     this.portal.y = lerp(this.portal.y, Number(w.doors.chapelFront), fade);
     this.portalIrradiance.setHex(r.hemiSky).multiplyScalar(lerp(1.65, 0.23, nightAmt));
-    this.fogCtl.update({ heightDensity: this.quality === 'low' ? r.groundMist * 0.8 : 0,
-      heightFalloff: 0.86, heightBase: 0.1, distMax: r.fogDistMax },
+    this.fogCtl.update({ heightDensity: this.quality === 'low' ? r.groundMist * 0.64 : 0,
+      freeDensity: this.quality === 'low' ? r.freeHaze * 0.76 : 0,
+      heightFalloff: DAMP_FALLOFF, heightBase: WEATHER_BASE, distMax: r.fogDistMax },
     this.portal, this.portalIrradiance, lerp(1.2, 0.35, nightAmt), lerp(2.5, 2.2, nightAmt));
     this.hemi.color.setHex(r.hemiSky); this.hemi.groundColor.setHex(r.hemiGround); this.hemi.intensity = r.hemi;
     this.sun.color.setHex(r.sun); this.sun.intensity = r.sunI;
@@ -290,12 +292,12 @@ export class SceneView {
       bloom: r.bloom, vignette: r.vignette, grain: r.grain,
       glowStrength: r.glowStrength, scatter: r.scatter,
       ssrWet: lerp(0.12, 0.32, nightAmt),
-      fog: [r.groundMist, r.freeHaze, 0.1], mistColor: r.mistColor, hazeColor: r.hazeColor,
+      fog: [r.groundMist, r.freeHaze, WEATHER_BASE], mistColor: r.mistColor, hazeColor: r.hazeColor,
       airForward: r.airForward, keyDir: r.sunDir,
       grade: { sat: r.sat, contrast: r.contrast, tintS: r.tintS, tintH: r.tintH },
       hurt: this.vfx.hurt,
-      hiThresh: lerp(3.0, 1.3, nightAmt),
-      hiKneeCool: lerp(0.6, 2.6, nightAmt), hiKneeWarm: lerp(0.25, 0.4, nightAmt),
+      hiThresh: lerp(3.0, 0.92, nightAmt),
+      hiKneeCool: lerp(0.82, 3.7, nightAmt), hiKneeWarm: lerp(0.45, 0.82, nightAmt),
     });
     this.sun.shadow.radius = r.shadowRadius;
     this.level.windowMat.emissiveIntensity = .58 * r.window;
@@ -345,12 +347,9 @@ export class SceneView {
   /** SSR 反射接收面：石板地/碎石/木地板 + 低粗糙度积水。 */
   private groundMeshes(): THREE.Mesh[] {
     const out: THREE.Mesh[] = [];
-    const m = this.mats;
     this.level.group.traverse((o) => {
       const mesh = o as THREE.Mesh;
-      if (!mesh.isMesh) return;
-      const mat = mesh.material as THREE.MeshStandardMaterial;
-      if (mat === m.flag || mat === m.woodFloor || (mat.isMeshStandardMaterial && mat.roughness < 0.15)) out.push(mesh);
+      if (mesh.isMesh && !Array.isArray(mesh.material) && mesh.material.userData.aw?.uAwPool?.value > 0) out.push(mesh);
     });
     return out;
   }

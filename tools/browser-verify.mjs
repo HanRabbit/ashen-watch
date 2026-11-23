@@ -367,6 +367,8 @@ async function routeScenario() {
     await doTutorial(bot);
     await bot.use('ghDoor', STAND.doorIn);
     await page.evaluate(() => window.__awProbe.resetPerf());
+    // Clear the gatehouse jamb before turning toward the cellar stairs.
+    await walk(0, 2.2);
     await walk(4.0, 9.9);
     await capture('01-cellar-entrance', '1F', Math.PI / 2, 0.4);
     await walk(10.15, 9.9, 'B1');

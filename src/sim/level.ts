@@ -2,6 +2,12 @@
 // 坐标：x 向东，z 向北（远离门房），y 向上，单位米。
 // 三层：B1(−3) / 1F(0，礼拜堂+0.45) / 2F(+4)。礼拜堂正门朝西面向庭院（构图对齐 concept/03）。
 
+import { BAILEY_EDGES, BAILEY_FABRIC, BAILEY_GROUND_Y, BAILEY_NODES, BAILEY_SLAB_PROXIES, BAILEY_WING_SEAM_Z, baileyCeilingY, baileyGroundContains } from './baileyApron';
+import { SCARP_SOLIDS } from './southScarp';
+import { COURT_FOOTPRINT, MAIN_COURT, WEST_ARCH_HEADS, WEST_COURT_FABRIC, WEST_COURT_POINTS, WEST_CURTAIN } from './courtPlan';
+
+import { NORTH_EDGES, NORTH_LOWER_FABRIC, NORTH_NODES, NORTH_OPENING, NORTH_SLAB_PROXIES, NORTH_WALK_BEARING, northCeilingY, northGroundContains, northGuard } from './northCourt';
+
 export type DoorId = 'gatehouse' | 'gate' | 'chapelFront';
 export type FloorId = 'B1' | '1F' | '2F';
 export type Region =
@@ -55,8 +61,9 @@ const SL = (x0: number, z0: number, x1: number, z1: number, y0: number, h: numbe
 export const RAISED_Y = 0.45;
 export const B1_Y = -3;
 export const F2_Y = 4;
+export const NORTH_GUARD = northGuard(F2_Y);
 
-/** 室内净尺寸：门房 6×8、庭院 20×28、礼拜堂 17×11（转 90°，正门朝西）。 */
+/** 门房、原庭院中庭和礼拜堂净尺寸。翼院轮廓见 courtPlan 和 northCourt。 */
 export const AREAS = {
   gatehouse: { x0: -3, z0: -8, x1: 3, z1: 0 },
   courtyard: { x0: -10, z0: 0.5, x1: 10, z1: 28.5 },
@@ -160,9 +167,10 @@ const STAIR_RAIL_BOXES = STAIR_RAILS.flatMap((r) => {
 });
 
 export const STEP_RAMP = { x0: 10.5, z0: 11, x1: 11.4, z1: 22 };
-const COURT_BOUNDS = { x0: -10.5, z0: 0, x1: 10.5, z1: 29 };
-export const COURTYARD_SLABS = cutRect(COURT_BOUNDS, S1_SHAFT)
-  .map((r) => SL(r.x0, r.z0, r.x1, r.z1, -0.3, 0));
+export const COURTYARD_SLABS = [
+  ...COURT_FOOTPRINT.flatMap((r) => cutRect(r, S1_SHAFT)).map((r) => SL(r.x0, r.z0, r.x1, r.z1, -0.3, 0)),
+  ...NORTH_SLAB_PROXIES, ...BAILEY_SLAB_PROXIES,
+];
 export const CHAPEL_SLABS = cutRect({ x0: 13, z0: 10.5, x1: 31, z1: 22.5 }, S2_SHAFT)
   .map((r) => SL(r.x0, r.z0, r.x1, r.z1, 0.15, RAISED_Y));
 export const PLATFORM_SLAB = SL(STEP_RAMP.x1, STEP_RAMP.z0, 13, STEP_RAMP.z1, 0.15, RAISED_Y);
@@ -170,8 +178,9 @@ export const B1_CEILINGS = [
   ...cutRect(AREAS.cellar, S1_SHAFT).map((r) => SL(r.x0, r.z0, r.x1, r.z1, -0.75, -0.6)),
   SL(AREAS.passage.x0, AREAS.passage.z0, AREAS.passage.x1, AREAS.passage.z1, -0.95, -0.8),
 ];
+const NORTH_DECK = SL(MAIN_COURT.x0, 26.9, MAIN_COURT.x1, NORTH_OPENING.z1, NORTH_WALK_BEARING, F2_Y);
 export const DECK_SLABS = [
-  SL(8.4, 2.5, 10.5, 28.5, 3.7, F2_Y), SL(-10.5, 26.9, 10.5, 29, 3.7, F2_Y),
+  SL(8.4, 2.5, 10.5, 28.5, 3.7, F2_Y), NORTH_DECK,
   SL(-10.5, 2.5, -8.4, 26.9, 3.7, F2_Y), SL(10.5, 19.5, 13.5, 21.0, 3.7, F2_Y),
   SL(13.5, 20.0, 24.0, 22.0, 3.7, F2_Y),
 ];
@@ -185,18 +194,26 @@ export const B1_FOUNDATION_BACKING: readonly Box[] = [
 ];
 
 export const WALLS: Box[] = [
+  ...SCARP_SOLIDS,
   // —— 门房 ——
   W(-3.5, -8.5, 3.5, -8, 3.6, 'gh'), W(-3.5, -8.5, -3, 0.5, 3.6, 'gh'), W(3, -8.5, 3.5, 0.5, 3.6, 'gh'),
   // —— 庭院南墙（门房门洞 x[-0.8,0.8]；装饰铁栅在 x5.5 墙面，不开洞）——
   W(-10.5, 0, -0.8, 0.5, 4.2), W(0.8, 0, 10.5, 0.5, 4.2),
-  // —— 庭院西/北墙：降为 h4，上方步道 + 垛墙 ——
-  W(-10.5, 0, -10, 29, 4), W(-10.5, 28.5, 10.5, 29, 4),
+  // —— 西侧：三道券口承托原步道，分别通向西翼和鼓楼外院 ——
+  ...WEST_CURTAIN, ...WEST_COURT_FABRIC, ...BAILEY_FABRIC,
+  // North curtain ends, load-bearing arcade and the broken polygonal enclosure.
+  W(MAIN_COURT.x0, NORTH_OPENING.z0, NORTH_OPENING.x0, NORTH_OPENING.z1, F2_Y),
+  W(NORTH_OPENING.x1, NORTH_OPENING.z0, MAIN_COURT.x1, NORTH_OPENING.z1, F2_Y),
+  ...NORTH_LOWER_FABRIC,
   // —— 庭院东墙：南北两段实墙，中段 z[11,22] 敞开券廊（墩宽 0.5）——
   W(10, 0, 10.5, 11, 4), W(10, 22, 10.5, 29, 4),
   W(10, 11, 10.5, 11.6, 4, 'pier'), W(10, 14.0, 10.5, 14.6, 4, 'pier'),
   W(10, 18.4, 10.5, 19.0, 4, 'pier'), W(10, 21.4, 10.5, 22.0, 4, 'pier'),
   // 垛墙（步道外侧护挡，y4..5.05）
-  W(-10.5, 0, -10, 29, 5.05, 'parapet', 4), W(-10.5, 28.5, 10.5, 29, 5.05, 'parapet', 4),
+  W(-10.5, 0, -10, 29, 5.05, 'parapet', 4),
+  W(MAIN_COURT.x0, NORTH_OPENING.z0, NORTH_OPENING.x0, NORTH_OPENING.z1, 5.05, 'parapet', F2_Y),
+  W(NORTH_OPENING.x1, NORTH_OPENING.z0, MAIN_COURT.x1, NORTH_OPENING.z1, 5.05, 'parapet', F2_Y),
+  ...NORTH_GUARD,
   W(10, 0, 10.5, 19.5, 5.05, 'parapet', 4), W(10, 21, 10.5, 29, 5.05, 'parapet', 4),
   // —— 门前平台栏墙（南北边）——
   W(10.5, 10.5, 13.5, 11, 1.2, 'balustrade'), W(10.5, 22, 13.5, 22.5, 1.2, 'balustrade'),
@@ -239,6 +256,8 @@ export const BARRELS = [
   { x: -5.95, z: 27.2, r: 0.31, h: 0.77, ry: 2.2 },
 ];
 
+export const BAILEY_SHELF = P(-10.9, 4.65, -8.65, 5.15, 1.9, 'shelf', true);
+
 export const PROPS: Box[] = [
   P(-3, -5.6, -2.2, -3.2, 2.4, 'hearth', true),
   P(-2.75, -2.85, -2.15, -2.25, 0.8, 'pot'),
@@ -246,7 +265,7 @@ export const PROPS: Box[] = [
   P(2.2, -5.6, 3, -3.4, 0.95, 'bench'),
   P(-0.4, -8, 1.6, -7.1, 0.5, 'cot'),
   P(1.5, -6.6, 2.1, -6.0, 0.75, 'stool'),
-  P(-10, 5, -9.2, 7.4, 1.9, 'shelf'),
+  BAILEY_SHELF,
   P(8.6, 12.4, 9.8, 13.6, 1.1, 'crates'),
   P(-8.6, 20.4, -7.4, 21.6, 0.9, 'rubble'),
   ...BARRELS.map((p) => P(p.x - p.r, p.z - p.r, p.x + p.r, p.z + p.r, p.h, 'barrel')),
@@ -288,6 +307,7 @@ export const DOORS: Record<DoorId, DoorDef> = {
 
 // —— 导航节点 ——
 const N = (id: string, x: number, z: number, y: number, floor: FloorId, region: Region): NavNode => ({ id, x, z, y, floor, region });
+const WC = (id: string, p: { x: number; z: number }): NavNode => N(id, p.x, p.z, 0, '1F', 'courtyard');
 export const NODES: NavNode[] = [
   N('gh_mid', 0, -5.5, 0, '1F', 'gatehouse'), N('gh_in', 0, -2.2, 0, '1F', 'gatehouse'),
   N('c_s', 0, 2.2, 0, '1F', 'courtyard'), N('c_sw', -6, 5, 0, '1F', 'courtyard'),
@@ -297,7 +317,16 @@ export const NODES: NavNode[] = [
   N('c_nw', -6, 23, 0, '1F', 'courtyard'), N('c_n', 0, 23, 0, '1F', 'courtyard'),
   N('c_ne', 6.5, 23, 0, '1F', 'courtyard'), N('c_s1top', 4.0, 9.9, 0, '1F', 'courtyard'),
   N('c_s1west', 1.0, 9.9, 0, '1F', 'courtyard'), N('c_s1south', 3.9, 8, 0, '1F', 'courtyard'),
+  ...NORTH_NODES,
+  ...BAILEY_NODES,
   N('c_s3bot', 3.4, 1.4, 0, '1F', 'courtyard'),
+  // Use the landings as AI and save-recovery destinations. The arch throats
+  // are crossings, including where the old wall is the cutoff of the lamp zone.
+  WC('c_ws_inner', { x: -8.65, z: 11.85 }),
+  WC('c_ws_bay', WEST_COURT_POINTS.southBay), WC('c_w_knee', WEST_COURT_POINTS.knee),
+  WC('c_wn_turn', { x: -14.35, z: 18.12 }), WC('c_wn_bay', WEST_COURT_POINTS.northBay),
+  WC('c_wn_gable', WEST_COURT_POINTS.gable),
+  WC('c_wn_inner', { x: -9.24, z: 20 }), WC('c_wn_return', { x: -9.24, z: 23.2 }),
   N('p_m', 12, 16.5, RAISED_Y, '1F', 'platform'), N('p_d', 12.6, 16.5, RAISED_Y, '1F', 'platform'),
   N('v_d', 14.4, 16.5, RAISED_Y, '1F', 'chapel'), N('v_o', 15.8, 16.5, RAISED_Y, '1F', 'chapel'),
   N('v_s', 16.5, 12.7, RAISED_Y, '1F', 'chapel'), N('v_s2', 16.65, 21.5, RAISED_Y, '1F', 'chapel'),
@@ -334,9 +363,16 @@ export const EDGES: NavEdge[] = [
   { a: 'c_s1west', b: 'c_s1top' }, { a: 'c_s1top', b: 'c_s1south' }, { a: 'c_s1south', b: 'c_se' },
 
   { a: 'c_w', b: 'c_wellw' }, { a: 'c_w', b: 'c_nw' },
+  // West wing is a through-loop; it also has a deep line-of-sight pocket under the gable.
+  { a: 'c_w', b: 'c_ws_inner' }, { a: 'c_ws_inner', b: 'c_ws_bay' },
+  { a: 'c_ws_bay', b: 'c_w_knee' }, { a: 'c_w_knee', b: 'c_wn_turn' }, { a: 'c_wn_turn', b: 'c_wn_bay' },
+  { a: 'c_wn_bay', b: 'c_wn_gable' }, { a: 'c_wn_bay', b: 'c_wn_inner' },
+  { a: 'c_wn_inner', b: 'c_wn_return' }, { a: 'c_wn_return', b: 'c_nw' },
   { a: 'c_wellw', b: 'c_nw' }, { a: 'c_welle', b: 'c_e' },
   { a: 'c_e', b: 'c_arc' }, { a: 'c_e', b: 'c_ne' }, { a: 'c_arc', b: 'p_m' },
   { a: 'c_nw', b: 'c_n' }, { a: 'c_n', b: 'c_ne' }, { a: 'c_ne', b: 'c_arc' },
+  ...NORTH_EDGES,
+  ...BAILEY_EDGES,
   { a: 'p_m', b: 'p_d' }, { a: 'p_d', b: 'v_d', door: 'chapelFront' },
   { a: 'v_d', b: 'v_o' }, { a: 'v_o', b: 'v_s' }, { a: 'v_o', b: 'v_e' }, { a: 'v_e', b: 'v_s2' }, { a: 'v_s2', b: 's2top' },
   { a: 'v_s', b: 'n_x' }, { a: 'n_x', b: 'n_w' }, { a: 'n_w', b: 'n_c' },
@@ -373,7 +409,7 @@ export const INTERACTS: InteractDef[] = [
   { id: 'ghDoor', x: -0.35, y: 1.2, z: 0.25, floor: '1F', ownDoor: 'gatehouse' },
   { id: 'bolt', x: 0.5, y: 1.25, z: -0.1, floor: '1F', ownDoor: 'gatehouse' },
   { id: 'bell', ...BELL_POS, floor: '1F' },
-  { id: 'shelf', x: -9.2, y: 1.1, z: 6.2, floor: '1F' },
+  { id: 'shelf', x: BAILEY_SHELF.x1 - 0.6, y: 1.1, z: BAILEY_SHELF.z1, floor: '1F' },
   { id: 'lamp', x: -5, y: 1.9, z: 28.65, floor: '1F' },
   { id: 'gate', x: 24.0, y: 5.2, z: 21.2, floor: '2F', ownDoor: 'gate' },
   { id: 'crate', x: 12.1, y: 0.9 + RAISED_Y, z: 20.6, floor: '1F' },
@@ -430,7 +466,8 @@ interface Surface { x0: number; z0: number; x1: number; z1: number; y: number; f
 const GROUND: Surface[] = [
   ...[...CHAPEL_SLABS, PLATFORM_SLAB].map((s) => ({ ...s, y: s.h, floor: '1F' as const })),
   // The substrate behind S1's end rail is not a walkable destination above B1.
-  ...cutRect(COURT_BOUNDS, { ...S1_SHAFT, x1: COURT_BOUNDS.x1 }).map((s) => ({ ...s, y: 0, floor: '1F' as const })),
+  ...COURT_FOOTPRINT.flatMap((r) => cutRect(r, { ...S1_SHAFT, x1: MAIN_COURT.x1 }))
+    .map((s) => ({ ...s, y: 0, floor: '1F' as const })),
   { x0: -3.5, z0: -8.5, x1: 3.5, z1: 0, y: 0, floor: '1F' },
   // B1
   { x0: 2.5, z0: 6.5, x1: 10.6, z1: 15.5, y: B1_Y, floor: 'B1' },
@@ -438,7 +475,7 @@ const GROUND: Surface[] = [
   { x0: 13.0, z0: 11.5, x1: 24.0, z1: 21.9, y: B1_Y, floor: 'B1' },
   // 2F deck
   { x0: 8.4, z0: 2.5, x1: 10.0, z1: 28.5, y: F2_Y, floor: '2F' },
-  { x0: -10.0, z0: 27.0, x1: 10.0, z1: 28.5, y: F2_Y, floor: '2F' },
+  { ...AREAS.northWalk, y: F2_Y, floor: '2F' },
   { x0: -10.0, z0: 2.5, x1: -8.4, z1: 28.5, y: F2_Y, floor: '2F' },
   { x0: 8.4, z0: 19.5, x1: 13.5, z1: 21.0, y: F2_Y, floor: '2F' },
   { x0: 13.5, z0: 20.0, x1: 24.0, z1: 22.0, y: F2_Y, floor: '2F' },
@@ -457,6 +494,8 @@ function inRect(s: { x0: number; z0: number; x1: number; z1: number }, x: number
 export function surfacesAt(x: number, z: number): { y: number; floor: FloorId }[] {
   const out: { y: number; floor: FloorId }[] = [];
   for (const g of GROUND) if (inRect(g, x, z)) out.push({ y: g.y, floor: g.floor });
+  if (z > NORTH_OPENING.z1 && northGroundContains(x, z)) out.push({ y: 0, floor: '1F' });
+  if (x < MAIN_COURT.x0 && z < BAILEY_WING_SEAM_Z && baileyGroundContains(x, z)) out.push({ y: BAILEY_GROUND_Y, floor: '1F' });
   if (inRect(STEP_RAMP, x, z)) out.push({ y: rampY({ ...STEP_RAMP, axis: 'x', from: 0, to: RAISED_Y }, x, z), floor: '1F' });
   for (const s of STAIRS) {
     for (const r of s.runs) if (inRect(r, x, z)) {
@@ -497,6 +536,12 @@ export function ceilingY(x: number, z: number, floor: FloorId): number {
     if (inArea(AREAS.gallery, x, z)) return 9.3;
     return Infinity;
   }
+  const northHead = northCeilingY(x, z);
+  if (Number.isFinite(northHead)) return northHead;
+  if (inRect(NORTH_DECK, x, z)) return NORTH_WALK_BEARING;
+  const baileyHead = baileyCeilingY(x, z);
+  if (Number.isFinite(baileyHead)) return baileyHead;
+  for (const head of WEST_ARCH_HEADS) if (inRect(head, x, z)) return head.y0!;
   const r = regionAt(x, z);
   if (r === 'gatehouse') return 3.25;
   if (r === 'chapel') return 9.3;

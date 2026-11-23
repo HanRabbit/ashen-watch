@@ -1,15 +1,24 @@
+import { buildCourtContact, type CourtContact } from './courtContact';
 // 静态建筑：墙、地面、屋顶、地标与不随状态变化的陈设。按材质合并为少量网格。
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { isWestCourtFabric } from '../sim/courtPlan';
+import { isNorthCourtFabric } from '../sim/northCourt';
 import { DOORS, inArea, PROPS, S1_SHAFT, WALLS, WELL } from '../sim/level';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { archHeader, archRib, Batch, gable } from './geom';
 import { buildGatehouseLights, windowWallPieces } from './gatehouseWindows';
 import { buildFurniture } from './furniture';
-import { addGroundSlab, buildYardDrain } from './yardSurface';
+import { buildDeadwood } from './deadwood';
+import { buildFallenRubble } from './fallenRubble';
+import { addCourtyardGround, addGroundSlab, buildYardDrain } from './yardSurface';
+import { addSouthScarp } from './southScarp';
+import { addBaileyApronFabric } from './baileyApron';
+import { mountRodin } from './rodinAssets';
 import { addYardBreaks } from './yardBreaks';
 import { buildYardIvy, YARD_LITTER_POCKETS } from './yardPlanting';
-import { addCurtainDetails, addCurtainPlinth } from './masonry';
+import { addCurtainDetails, addCurtainPlinth, addWestCourtFabric } from './masonry';
+import { addNorthCourtFabric } from './northCourt';
 import { variants } from './materialVariants';
 import { grassTexture, leafTexture, Materials, rugTexture, rustTexture, smokeTexture, tiledBox, trackPending } from './materials';
 
@@ -27,6 +36,7 @@ function drng(seed: number): () => number {
 }
 
 export interface StaticLevel {
+  courtContact: CourtContact;
   group: THREE.Group;
   /** 高窗：白天透进冷光，夜里几乎全黑。 */
   windowMat: THREE.MeshStandardMaterial;
@@ -99,7 +109,6 @@ function archFrame(b: Batch, mat: THREE.Material, cx: number, cz: number, w: num
 export function buildStaticLevel(m: Materials): StaticLevel {
   const group = new THREE.Group();
   const b = new Batch();
-  const rubbleXf: { x: number; y: number; z: number; s: number; r: number }[] = [];
   const v = variants(m);
   const { windowMat, hearthWindowMat } = buildGatehouseLights(b, group, v.wallTrim, m.iron);
   // 世界空间 UV + 每段随机偏移：打破长墙平铺重复（圣经 5.1 反重复）
@@ -112,7 +121,7 @@ export function buildStaticLevel(m: Materials): StaticLevel {
 
   // 墙体：按区域选材质族（5.1）。勒脚/压顶用 wallTrim，幕墙 wallRubble，礼拜堂/门房外墙 wallAshlar，地窖 wallRough。
   for (const w of WALLS) {
-    if (w.y0 !== undefined) continue; // map: 带 y0 的三层几何由 floors.ts 绘制
+    if (w.y0 !== undefined || isNorthCourtFabric(w)) continue; // map: 带 y0 的三层几何由 floors.ts 绘制
     const isChapel = w.h >= 7;
     const isGH = w.tag === 'gh';
     const isCellar = w.tag === 'cellar';
@@ -125,7 +134,13 @@ export function buildStaticLevel(m: Materials): StaticLevel {
     if (!addCurtainPlinth(b, v, w)) b.box(v.wallTrim, w.x0 - 0.08, w.z0 - 0.08, w.x1 + 0.08, w.z1 + 0.08, 0, 0.35, 2.2); // 勒脚
     if (w.h >= 5) b.box(v.wallTrim, w.x0 - 0.05, w.z0 - 0.05, w.x1 + 0.05, w.z1 + 0.05, w.h - 0.12, w.h, 2.2); // 压顶
   }
+  addSouthScarp(group, v.rock);
+  addBaileyApronFabric(b, v);
+  // The defensive shell wraps the playable masonry. Its permanent inner walls protect the route during loading.
+  mountRodin(group, 'outer-bailey', new THREE.Group(), v.wallRubble);
   addCurtainDetails(b, v, WALLS);
+  addNorthCourtFabric(b, v);
+  addWestCourtFabric(b, v, WALLS.filter(isWestCourtFabric));
 
   // 庭院四角与门房角的凸出角石（wallTrim）
   for (const [x, z, h] of [[-10.25, 0.25, 4.2], [10.25, 0.25, 4.2], [-10.25, 28.75, 4.2], [10.25, 28.75, 3.2], [-3.25, -8.25, 3.6], [3.25, -8.25, 3.6]] as [number, number, number][]) {
@@ -156,11 +171,13 @@ export function buildStaticLevel(m: Materials): StaticLevel {
 
   // Let the valley terrain reach the fortress instead of covering its base with
   // a bright rectangular gravel plane. Bury exterior wall feet into that terrain.
-  const footings = WALLS.filter((w) => w.y0 === undefined && w.h >= 3.6);
+  const footings = WALLS.filter((w) => (w.y0 === undefined && w.h >= 3.6) || (isWestCourtFabric(w) && w.y0 === 0));
   for (const w of footings) addGroundSlab(b, v.wallRough, w, -0.79, 0, 2.5);
-  addGroundSlab(b, v.floorFlag, { x0: -10.5, z0: 0, x1: 10.5, z1: 29 }, -0.3, 0, 3.6);
-  buildYardDrain(b, v.wallTrim, m.iron, new THREE.MeshStandardMaterial({ color: 0x191811, roughness: 0.98 }));
-  addYardBreaks(b, m, v);
+  const courtContact = buildCourtContact(include => b.observeGeometry(include, () => {
+    addCourtyardGround(b, v.floorFlag, v.floorCobble, v.floorFlagWorn);
+    buildYardDrain(b, v.wallTrim, m.iron, new THREE.MeshStandardMaterial({ color: 0x191811, roughness: 0.98 }));
+    addYardBreaks(b, m, v);
+  }));
   // 门房室内石板（concept/02）+ 中央织纹地毯（单幅图案 + 流苏破边 + 磨损污渍）
   b.box(v.floorInterior, -3.5, -8.5, 3.5, 0, -0.3, 0.005, 2);
   {
@@ -201,7 +218,6 @@ export function buildStaticLevel(m: Materials): StaticLevel {
   // —— 地表细节：爬藤（实例化叶片）、苔痕、草丛（实例化）、落叶（实例化）、枯木、瓦砾 ——
   const decal = new Batch();
   buildYardIvy(group, decal, drng(131));
-  const bark = new THREE.MeshStandardMaterial({ color: 0x3a322c, roughness: 1 });
 
   // 石板缝草丛：实例化十字面片，墙脚 / 井台周围 / 板缝，数量提高
   const grassMat = new THREE.MeshStandardMaterial({ map: grassTexture(), roughness: 1, side: THREE.DoubleSide, alphaTest: 0.4 });
@@ -310,59 +326,10 @@ export function buildStaticLevel(m: Materials): StaticLevel {
     }, undefined, () => resolve());
   }));
 
-  // 枯木（ENV-07）：递归分枝，探出墙头
-  const branch = (x: number, y: number, z: number, len: number, ang: number, tilt: number, depth: number): void => {
-    const geo = new THREE.CylinderGeometry(0.03 * depth + 0.02, 0.05 * depth + 0.03, len, 5);
-    const dx = Math.sin(ang) * Math.sin(tilt), dy = Math.cos(tilt), dz = Math.cos(ang) * Math.sin(tilt);
-    // Local +Y follows precisely the same axis as the recursive tip, in render space.
-    // Passing simulation yaw/tilt to Batch.geo mirrors the tip and leaves branches floating.
-    geo.applyQuaternion(new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), new THREE.Vector3(dx, dy, -dz)));
-    decal.geo(bark, geo, x + dx * len / 2, y + dy * len / 2, z + dz * len / 2);
-    if (depth <= 0) return;
-    const ex = x + dx * len, ey = y + dy * len, ez = z + dz * len;
-    branch(ex, ey, ez, len * 0.68, ang + 0.5, tilt + 0.35, depth - 1);
-    branch(ex, ey, ez, len * 0.6, ang - 0.6, tilt + 0.5, depth - 1);
-  };
-  branch(-13.5, 0, 21, 4.5, 0.3, 0.12, 3);
-  branch(12.5, 0, 31, 3.8, 2.4, 0.18, 3);
-  // PROPS 里的瓦砾堆（碰撞盒）归环境层：实例化石块
-  for (const p of PROPS) {
-    if (p.tag !== 'rubble') continue;
-    for (let i = 0; i < 7; i++) {
-      const s = 0.28 + ((i * 37) % 10) / 28;
-      rubbleXf.push({ x: p.x0 + 0.2 + ((i * 53) % 10) / 12, y: s * 0.5, z: p.z0 + 0.2 + ((i * 71) % 10) / 12, s, r: i });
-    }
-  }
-  // 额外瓦砾堆
-  for (const [bx, bz] of [[8.5, 22], [-8, 3.5]]) {
-    for (let i = 0; i < 6; i++) {
-      const s = 0.2 + ((i * 31) % 10) / 30;
-      rubbleXf.push({ x: bx + ((i * 53) % 10) / 11, y: s * 0.5, z: bz + ((i * 71) % 10) / 11, s, r: i + 3 });
-    }
-  }
-  // Fallen individual stones carry quarry grain, not a scan of a whole brick wall.
-  {
-    const geo = new THREE.DodecahedronGeometry(1, 0);
-    const pos = geo.getAttribute('position'), nor = geo.getAttribute('normal'), uv = geo.getAttribute('uv');
-    for (let i = 0; i < pos.count; i++) {
-      // Triangles in a fracture share a planar UV projection; no polar stretch.
-      const nx = Math.abs(nor.getX(i)), ny = Math.abs(nor.getY(i)), nz = Math.abs(nor.getZ(i));
-      uv.setXY(i, 0.29 + (nx > nz && nx > ny ? pos.getZ(i) : pos.getX(i)) * 0.25,
-        0.43 + (ny >= Math.max(nx, nz) ? pos.getZ(i) : pos.getY(i)) * 0.25);
-    }
-    const im = new THREE.InstancedMesh(geo, v.rock, rubbleXf.length);
-    const mm = new THREE.Matrix4(), qq = new THREE.Quaternion(), ee = new THREE.Euler();
-    rubbleXf.forEach((t, i) => {
-      ee.set(t.r * 0.7, t.r * 1.3, t.r * 0.4);
-      qq.setFromEuler(ee);
-      mm.compose(new THREE.Vector3(t.x, t.y, -t.z), qq, new THREE.Vector3(t.s, t.s * 0.8, t.s));
-      im.setMatrixAt(i, mm);
-      const k = 0.5 + ((i * 29) % 10) / 30;
-      im.setColorAt(i, new THREE.Color(k, k, k * 1.04));
-    });
-    im.castShadow = im.receiveShadow = true;
-    group.add(im);
-  }
+  // The existing bark material serves both trees in one indexed mesh with vertex tint.
+  const bark = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1 });
+  group.add(buildDeadwood(bark));
+  group.add(buildFallenRubble());
   // 铁件下方石面的锈色流痕（水造成，沿重力；壁灯支架/栅门铰链/铁箍下）
   const rustMat = new THREE.MeshStandardMaterial({ map: rustTexture(), roughness: 0.9, transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2 });
   for (const [x, z, y, h, rot] of [[-9.95, 14, 1.95, 1.1, HALF_PI], [9.95, 10, 1.5, 1.0, -HALF_PI], [9.95, 20, 1.5, 1.0, -HALF_PI], [9.95, 5.1, 1.4, 1.2, -HALF_PI], [9.95, 6.9, 1.4, 1.2, -HALF_PI], [-5, 28.44, 2.6, 1.3, 0], [5.5, 0.56, 1.6, 1.1, Math.PI]] as [number, number, number, number, number][]) {
@@ -418,5 +385,5 @@ export function buildStaticLevel(m: Materials): StaticLevel {
 
   b.build(group, true);
   decal.build(group, false);
-  return { group, windowMat, hearthWindowMat };
+  return { group, windowMat, hearthWindowMat, courtContact };
 }

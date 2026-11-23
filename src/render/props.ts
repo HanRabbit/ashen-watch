@@ -3,10 +3,11 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { BRAZIER, BrazierId, HEARTH, LightZone, WALL_LAMP } from '../config';
-import { B1_Y, BELL_POS, BRAZIER_POS, DOORS, INTERACTS, LAMP_POS, PROPS, RAISED_Y } from '../sim/level';
+import { B1_Y, BAILEY_SHELF, BELL_POS, BRAZIER_POS, DOORS, INTERACTS, LAMP_POS, PROPS, RAISED_Y } from '../sim/level';
 import { World } from '../sim/state';
 import { archLeaf, archPath, boxMesh, cyl, lerp, mesh, put } from './geom';
 import { glowTexture, grimeTexture, Materials, smokeTexture } from './materials';
+import { mountOilFlask } from './oilFlaskAsset';
 import { findNode, heroFinish, heroOutline, heroSolid, loadProp, mergeByMaterial, sackGeometry, sackTie } from './propAssets';
 import { variants } from './materialVariants';
 import type { Quality } from './view';
@@ -274,14 +275,17 @@ function ironPack(m: Materials): THREE.Group {
   return g;
 }
 
-function oilFlask(m: Materials): THREE.Group {
+const fallbackOil = new THREE.MeshStandardMaterial({ color: 0x966023, roughness: 0.46 });
+
+function oilFlask(m: Materials, frontYaw = 0): THREE.Group {
   const g = new THREE.Group();
-  const oil = new THREE.MeshStandardMaterial({ color: 0xb8741c, emissive: 0x7a4208, emissiveIntensity: 0.35, roughness: 0.3, transparent: true, opacity: 0.9 });
-  const body = mesh(new THREE.SphereGeometry(0.09, 10, 8), oil); body.position.y = 0.085; body.scale.y = 0.9;
-  const neck = cyl(m.glass, 0.025, 0.035, 0.07, 7); neck.position.y = 0.19;
+  const fallback = new THREE.Group();
+  const body = mesh(new THREE.SphereGeometry(0.09, 10, 8), fallbackOil); body.position.y = 0.085; body.scale.y = 0.9;
+  const neck = cyl(fallbackOil, 0.025, 0.035, 0.07, 7); neck.position.y = 0.19;
   const cork = cyl(m.wood, 0.028, 0.024, 0.04, 6); cork.position.y = 0.24;
   const net = mesh(new THREE.TorusGeometry(0.088, 0.008, 4, 10), m.cloth); net.rotation.x = HALF_PI; net.position.y = 0.09;
-  g.add(body, neck, cork, net);
+  fallback.add(body, neck, cork, net);
+  mountOilFlask(g, fallback, frontYaw);
   return g;
 }
 
@@ -782,11 +786,11 @@ export class Props {
     this.pickLantern = put(makeLantern(m, tex).group, 1.8, 0.88, -6.3);
     this.pickLantern.children[5].visible = false;
     g.add(this.pickLantern);
-    const sw = woodBundle(m); sw.position.set(0, 0, 0.55); sw.rotation.y = HALF_PI;
-    const si = ironPack(m); si.position.set(0, 0, -0.1);
-    const sf = oilFlask(m); sf.position.set(0, 0, -0.75);
+    const sw = woodBundle(m); sw.position.x = 0.55; sw.rotation.y = HALF_PI;
+    const si = ironPack(m); si.position.x = -0.1;
+    const sf = oilFlask(m, Math.PI); sf.position.x = -0.75; sf.scale.setScalar(0.8);
     this.shelfItems.add(sw, si, sf);
-    put(this.shelfItems, -9.6, 1.07, 6.2);
+    put(this.shelfItems, (BAILEY_SHELF.x0 + BAILEY_SHELF.x1) / 2, 1.12, (BAILEY_SHELF.z0 + BAILEY_SHELF.z1) / 2);
     g.add(this.shelfItems);
     const cw = woodBundle(m); cw.position.set(-0.22, 0, 0.05); cw.rotation.y = 0.4;
     const ci = ironPack(m); ci.position.set(0.2, 0, 0.1);
@@ -799,7 +803,7 @@ export class Props {
     this.crateLid.rotation.z = -1.2;
     g.add(this.crateItems, this.crateLid);
     const flaskAt = INTERACTS.find((it) => it.id === 'flask')!;
-    this.flask = put(oilFlask(m), flaskAt.x, B1_Y + 0.86, flaskAt.z);
+    this.flask = put(oilFlask(m, HALF_PI), flaskAt.x, B1_Y + 0.86, flaskAt.z);
     g.add(this.flask);
 
     // 祭台匣（PRP-05）：GLB 圣物箱（CC0），lid 节点挂到后缘枢轴上开合

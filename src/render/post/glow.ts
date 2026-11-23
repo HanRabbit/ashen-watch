@@ -1,14 +1,14 @@
-// 灯光散射（LGT-07）：屏幕空间体积光晕。把主要点光源（壁灯/提灯/火盆/炉火窗）投影到屏幕，
-// 按深度遮挡做径向 in-scatter 近似：灯被墙挡住时晕消失，灯在湿夜空气里拉出琥珀光晕。
-// 深度复用 GTAOPass 的深度纹理，不额外渲染一遍场景。
+// HDR weather, local light transport and optical halo share the existing opaque-depth pass.
 import * as THREE from 'three';
 import { AIR_VOLUME_GLSL } from './airVolume';
+import { GATHER_VOLUME_GLSL } from './shadowVolume';
 
 export const MAX_GLOW_LIGHTS = 6;
 
 export const LightGlowShader = {
   uniforms: {
     tDiffuse: { value: null as THREE.Texture | null },
+    tVolume: { value: null as THREE.Texture | null }, uHasVolume: { value: 0 },
     tDepth: { value: null as THREE.Texture | null },
     uHasDepth: { value: 0 },
     uLights: { value: Array.from({ length: MAX_GLOW_LIGHTS }, () => new THREE.Vector4(0, 0, 0, 0)) },
@@ -17,10 +17,10 @@ export const LightGlowShader = {
     uCount: { value: 0 },
     uNear: { value: 0.1 }, uFar: { value: 320 },
     uAspect: { value: 1 }, uStrength: { value: 0.5 },
-    // 雾内 in-scatter（解析近似）：uFog = (heightDensity, falloff, base)
+    // uFog = (damp ground extinction, free-air extinction, height datum)
     uAirColor: { value: new THREE.Color() }, uGroundAir: { value: new THREE.Color() }, uAirTime: { value: 0 },
     uKeyDir: { value: new THREE.Vector3(0, 1, 0) }, uKeyAir: { value: 0 },
-    uScatter: { value: 0.4 }, uFog: { value: new THREE.Vector3(0.012, 0.1, 0) },
+    uScatter: { value: 0.4 }, uFog: { value: new THREE.Vector3(0.025, 0.008, 0.1) },
     uTanHalfFov: { value: new THREE.Vector2(1, 1) },
     uInvView: { value: new THREE.Matrix4() }, uCamPos: { value: new THREE.Vector3() },
     // 高光压缩（色调映射前）：超过阈值的亮度按色相区分滚降——
@@ -32,7 +32,8 @@ export const LightGlowShader = {
     varying vec2 vUv;
     void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
   fragmentShader: /* glsl */`
-    uniform sampler2D tDiffuse, tDepth;
+    uniform sampler2D tDiffuse, tDepth, tVolume;
+    uniform float uHasVolume;
     uniform float uHasDepth, uNear, uFar, uAspect, uStrength, uScatter, uHiThresh, uHiKneeCool, uHiKneeWarm;
     uniform float uAirTime, uKeyAir;
     uniform vec3 uFog, uCamPos, uAirColor, uGroundAir, uKeyDir;
@@ -48,76 +49,137 @@ export const LightGlowShader = {
       return -( uNear * uFar ) / ( ( uFar - uNear ) * d - uFar );
     }
     ${AIR_VOLUME_GLSL}
-    // Integrate a finite, softened inverse-square point light along the visible ray.
-    // A surface endpoint far past the emitter (including sky) still sees the lit air in front of it.
-    float pointScatter(vec3 ray, float rayEnd, vec3 lightPos, float radius, vec3 worldRay) {
-      float along = dot(ray, lightPos);
-      vec3 offset = lightPos - ray * along;
-      float perpendicular2 = dot(offset, offset);
-      float reach2 = radius * radius - perpendicular2;
-      if (reach2 <= 0.0) return 0.0;
-      float reach = sqrt(reach2);
-      float a = max(0.0, along - reach), b = min(rayEnd, along + reach);
-      if (b <= a) return 0.0;
-
-      const float core = 0.42; // metres; a finite emitter avoids a singularity on its centre ray
+    ${GATHER_VOLUME_GLSL}
+    vec2 projectView(vec3 p) {
+      return 0.5 + 0.5 * p.xy / (-p.z * uTanHalfFov);
+    }
+    float depthAt(vec2 uv) { return viewDepth(texture2D(tDepth, uv).x); }
+    float sourceVisibility(vec4 light, float atCenter, vec2 fromLight) {
+      // Depth is authoritative for solid occluders. Only probe beside the source in the
+      // last few decimetres, where a lamp's own cap, bracket or cames can hide its centre.
+      float center = smoothstep(light.z - 0.27, light.z - 0.07, atCenter);
+      if (center >= 1.0 || atCenter <= light.z - 0.43) return center;
+      vec2 side = vec2(-fromLight.y, fromLight.x) + vec2(1e-4, 0.0);
+      side /= max(length(side), 1e-5);
+      vec2 px = 1.0 / vec2(textureSize(tDepth, 0));
+      vec2 offset = side * clamp(vec2(0.047) / (light.z * uTanHalfFov), px, 3.0 * px);
+      float sideA = smoothstep(light.z - 0.22, light.z - 0.05, depthAt(light.xy + offset));
+      float sideB = smoothstep(light.z - 0.22, light.z - 0.05, depthAt(light.xy - offset));
+      float fixture = 0.5 * (sideA + sideB) * smoothstep(light.z - 0.43, light.z - 0.24, atCenter);
+      return mix(center, 1.0, 0.48 * fixture);
+    }
+    // Softened inverse-square, integrated only between the first and last visible points
+    // in the finite light sphere. An opaque wall ends the integral even if the source is visible.
+    float pointScatter(vec3 ray, vec3 lightPos, vec2 interval, vec2 sphere, vec3 worldRay, float transmission) {
+      float a = interval.x, b = interval.y, along = sphere.x, perpendicular2 = sphere.y;
+      const float core = 0.40; // metres; no singularity at the emitter centre
       float invD = inversesqrt(perpendicular2 + core * core);
-      // Integral of 1 / (distance² + core²), minus the boundary value, so the volume fades out.
-      float integral = invD * (atan((b - along) * invD) - atan((a - along) * invD))
-                     - (b - a) / (radius * radius + core * core);
+      float radialIntegral = invD * (atan((b - along) * invD) - atan((a - along) * invD));
       float center = clamp(along, a, b);
-      // Approximate phase at the midpoint of the *visible scattering contribution*.
-      float delta = along - mix(center, (a + b) * 0.5, 0.45);
+      float sampleT = mix(center, 0.5 * (a + b), 0.34);
+      float delta = along - sampleT;
       float cosTheta = delta * inversesqrt(perpendicular2 + delta * delta + core * core);
-      const float g = 0.42;
-      float phase = (1.0 - g * g) / (12.566 * pow(1.0 + g * g - 2.0 * g * cosTheta, 1.5));
-      vec3 world = uCamPos + worldRay * center;
-      // A hearth can light a little indoor dust even with almost no incoming courtyard mist.
-      float shelter = 1.0 - 0.58 * awAirShelter(world);
+      // HG with a broad lobe; high anisotropy makes lanterns pop as the camera circles them.
+      const float g = 0.34;
+      float phaseDenom = 1.0 + g * g - 2.0 * g * cosTheta;
+      float phase = 0.0704 / (phaseDenom * sqrt(phaseDenom)); // (1-g²) / (4π)
+      vec3 world = uCamPos + worldRay * sampleT;
+      float openAir = 1.0 - awAirShelter(world);
       float height = max(world.y - uFog.z, 0.0);
-      vec2 localDensity = max(uFog.xy, vec2(0.0)) * exp(-AW_FALLOFF * height);
-      float density = shelter * (localDensity.x + localDensity.y + 0.003);
-      return max(0.0, integral) * density * phase;
+      vec2 d = uFog.xy * exp(-AW_FALLOFF * height);
+      float medium = openAir * (d.x * awDampPatch(world, uAirTime) + d.y) + 0.007;
+      // Visibility along the light-to-air leg is approximate with one camera depth buffer.
+      // Don't illuminate a sample across a visible obstruction between it and the source.
+      vec3 probe = mix(lightPos, ray * sampleT, 0.55);
+      float leg = smoothstep(-0.21, 0.025, depthAt(projectView(probe)) + probe.z);
+      float airT = mix(1.0, transmission, clamp(sampleT / AW_WEATHER_REACH, 0.0, 1.0));
+      return max(0.0, radialIntegral) * medium * phase * mix(0.035, 1.0, leg) * airT;
+    }
+    const vec3 AW_LUMA = vec3(0.2126, 0.7152, 0.0722);
+    float awRolloff(float luma, float threshold, float knee) {
+      float over = max(luma - threshold, 0.0);
+      return luma - over + over / (1.0 + over * knee);
     }
     void main() {
       vec3 c = texture2D(tDiffuse, vUv).rgb;
-      float here = uHasDepth > 0.5 ? viewDepth(texture2D(tDepth, vUv).x) : uFar;
+      bool hasDepth = uHasDepth > 0.5;
+      float depth = hasDepth ? texture2D(tDepth, vUv).x : 1.0;
+      bool isSky = hasDepth && depth >= 1.0;
+      float here = isSky || !hasDepth ? uFar : viewDepth(depth);
       vec3 viewRay = normalize(vec3((vUv * 2.0 - 1.0) * uTanHalfFov, -1.0));
       float rayEnd = here / -viewRay.z;
       vec3 worldRay = (uInvView * vec4(viewRay, 0.0)).xyz;
-      if (uHasDepth > 0.5) c = awAtmosphere(c, uCamPos, worldRay, rayEnd);
+      float transmission = 1.0;
+      if (hasDepth) {
+        float confidence=0.; vec4 volume=vec4(0.,0.,0.,1.);
+        if(uHasVolume>.5) volume=awResolveVolume(here,isSky,confidence);
+        vec3 resolved=c*volume.a+volume.rgb;
+        if(confidence<1.) {
+          vec3 fallback=awAtmosphere(c,uCamPos,worldRay,rayEnd,isSky,transmission);
+          resolved=mix(fallback,resolved,confidence);
+        }
+        transmission=mix(transmission,volume.a,confidence);
+        c=resolved;
+      }
+
+      // Compress *excess* luminance, not the whole pixel. Wet cold glints stay ordered,
+      // the actual moon (clear depth) is exempt, and local air is added after this shoulder.
+      if (!isSky) {
+        float luma = dot(c, AW_LUMA);
+        if (luma > uHiThresh) {
+          float warmth = (c.r - c.b) / luma;
+          float knee = mix(uHiKneeCool, uHiKneeWarm, smoothstep(-0.1, 0.25, warmth));
+          c *= awRolloff(luma, uHiThresh, knee) / luma;
+        }
+      }
+      if (hasDepth) {
+        // The rig interpolates this radiance in linear light. Blue night air is below
+        // the shoulder, so we never switch a window beam on/off by camera room or phase.
+        // No hard-sun shaft: this is the short diffuse path just behind the existing pane.
+        float paneSky = smoothstep(0.065, 0.24, dot(uAirColor, AW_LUMA));
+        if (paneSky > 0.0) {
+          float windowColumn = awWindowColumn(uCamPos, worldRay, rayEnd);
+          c += uAirColor * (1.0 - exp(-0.21 * windowColumn)) * paneSky * transmission;
+        }
+      }
       for (int i = 0; i < ${MAX_GLOW_LIGHTS}; i++) {
         if (i >= uCount) break;
         vec4 L = uLights[i];
+        if (L.w < 1e-4) continue;
         vec2 dv = (vUv - L.xy) * vec2(uAspect, 1.0);
         float r2 = dot(dv, dv);
-        float occ = 1.0;
-        if (uHasDepth > 0.5) {
-          float atLight = viewDepth(texture2D(tDepth, L.xy).x);
-          // A fixture may cover the precise light centre; a solid wall further in front hides it.
-          occ = smoothstep(L.z - 0.44, L.z - 0.06, atLight);
+        vec3 lightPos = vec3((L.xy * 2.0 - 1.0) * uTanHalfFov * L.z, -L.z);
+        float along = dot(viewRay, lightPos);
+        vec3 offset = lightPos - viewRay * along;
+        float perpendicular2 = dot(offset, offset);
+        float radius2 = uLightRadius[i] * uLightRadius[i];
+        // Broad lighting follows world metres, not screen UV. Restrict depth fetches to
+        // rays that can see a lit interval or the very tight optical halo.
+        vec2 interval = vec2(0.0);
+        if (hasDepth && uScatter > 0.001 && perpendicular2 < radius2) {
+          float span = sqrt(radius2 - perpendicular2);
+          interval = vec2(max(0.0, along - span), min(rayEnd, along + span));
         }
+        bool litAir = interval.y > interval.x;
+        bool haloVisible = r2 < 0.008 && here > L.z - 0.44 && uStrength > 0.001;
+        if (!litAir && !haloVisible) continue;
+        float occ = hasDepth ? sourceVisibility(L, depthAt(L.xy), dv) : 1.0;
         if (occ < 0.001) continue;
-        // Tight optical halo. Wider falloff comes from the world-space volume, not a screen decal.
-        float halo = exp(-r2 * 830.0) * 0.48 + exp(-r2 * 4500.0) * 0.7;
-        float att = clamp(4.0 / L.z, 0.14, 1.6);
-        float foreground = smoothstep(L.z - 0.56, L.z - 0.08, here);
-        c += uLightCols[i] * halo * att * occ * foreground * min(1.0, L.w / 22.0) * uStrength;
-        if (uScatter > 0.001 && uHasDepth > 0.5) {
-          vec3 lightPos = vec3((L.xy * 2.0 - 1.0) * uTanHalfFov * L.z, -L.z);
-          float haze = pointScatter(viewRay, rayEnd, lightPos, uLightRadius[i], worldRay);
-          c += uLightCols[i] * (uScatter * L.w * haze * occ);
+        float radiance = 0.0;
+        if (haloVisible) {
+          float halo = exp(-r2 * 1050.0) * 0.35 + exp(-r2 * 5200.0) * 0.64;
+          halo *= 1.0 - smoothstep(0.005, 0.008, r2);
+          float foreground = smoothstep(L.z - 0.44, L.z - 0.07, here);
+          radiance += halo * clamp(4.0 / L.z, 0.12, 1.4) * foreground * min(1.0, L.w / 22.0) * uStrength;
         }
-      }
-      // 高光滚降：保色相压缩超阈值亮度（能量守恒软钳制，随后才进 ACES）。
-      // 天空（月盘/云/晕）豁免；几何上的暖高光保留、冷镜面压柔。
-      bool isSky = uHasDepth > 0.5 && here >= uFar * 0.999;
-      if (!isSky) {
-        float luma = dot(c, vec3(0.2126, 0.7152, 0.0722));
-        float warmth = clamp((c.r - c.b) / max(luma, 1e-3), -1.0, 1.0);
-        float knee = mix(uHiKneeCool, uHiKneeWarm, smoothstep(-0.1, 0.25, warmth));
-        float over = max(luma - uHiThresh, 0.0);
-        c *= 1.0 / (1.0 + over * knee);
+        if (litAir) {
+          float haze = pointScatter(viewRay, lightPos, interval, vec2(along, perpendicular2), worldRay, transmission);
+          // Fade the tangential rim of the finite point-light support.
+          float reach = 1.0 - perpendicular2 / radius2;
+          float edge = smoothstep(0.0, 0.55, reach);
+          radiance += uScatter * L.w * haze * edge;
+        }
+        c += uLightCols[i] * (radiance * occ);
       }
       // NaN/Inf 防护：材质视差/法线在石缝陡梯度处可能产生 NaN，穿透一切 clamp 形成白线；
       // 这里钳制为 0（暗缝），保证画面无花屏（圣经验收：无 NaN 花屏）。ES1 兼容写法。

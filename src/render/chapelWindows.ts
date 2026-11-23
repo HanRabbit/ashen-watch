@@ -147,16 +147,19 @@ export function glazedWall(b: Batch, f: Fabric, wall: Wall): void {
 
     const glazing = new THREE.ShapeGeometry(panes, 9);
     const pos = glazing.getAttribute('position'), tex = glazing.getAttribute('uv');
-    for (let i = 0; i < pos.count; i++) tex.setXY(i, pos.getX(i) / 1.52 + u * 0.37, pos.getY(i) / 1.76);
-    // The came network is a cutout in the opaque pass. Translucent glass
-    // behind it cannot erase its silhouette even across another glazed bay.
-    put(f.lead, glazing.clone(), u, sill, -0.032);
-    put(f.glass, glazing, u, sill, -0.035);
+    const phase = u * 0.37 + wall.x * 0.071 + wall.z * 0.043;
+    for (let i = 0; i < pos.count; i++) tex.setXY(i, pos.getX(i) / 1.52 + phase, pos.getY(i) / 1.76);
+    // Seat the glass behind the nave-side bevel. Viewed from the wall walk,
+    // the light must pass through the full depth of the stone tracery first.
+    const seat = -depth / 2 - bevel * 1.4 - 0.014;
+    // Keep the came network in the existing opaque batch for a stable silhouette.
+    put(f.lead, glazing.clone(), u, sill, seat + 0.003);
+    put(f.glass, glazing, u, sill, seat);
     // Slender saddle bars brace the lead panels from the nave side only.
     const spacing = hero ? 0.92 : 0.74;
     for (let y = spacing; y < spring + 0.01; y += spacing) {
       const bar = new THREE.CylinderGeometry(hero ? 0.014 : 0.01, hero ? 0.014 : 0.01, width, 6).rotateZ(Math.PI / 2);
-      put(f.iron, bar, u, sill + y, -depth / 2 - 0.025);
+      put(f.iron, bar, u, sill + y, seat - 0.023);
     }
   }
   put(f.ash, scaleUV(new THREE.ExtrudeGeometry(face, { depth: 0.5, bevelEnabled: false, curveSegments: 16 }), 0.5), 0, 0, -0.25);
@@ -195,7 +198,7 @@ export function chapelGlass(): { glass: THREE.MeshStandardMaterial; lead: THREE.
     const ny = 0.052 * wave + 0.037 * Math.cos(phase) + (alongX ? 0 : bead * Math.sign(dy));
     const inv = 127.5 / Math.hypot(nx, ny, 1);
     normals.set([128 + nx * inv, 128 + ny * inv, 128 + inv, 255], k);
-    finish.set([0, mix(183, 61 + tone * 17 + haze * 52), 0, 255], k);
+    finish.set([0, mix(190, 105 + tone * 39 + haze * 45), 0, 255], k);
     mask.set([0, 255 * came, 0, 255], k);
   }
   const texture = (bytes: Uint8Array<ArrayBuffer>, srgb = false) => {
@@ -208,29 +211,30 @@ export function chapelGlass(): { glass: THREE.MeshStandardMaterial; lead: THREE.
   const normalMap = texture(normals), roughnessMap = texture(finish);
   const lead = new THREE.MeshStandardMaterial({ name: 'Chapel | soldered cames', color: 0x353737,
     alphaMap: texture(mask), alphaTest: 0.42, alphaToCoverage: true, normalMap, roughness: 0.69, metalness: 0.44, side: THREE.DoubleSide });
-  const mat = new THREE.MeshStandardMaterial({ name: 'Chapel | leaded clear quarries', map: texture(colour, true),
-    normalMap, roughnessMap, roughness: 1, metalness: 0, transparent: true, depthWrite: false, forceSinglePass: true,
+  const mat = new THREE.MeshPhysicalMaterial({ name: 'Chapel | leaded clear quarries', map: texture(colour, true),
+    normalMap, normalScale: new THREE.Vector2(0.44, 0.44), roughnessMap, roughness: 1, metalness: 0,
+    specularIntensity: 0.42, envMapIntensity: 0.55, transparent: true, depthWrite: false, forceSinglePass: true,
     color: 0x97a4af, emissive: 0xc1d0dc, side: THREE.DoubleSide });
   mat.onBeforeCompile = (shader) => {
     shader.fragmentShader = shader.fragmentShader.replace('#include <emissivemap_fragment>', `
       #include <emissivemap_fragment>
-      // Recessed glass seen from outside mostly reflects the sky probe; from
-      // the nave the same quarries admit broad skylight. No screen refraction.
+      // Keep the weak daylight contribution on the nave, not a glowing panel
+      // on the weather face. Long runoff marks are not tiled per quarry.
       float sky = smoothstep(0.0, 2.6, vMapUv.y);
-      float edge = smoothstep(0.0, 0.17, vMapUv.y);
-      totalEmissiveRadiance *= sampledDiffuseColor.rgb * mix(0.68, 1.0, edge)
-        * (gl_FrontFacing ? mix(0.19, 0.37, sky) : mix(1.15, 1.90, sky));
+      float runoff = 0.58 + 0.42 * sin(17.0 * vMapUv.x + 1.6 * sin(1.4 * vMapUv.y));
+      float heel = 1.0 - smoothstep(0.02, 0.33 + runoff * 0.14, vMapUv.y);
+      diffuseColor.rgb *= 1.0 - 0.26 * heel * runoff;
+      totalEmissiveRadiance *= sampledDiffuseColor.rgb * (1.0 - 0.35 * heel)
+        * (gl_FrontFacing ? mix(0.08, 0.16, sky) : mix(0.78, 1.30, sky));
     `).replace('#include <opaque_fragment>', `
-      // Optical density of clear sheet glass, not the opacity of the stone frame.
-      // Actual opaque scene colour remains visible behind both opposing lights;
-      // the live sky probe takes over on the slightly wavy glass at grazing angles.
-      float grazing = pow(1.0 - clamp(abs(dot(normal, normalize(vViewPosition))), 0.0, 1.0), 3.0);
-      float film = smoothstep(0.26, 0.48, roughnessFactor);
-      diffuseColor.a *= clamp(0.27 + 0.40 * grazing + 0.17 * film, 0.0, 0.88);
+      // Retain the scene behind the glass even on a raking shot from the walk.
+      float grazing = pow(1.0 - clamp(dot(normal, normalize(vViewPosition)), 0.0, 1.0), 3.0);
+      float film = smoothstep(0.43, 0.67, roughnessFactor);
+      diffuseColor.a *= 0.25 + 0.19 * grazing + 0.17 * film + 0.09 * heel;
       #include <opaque_fragment>
     `);
   };
   mat.customProgramCacheKey = () => 'chapel-glass-front-and-nave';
-  mat.onBeforeRender = (_renderer, scene) => { mat.emissiveIntensity = THREE.MathUtils.lerp(0.85, 0.045, scene.userData.night ?? 0); };
+  mat.onBeforeRender = (_renderer, scene) => { mat.emissiveIntensity = THREE.MathUtils.lerp(0.65, 0.028, scene.userData.night ?? 0); };
   return { glass: mat, lead };
 }

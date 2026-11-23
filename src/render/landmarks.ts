@@ -5,6 +5,7 @@ import { RAISED_Y } from '../sim/level';
 import { archBand, archHeader, archLeaf, Batch } from './geom';
 import { Materials, scaleUV, tiledBox } from './materials';
 import { variants } from './materialVariants';
+import { mountRodin } from './rodinAssets';
 import { chapelGlass, glazedWall, type Light } from './chapelWindows';
 
 const R = RAISED_Y;
@@ -131,8 +132,20 @@ export function buildLandmarks(m: Materials): Landmarks {
   b.geo(trim, tiledBox(nSlope, 0.2, 0.7, 0.6), 21.75, 13.6, 25.25, 0, 0, -nAng);
   cross(b, trim, 19, 25.25, 16.15, 1.25);
   // 立面两端角塔
-  pinnacle(b, trim, 13.75, 25.25, 11, 1.05);
-  pinnacle(b, trim, 24.25, 25.25, 11, 1.05);
+  // A lower, chipped crocket catches the rake of the sun on the gate side.
+  for (const [x, height, angle] of [[13.75, 3.27, 0.94], [24.25, 3.94, -1.48]]) {
+    const original = new Batch();
+    pinnacle(original, trim, x, 25.25, 11, 1.05);
+    const fallback = new THREE.Group();
+    original.build(fallback);
+    mountRodin(group, 'chapel-pinnacle', fallback, v.rock, model => {
+      const bounds = new THREE.Box3().setFromObject(model);
+      const scale = height / (bounds.max.y - bounds.min.y);
+      model.scale.setScalar(scale);
+      model.rotation.y = angle;
+      model.position.set(x, 10.95 - bounds.min.y * scale, -25.25);
+    });
+  }
   // 山墙坡面小尖塔
   pinnacle(b, trim, 16.1, 25.25, 13.15, 0.6);
   pinnacle(b, trim, 21.9, 25.25, 13.15, 0.6);

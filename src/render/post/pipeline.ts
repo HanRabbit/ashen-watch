@@ -13,6 +13,8 @@ import { LightGlowShader, MAX_GLOW_LIGHTS } from './glow';
 import { FarSoftShader } from './farsoft';
 import { fillLUT, makeLUT, GradeParams, FilmOutputShader } from './grade';
 import { configureWetReflections } from './wetReflections';
+import { withoutShadowUpdates } from './shadows';
+import { ShadowVolumePass } from './shadowVolume';
 
 export interface PostHooks {
   /** SSR 反射接收面（地面/积水） */
@@ -21,6 +23,7 @@ export interface PostHooks {
   atmo(): THREE.Object3D[];
   /** 参与屏幕空间光晕/散射的点光源 */
   lights(): THREE.PointLight[];
+  key?(): THREE.DirectionalLight;
 }
 
 export interface PostRig {
@@ -36,6 +39,9 @@ export interface PostRig {
   hiThresh: number; hiKneeCool: number; hiKneeWarm: number;
 }
 
+// Three r187 auxiliary scene renders (the preceding beauty pass still updates shadows).
+type GeometryPass = (renderer: THREE.WebGLRenderer, material: THREE.Material, target: THREE.WebGLRenderTarget, clearColor: number, clearAlpha: number) => void;
+
 const DEFAULT_GRADE: GradeParams = { sat: 0.9, contrast: 1.05, tintS: 0x2a3640, tintH: 0xfff0d8 };
 
 export class PostPipeline {
@@ -46,6 +52,7 @@ export class PostPipeline {
   private gtao!: GTAOPass;
   private ssr: SSRPass | null = null;
   private glow!: ShaderPass;
+  private volume: ShadowVolumePass | null = null;
   private farSoft!: ShaderPass;
   private quality: Quality = 'cinematic';
   private lastSig = '';
@@ -123,6 +130,7 @@ export class PostPipeline {
     }
     this.composer = null;
     this.ssr = null;
+    this.volume = null;
     if (this.quality === 'low') return;
     const size = this.renderer.getDrawingBufferSize(new THREE.Vector2());
     const cinematic = this.quality === 'cinematic';
@@ -150,7 +158,8 @@ export class PostPipeline {
       const ssr = this.ssr as SSRPass & {
         normalMaterial: THREE.MeshNormalMaterial;
         normalRenderTarget: THREE.WebGLRenderTarget;
-        _renderOverride: (renderer: THREE.WebGLRenderer, material: THREE.Material, target: THREE.WebGLRenderTarget, clearColor: number, clearAlpha: number) => void;
+        _renderOverride: GeometryPass;
+        _renderMetalness: GeometryPass;
       };
       const depthTexture = new THREE.DepthTexture(size.x, size.y, THREE.UnsignedIntType);
       ssr.normalRenderTarget.depthTexture = depthTexture;
@@ -158,9 +167,11 @@ export class PostPipeline {
       const renderOverride = ssr._renderOverride.bind(ssr);
       ssr._renderOverride = (renderer, material, target, clearColor, clearAlpha) => {
         const render = () => renderOverride(renderer, material, target, clearColor, clearAlpha);
-        if (material === ssr.normalMaterial) this.withoutAtmo(render);
+        if (material === ssr.normalMaterial) withoutShadowUpdates(renderer, () => this.withoutAtmo(render));
         else render();
       };
+      const renderMetalness = ssr._renderMetalness.bind(ssr);
+      ssr._renderMetalness = (renderer, ...args) => withoutShadowUpdates(renderer, () => renderMetalness(renderer, ...args));
       this.composer.addPass(ssr);
     } else {
       this.composer.addPass(new RenderPass(this.scene, this.camera));
@@ -172,11 +183,21 @@ export class PostPipeline {
     this.gtao.updateGtaoMaterial({ radius: 0.36, distanceExponent: 1, thickness: 1, scale: 1.25, samples: cinematic ? 16 : 12, distanceFallOff: 1, screenSpaceRadius: false });
     this.gtao.updatePdMaterial({ lumaPhi: 10, depthPhi: 2, normalPhi: 3, radius: 4, rings: 2, samples: cinematic ? 8 : 6 });
     if (!gBuffer) {
-      const render = this.gtao.render.bind(this.gtao);
-      this.gtao.render = (...args) => this.withoutAtmo(() => render(...args));
+      const gtao = this.gtao as GTAOPass & { _renderOverride: GeometryPass };
+      const renderOverride = gtao._renderOverride.bind(gtao);
+      gtao._renderOverride = (renderer, ...args) => withoutShadowUpdates(renderer, () => renderOverride(renderer, ...args));
+      const render = gtao.render.bind(gtao);
+      gtao.render = (...args) => this.withoutAtmo(() => render(...args));
     }
     this.composer.addPass(this.gtao);
     this.glow = new ShaderPass(LightGlowShader);
+    if (this.hooks.key) {
+      this.volume = new ShadowVolumePass(cinematic, this.hooks.key, available => {
+        this.glow.uniforms.uHasVolume.value = available ? 1 : 0;
+      });
+      this.glow.uniforms.tVolume.value = this.volume.target.texture;
+      this.composer.addPass(this.volume);
+    }
     this.composer.addPass(this.glow);
     this.bloom = new UnrealBloomPass(new THREE.Vector2(size.x, size.y), 0.23, 0.3, 1.10);
     // Restrict bloom to high-luminance warm emitters (day sky, moon and neutral wet stone
@@ -239,6 +260,15 @@ export class PostPipeline {
     const depth = this.gtao.depthTexture;
     u.tDepth.value = depth ?? null;
     u.uHasDepth.value = depth ? 1 : 0;
+    if (this.volume) {
+      const v = this.volume.uniforms;
+      v.tDepth.value = depth ?? null;
+      v.uWorld.value.copy(this.camera.matrixWorld); v.uOrigin.value.copy(this.camera.position);
+      v.uTan.value.copy(u.uTanHalfFov.value); v.uClip.value.set(this.camera.near, this.camera.far);
+      v.uKeyDirection.value.copy(u.uKeyDir.value); v.uFog.value.copy(u.uFog.value);
+      v.uGround.value.copy(u.uGroundAir.value); v.uSky.value.copy(u.uAirColor.value);
+      v.uTime.value = u.uAirTime.value;
+    }
     const fu = this.farSoft.uniforms;
     fu.tDepth.value = depth ?? null;
     fu.uHasDepth.value = depth ? 1 : 0;

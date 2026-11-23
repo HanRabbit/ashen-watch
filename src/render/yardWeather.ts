@@ -78,6 +78,15 @@ vec3 awDeposit(vec2 q, vec4 yard, float grain, float pocket) {
   float seams = pocket * (.13 + .38 * grain + .46 * hollow) * (1.0 - .64 * yard.y);
   float mud = clamp(max(mat * (1.0 - .46 * yard.y), seams), 0.0, .97);
   return vec3(mud, max(wheel * .67,hollow * .62), clamp(wash + yard.z + toe * .73,0.0,1.0));
+#elif AW_FLOOR_HISTORY == 3
+  // The open gable collects washed-in leaf mould. Keep the centre of the worn
+  // passage visible where feet turn around the cross-wall into the north room.
+  float lee = awSoilBay(q, vec2(-16.55,23.78), vec2(.96,.28), vec2(.37,.68),rag);
+  float pocketAtKnee = awSoilBay(q, vec2(-16.91,17.70), vec2(.43,.903), vec2(.60,.91),rag);
+  float scree = awSoilBay(q, vec2(-14.66,14.62), vec2(.20,.980), vec2(.48,1.13),rag);
+  float deposit = max(lee, max(pocketAtKnee, scree));
+  float cover = deposit * (.61 + .64 * grain) + pocket * (.17 + deposit * .32);
+  return vec3(min(.98, cover), deposit * .69, lee + .46 * pocketAtKnee);
 #else
   // Tracked-in earth fans from the gatehouse and west chapel portals; only dry dust
   // gathers behind the pews/against interior edges, not outdoor moss or rainwater.

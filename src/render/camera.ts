@@ -10,6 +10,10 @@ import { clamp01, lerp } from './geom';
 const CAM = { dist: 3.4, shoulder: 0.78, pivotY: 1.62, fov: 55, margin: 0.25 };
 const damp = (from: number, to: number, rate: number, dt: number): number =>
   lerp(from, to, -Math.expm1(-rate * dt));
+// Cap large mouse impulses without slowing small movements near the aim.
+const MAX_YAW_RATE = 4.7; // radians/sec; excludes explicit reset and debug shots.
+const FOCUS_RATE = 21;
+const MAX_FOCUS_LAG = .12;
 const FAN = { n: 12, step: (3 * Math.PI) / 180 };
 
 export class CameraRig {
@@ -31,6 +35,8 @@ export class CameraRig {
   private world: World | null = null;
   private tmp = new THREE.Vector3();
   private anchor = new THREE.Vector3();
+  private focus = new THREE.Vector3();
+  private focusOffset = new THREE.Vector3();
 
   constructor(private camera: THREE.PerspectiveCamera) {}
 
@@ -95,7 +101,8 @@ export class CameraRig {
     this.prevZ = p.z;
 
     const dy = yaw - this.yawS;
-    this.yawS += damp(0, Math.atan2(Math.sin(dy), Math.cos(dy)), 10, dt);
+    const yawStep = damp(0, Math.atan2(Math.sin(dy), Math.cos(dy)), 10, dt);
+    this.yawS += THREE.MathUtils.clamp(yawStep, -MAX_YAW_RATE * dt, MAX_YAW_RATE * dt);
     this.pitchS = damp(this.pitchS, pitch, 14, dt);
     const cyaw = this.yawS, cpitch = this.pitchS;
     const stride = clamp01(this.speed / PLAYER.walkSpeed);
@@ -124,11 +131,18 @@ export class CameraRig {
     const target = this.tmp.set(ax - sy * cp * d, py + sp * d, -(az - cy * cp * d));
     // Closed-form critically damped spring. Unlike clamped Euler steps this handles
     // a missed frame and reaches the same pose for a held target at 30 or 120 Hz.
+    const anchor = this.anchor.set(ax, py, -az);
     if (!this.sprung) {
+      this.focus.copy(anchor);
       this.springPos.copy(target);
       this.springVel.set(0, 0, 0);
       this.sprung = true;
     } else {
+      // Soften translation on key edges without filtering mouse aim a second
+      // time. Collision rays still use the real pivot, never this visual lag.
+      this.focus.lerp(anchor, -Math.expm1(-FOCUS_RATE * dt));
+      this.focusOffset.subVectors(this.focus, anchor).clampLength(0, MAX_FOCUS_LAG);
+      this.focus.copy(anchor).add(this.focusOffset);
       const omega = 22;
       const decay = Math.exp(-omega * dt);
       const offset = this.springOffset.subVectors(this.springPos, target);
@@ -139,7 +153,6 @@ export class CameraRig {
     // The target boom is collision-tested, but its spring can still lag across
     // a wall or the lip of a staircase when the player turns while descending.
     // Clip the resulting boom too, so smoothing never moves the view through stone.
-    const anchor = this.anchor.set(ax, py, -az);
     const t = cameraClearT(ax, az, py, this.springPos.x, -this.springPos.z, this.springPos.y, w.doors);
     if (t < 1) {
       const length = anchor.distanceTo(this.springPos);
@@ -156,7 +169,8 @@ export class CameraRig {
       ky = Math.cos(this.kickSeed * 7.3) * 0.045 * k;
       this.kickT -= dt;
     }
-    this.camera.lookAt(ax + sy * cp * 6 + kx, py - sp * 6 + ky, -(az + cy * cp * 6));
+    const follow = this.tmp.copy(anchor).lerp(this.focus, THREE.MathUtils.smoothstep(d, .4, 1.3));
+    this.camera.lookAt(follow.x + sy * cp * 6 + kx, follow.y - sp * 6 + ky, follow.z - cy * cp * 6);
 
     // Keep the lens quiet: walking and running share the moving FOV.
     this.fov = damp(this.fov, CAM.fov + 3 * stride, 6, dt);

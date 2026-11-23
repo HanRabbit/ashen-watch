@@ -4,10 +4,11 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { BARRELS, PROPS, RAISED_Y, WELL } from '../sim/level';
-import { Batch } from './geom';
+import { Batch, put } from './geom';
 import { Materials, scaleUV, tiledBox, trackPending } from './materials';
 import { applyWear, heroFinish, heroOutline, heroSolid, loadProp, mergeByMaterial, sackGeometry, sackTie } from './propAssets';
 import { Variants, variants } from './materialVariants';
+import { wornPrism } from './wornArris';
 
 const R = RAISED_Y;
 const HALF_PI = Math.PI / 2;
@@ -172,8 +173,12 @@ function courtyardWell(m: Materials, v: Variants): THREE.Group {
   `);
   const oak = heroFinish(v.woodPlank, 'well-oak', /* glsl */`
     float foot = (1.0 - smoothstep(0.8, 1.12, vHeroPos.y)) * smoothstep(0.62, 0.82, abs(vHeroPos.x));
-    diffuseColor.rgb *= 1.12 - 0.51 * foot;
-    roughnessFactor -= 0.10 * foot;
+    // Socketed posts hold moisture. The rope only burnishes the centre of the drum.
+    float rope = (1.0 - smoothstep(0.17, 0.23, abs(vHeroPos.x)))
+      * (1.0 - smoothstep(0.065, 0.091, length(vHeroPos.yz - vec2(1.465, 0.0))));
+    diffuseColor.rgb *= 1.12 - 0.42 * foot - 0.08 * rope;
+    roughnessFactor = mix(roughnessFactor, 0.66, 0.84 * foot);
+    roughnessFactor = mix(roughnessFactor, 0.73, 0.72 * rope);
   `);
   const wornIron = heroFinish(m.iron, 'well-hand-iron', /* glsl */`
     diffuseColor.rgb = diffuseColor.rgb * 1.55 + vec3(0.012, 0.012, 0.011);
@@ -238,17 +243,35 @@ function courtyardWell(m: Materials, v: Variants): THREE.Group {
   add(water, new THREE.CircleGeometry(0.665, 32).rotateX(-HALF_PI), 0, 0.027);
 
   // All timber is cut with the grain along its axis, including the angled braces and rafters.
-  const timber = (a: [number, number, number], b: [number, number, number], width: number, depth: number, seed: number) => {
+  const timber = (a: [number, number, number], b: [number, number, number], width: number, depth: number, seed: number, wornPost = false) => {
     const start = new THREE.Vector3(...a), end = new THREE.Vector3(...b);
     const h = start.distanceTo(end);
-    const geo = heroSolid(heroOutline([
+    const outline: [number, number][] = [
       [-width * 0.5, 0], [width * 0.5, 0], [width * 0.48, h * 0.38],
       [width * 0.5, h], [-width * 0.48, h], [-width * 0.54, h * 0.64],
-    ]), depth, Math.min(0.013, width * 0.15, depth * 0.22));
-    const uv = geo.attributes.uv, p = geo.attributes.position, normals = geo.attributes.normal;
-    for (let k = 0; k < p.count; k++) {
-      const s = Math.abs(normals.getZ(k)) >= Math.abs(normals.getX(k)) ? p.getX(k) / width : p.getZ(k) / depth;
-      uv.setXY(k, 0.062 + (seed % 7) * 0.127 + s * 0.067, p.getY(k) * 0.51 + rnd(seed));
+    ];
+    const u0 = 0.062 + (seed % 7) * 0.127, v0 = rnd(seed);
+    const cut = Math.min(0.013, width * 0.15, depth * 0.22);
+    let geo: THREE.BufferGeometry;
+    if (wornPost) {
+      // The tall socketed posts are within arm's reach. Long hand-hewn edges
+      // and local loss at one mid-height station; no rounding on the joinery.
+      const edge = (i: number, side: number): [number, number, number] => {
+        const t = rnd(seed * 9 + i * 17 + side);
+        const worn = (side === 1 ? i === 2 : i === 5) ? 0.007 : 0;
+        return [cut * (0.39 + 0.69 * t) + worn, cut * (0.49 + 0.58 * (1 - t)) + worn * 0.64,
+          0.14 + 0.22 * rnd(seed * 3 + i * 11 + side)];
+      };
+      geo = wornPrism(outline, -depth / 2, depth / 2, { front: i => edge(i, 1), back: i => edge(i, -1) },
+        ([x, y, z], { axis, sign }) => [u0 + (axis === 0 ? z / depth : x / width) * 0.067,
+          v0 + 0.51 * (axis === 1 ? (sign > 0 ? h : 0) + z : y)]);
+    } else {
+      geo = heroSolid(heroOutline(outline), depth, cut);
+      const uv = geo.attributes.uv, p = geo.attributes.position, normals = geo.attributes.normal;
+      for (let k = 0; k < p.count; k++) {
+        const s = Math.abs(normals.getZ(k)) >= Math.abs(normals.getX(k)) ? p.getX(k) / width : p.getZ(k) / depth;
+        uv.setXY(k, u0 + s * 0.067, p.getY(k) * 0.51 + v0);
+      }
     }
     const member = add(oak, geo, ...a);
     member.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), end.sub(start).normalize());
@@ -261,7 +284,7 @@ function courtyardWell(m: Materials, v: Variants): THREE.Group {
   const ridge = 2.58, eave = 1.81, run = 0.655;
   timber([-1.07, 2.46, 0], [1.07, 2.46, 0], 0.105, 0.11, 6);
   for (const [i, x] of [-0.808, 0.808].entries()) {
-    timber([x, 0.78, 0], [x + 0.009, 2.47, 0], 0.156, 0.177, 14 + i * 3);
+    timber([x, 0.78, 0], [x + 0.009, 2.47, 0], 0.156, 0.177, 14 + i * 3, true);
     timber([x, 1.83, -0.58], [x, 1.83, 0.58], 0.124, 0.117, 9 + i);
     timber([x, 1.12, 0], [x * 0.48, 1.85, 0], 0.103, 0.108, 12 + i);
     for (const side of [-1, 1]) {
@@ -374,8 +397,11 @@ export function buildFurniture(m: Materials): THREE.Group {
   group.name = 'furniture';
   const b = new Batch();
   const v = variants(m);
-  applyWear(v.woodPlank, { kind: 'wood', seed: 31 });
-  applyWear(v.woodBeam, { kind: 'wood', seed: 33 });
+  // These shared families also cover the courtyard cart, staging and crates.
+  applyWear(v.woodPlank, { kind: 'wood', groundY: 0 });
+  applyWear(v.woodBeam, { kind: 'wood', groundY: 0 });
+  applyWear(v.woodFloorOld, { kind: 'wood' });
+  applyWear(m.wood, { kind: 'wood' });
   applyWear(v.clothLinen, {
     kind: 'cloth', center: [-4.52, -27.57], rimY: 1.17,
     sacks: [[-2.5, -2.0, 0.32], [-2.0, -1.6, 0.28], [-9.3, 8.6, 0.3], [-9.0, 9.3, 0.26], [-2.05, -2.2, 0.18]],
@@ -431,7 +457,7 @@ export function buildFurniture(m: Materials): THREE.Group {
         // 炉膛内柴堆
         const logs = loadProp({
           name: 'firewood', size: 1.0,
-          normDefault: { color: 0x6b5038, roughness: 0.85, metalness: 0, wear: { kind: 'wood', seed: 41 } },
+          normDefault: { color: 0x6b5038, wear: { kind: 'wood' } },
         });
         logs.position.set(hx + 0.28, 0.24, 4.4);
         group.add(logs);
@@ -452,13 +478,13 @@ export function buildFurniture(m: Materials): THREE.Group {
       case 'woodpile': {
         const pile = loadProp({
           name: 'firewood', size: 1.05,
-          normDefault: { color: 0x8a7a62, roughness: 0.85, metalness: 0, wear: { kind: 'wood', seed: 8 } },
+          normDefault: { color: 0x8a7a62, wear: { kind: 'wood' } },
         });
         pile.position.set(-2.6, 0, 6.45);
         group.add(pile);
         const pile2 = loadProp({
           name: 'firewood', size: 0.8, rotY: 0.14, yOff: 0.3,
-          normDefault: { color: 0x7a6a52, roughness: 0.85, metalness: 0, wear: { kind: 'wood', seed: 12 } },
+          normDefault: { color: 0x7a6a52, wear: { kind: 'wood' } },
         });
         pile2.position.set(-2.6, 0, 6.45);
         group.add(pile2);
@@ -467,7 +493,8 @@ export function buildFurniture(m: Materials): THREE.Group {
       case 'bench': {
         const table = loadProp({
           name: 'table', size: 2.2, rotY: HALF_PI, stretch: [1, 1.35, 1],
-          normDefault: { color: 0x6b5038, roughness: 0.8, metalness: 0, wear: { kind: 'wood', seed: 14 } },
+          // Worktop height after normalization and the vertical stretch.
+          normDefault: { color: 0x6b5038, wear: { kind: 'wood', contactY: 0.906 } },
         });
         table.position.set(2.6, 0, 4.5);
         group.add(table);
@@ -477,7 +504,7 @@ export function buildFurniture(m: Materials): THREE.Group {
       case 'cot': {
         const bed = loadProp({
           name: 'bed', size: 1.95, rotY: HALF_PI, stretch: [0.62, 0.6, 1],
-          normDefault: { color: 0x9a8a72, roughness: 0.85, metalness: 0, wear: { kind: 'wood', seed: 16 } },
+          normDefault: { color: 0x9a8a72, wear: { kind: 'wood' } },
         });
         bed.position.set(0.6, 0, 7.55);
         group.add(bed);
@@ -486,7 +513,8 @@ export function buildFurniture(m: Materials): THREE.Group {
       case 'stool': {
         const stool = loadProp({
           name: 'stool', size: 0.66,
-          normDefault: { color: 0x7a6a52, roughness: 0.8, metalness: 0, wear: { kind: 'wood', seed: 18 } },
+          // The seat sits just below the normalized longest dimension (depth).
+          normDefault: { color: 0x7a6a52, wear: { kind: 'wood', contactY: 0.653 } },
         });
         stool.position.set(1.8, 0, 6.3);
         group.add(stool);
@@ -494,11 +522,11 @@ export function buildFurniture(m: Materials): THREE.Group {
       }
       case 'shelf': {
         const shelf = loadProp({
-          name: 'shelf', size: 1.9, rotY: HALF_PI,
-          normDefault: { color: 0x4a3a2c, roughness: 0.82, metalness: 0, wear: { kind: 'wood', seed: 20 } },
+          // The open +Z face of the GLB becomes north (-Z in the renderer).
+          name: 'shelf', size: p.h - y0, rotY: Math.PI, stretch: [2.4, 1, 2.1],
+          normDefault: { color: 0x4a3a2c, wear: { kind: 'wood', groundY: y0 } },
         });
-        shelf.position.set(-9.85, 0, -6.2);
-        group.add(shelf);
+        group.add(put(shelf, (p.x0 + p.x1) / 2, y0, (p.z0 + p.z1) / 2));
         break;
       }
       case 'crates':
@@ -527,9 +555,11 @@ export function buildFurniture(m: Materials): THREE.Group {
           name: 'pew', size: 1.95, rotY: Math.PI,
           matOverride: { NewMat01: wineCloth, NewMat02: wineCloth },
           norm: {
+            Default: { color: 0xb09880, wear: { kind: 'wood', contactY: y0 + 0.45 } },
             NewMat03: { color: 0xc9b891, roughness: 1, metalness: 0 },
           },
-          normDefault: { color: 0xb09880, roughness: 0.8, metalness: 0, wear: { kind: 'wood', seed: 22 } },
+          // Keep the replacement cloth's existing tint and roughness.
+          normDefault: { color: 0xb09880, roughness: 0.8, metalness: 0 },
         });
         pew.position.set((p.x0 + p.x1) / 2, y0, -((p.z0 + p.z1) / 2));
         group.add(pew);
@@ -586,7 +616,7 @@ export function buildFurniture(m: Materials): THREE.Group {
   };
   barrelSlots.push(...BARRELS.map((slot) => ({ ...slot, y0: 0 })));
   addBarrel(8.6, 21, 0, 0.85, 2.2);
-  addBarrel(-9.35, 6.3, 0, 0.8, 0.9);
+  addBarrel(-8.25, 5.12, 0, 0.8, 0.9);
   addBarrel(-9.2, 9, 0, 0.8, 0.9);
   for (const slot of barrelSlots) barrelFallbacks.push(buildBarrelFallback(slot));
 
@@ -615,13 +645,13 @@ export function buildFurniture(m: Materials): THREE.Group {
   // 井旁空桶与篮筐（叙事物：打水的家伙什）
   const bucket = loadProp({
     name: 'bucket', size: 0.5, rotY: 0.7,
-    normDefault: { color: 0x8a7a62, roughness: 0.8, metalness: 0 },
+    norm: { wooden_bucket_01: { color: 0x8a7a62, wear: { kind: 'wood', packedMetal: true, groundY: 0 } } },
   });
   bucket.position.set(1.7, 0, -12.6);
   group.add(bucket);
   const basket = loadProp({
     name: 'basket', size: 0.42, rotY: 1.2,
-    normDefault: { color: 0x7a6a52, roughness: 0.9, metalness: 0 },
+    norm: { wicker_basket_01: { color: 0x7a6a52, wear: { kind: 'wood' } } },
   });
   basket.position.set(-3.6, 0, -27.9);
   group.add(basket);
@@ -661,15 +691,11 @@ export function buildFurniture(m: Materials): THREE.Group {
           if ((o as THREE.Mesh).isMesh) {
             const src = (o as THREE.Mesh).material as THREE.MeshStandardMaterial;
             if (src.isMeshStandardMaterial) {
-              // 实例差异：颜色 ±8%、roughness ±0.06、贴图偏移随机（圣经 5.2 去单调）
+              // Preserve atlas alignment across the staves and iron hoops. Vary only the timber tint.
               const mc = src.clone();
-              const v = 0.92 + vr(1) * 0.16;
-              mc.color.setHex(0x8a7a62).multiplyScalar(v);
-              mc.roughness = 0.8 + (vr(2) - 0.5) * 0.12;
-              mc.metalness = 0;
+              mc.color.setHex(0x8a7a62).multiplyScalar(0.92 + vr(1) * 0.16);
               mc.envMapIntensity = 0.7;
-              if (mc.map) { mc.map = mc.map.clone(); mc.map.offset.set(vr(3), vr(4)); mc.map.needsUpdate = true; }
-              applyWear(mc, { kind: 'wood', seed: i * 7 + 1 });
+              applyWear(mc, { kind: 'wood', packedMetal: true, groundY: slot.y0 === 0 ? 0 : undefined });
               (o as THREE.Mesh).material = mc;
             }
           }

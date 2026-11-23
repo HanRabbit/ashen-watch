@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { SUBGRADE_GROUND_CUTOUTS } from '../sim/level';
+import { SpatialBounds, useStaticFrustumBounds } from './staticFrustum';
 
 export interface Scenery {
   group: THREE.Group;
@@ -422,6 +423,8 @@ type Tree = { x: number; z: number; y: number; h: number; yaw: number; tone: num
 function plant(group: THREE.Group, ground: Terrain, mat: THREE.MeshBasicMaterial): void {
   const r = rng(443), p = new THREE.Object3D(), color = new THREE.Color();
   const meshes = [fir(true), fir(false)];
+  for (const geometry of meshes) geometry.computeBoundingBox();
+  const treeBounds = new THREE.Box3(), instanceMatrix = new THREE.Matrix4();
   const sectors: Tree[][] = Array.from({ length: 12 * meshes.length }, () => []);
   const plantAt = (bx: number, bz: number, near: boolean) => {
     // Gather candidates toward the same coherent stand field that colors the
@@ -465,7 +468,9 @@ function plant(group: THREE.Group, ground: Terrain, mat: THREE.MeshBasicMaterial
   sectors.forEach((trees, i) => {
     if (!trees.length) return;
     const lod = i % meshes.length;
-    const mesh = new THREE.InstancedMesh(meshes[lod], mat, trees.length);
+    const geometry = meshes[lod];
+    const mesh = new THREE.InstancedMesh(geometry, mat, trees.length);
+    const bounds = new SpatialBounds(lod ? 42 : 24);
     mesh.name = lod ? 'distant fir stands' : 'near fir stands';
     trees.forEach((t, k) => {
       p.position.set(t.x, t.y, t.z);
@@ -474,10 +479,13 @@ function plant(group: THREE.Group, ground: Terrain, mat: THREE.MeshBasicMaterial
       p.scale.set(t.h * t.width, t.h, t.h * t.width);
       p.updateMatrix();
       mesh.setMatrixAt(k, p.matrix);
+      mesh.getMatrixAt(k, instanceMatrix); // Use the same Float32 transform the GPU reads.
+      bounds.add(treeBounds.copy(geometry.boundingBox!).applyMatrix4(instanceMatrix));
       color.setRGB(t.tone * .94, t.tone, t.tone * .96);
       mesh.setColorAt(k, color);
     });
     mesh.computeBoundingSphere();
+    bounds.apply(mesh);
     group.add(mesh);
   });
 }
@@ -486,6 +494,7 @@ type Material = 'stone' | 'roof' | 'apertures';
 function architecture(group: THREE.Group, ground: Terrain, paints: ReturnType<typeof palette>): void {
   // A single indexed batch per finish: the keep, pass gate, road hamlet and western ruin.
   const bins: Record<Material, THREE.BufferGeometry[]> = { stone: [], roof: [], apertures: [] };
+  const bounds = { stone: new SpatialBounds(32), roof: new SpatialBounds(32), apertures: new SpatialBounds(32) };
   const tint = new THREE.Color(), source = new THREE.Color();
   const add = (g: THREE.BufferGeometry, color: number, finish: Material) => {
     const pos = g.getAttribute('position'), n = g.getAttribute('normal');
@@ -502,6 +511,7 @@ function architecture(group: THREE.Group, ground: Terrain, paints: ReturnType<ty
     g.setAttribute('color', new THREE.BufferAttribute(c, 3));
     if (!g.index) g.setIndex(Array.from({ length: pos.count }, (_, k) => k));
     bins[finish].push(g);
+    bounds[finish].add(box);
   };
   const box = (x: number, y: number, z: number, w: number, h: number, d: number, tint: number, angle = 0, finish: Material = 'stone') =>
     add(new THREE.BoxGeometry(w, h, d).rotateY(angle).translate(x, y, z), tint, finish);
@@ -657,6 +667,7 @@ function architecture(group: THREE.Group, ground: Terrain, paints: ReturnType<ty
     bins[kind].forEach(g => g.dispose());
     const mesh = new THREE.Mesh(geometry, paints[kind]);
     mesh.name = `distant architecture: ${kind}`;
+    bounds[kind].apply(mesh);
     group.add(mesh);
   }
 }
@@ -668,6 +679,7 @@ export function buildScenery(): Scenery {
   for (const tile of ground.tiles) {
     const land = new THREE.Mesh(tile, paints.land);
     land.name = 'valley terrain and ridges';
+    useStaticFrustumBounds(land, [tile.boundingBox!]);
     group.add(land);
   }
   architecture(group, ground, paints);
