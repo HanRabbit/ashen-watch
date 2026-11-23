@@ -337,16 +337,23 @@ async function routeScenario() {
   rep.data.viewport = viewport;
   rep.data.quality = quality;
   rep.data.stops = [];
+  const perfSegments = [];
   const bot = new Bot(page);
   const walk = (x, z, floor = '1F') => bot.walkTo(x, z, { floor, stop: 0.24, maxSecs: 30 });
   const capture = async (label, floor, yaw, pitch) => {
     await bot.aim(yaw, 0.025, pitch);
     await sleep(300);
-    const { world, yaw: aim } = await liteOf(page);
+    const { world, yaw: aim, locked } = await liteOf(page);
     const { x, y, z, floor: here } = world.player;
     const perf = (await fullOf(page)).perf;
-    rep.data.stops.push({ label, x, y, z, floor: here, yaw: aim, calls: perf.calls, triangles: perf.triangles });
-    rep.check(`${label} — ${floor}`, here === floor, `(${x.toFixed(2)}, ${y.toFixed(2)}, ${z.toFixed(2)})`);
+    const camera = await page.evaluate(() => {
+      const view = window.__awDev.view;
+      return { fixed: !!view.fixedCam, fov: view.camera.fov, position: view.camera.position.toArray() };
+    });
+    rep.data.stops.push({ label, x, y, z, floor: here, yaw: aim, locked, camera, calls: perf.calls, triangles: perf.triangles });
+    rep.check(`${label} — ${floor}`, here === floor && locked && !camera.fixed,
+      `(${x.toFixed(2)}, ${y.toFixed(2)}, ${z.toFixed(2)})${!locked || camera.fixed ? ' · 非实时跟随' : ''}`);
+    await samplePerf(page, label, perfSegments);
     await shot(page, `route-${label}.png`);
   };
   try {
@@ -359,6 +366,7 @@ async function routeScenario() {
     await startNewGame(bot);
     await doTutorial(bot);
     await bot.use('ghDoor', STAND.doorIn);
+    await page.evaluate(() => window.__awProbe.resetPerf());
     await walk(4.0, 9.9);
     await capture('01-cellar-entrance', '1F', Math.PI / 2, 0.4);
     await walk(10.15, 9.9, 'B1');
@@ -398,6 +406,8 @@ async function routeScenario() {
       await context.close().catch(() => {});
       rep.data.video = await page.video()?.path().catch(() => null);
     }
+    rep.data.perfSegments = perfSegments.map(({ slow, ...frameStats }) => ({ ...frameStats, slowCount: slow.length }));
+    if (perfSegments.length) rep.data.perf = summarize(perfSegments);
     rep.save(errors);
     await browser.close();
   }
