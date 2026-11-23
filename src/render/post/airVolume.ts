@@ -1,69 +1,82 @@
 import { AREAS } from '../../sim/level';
 
-// Coordinates match the render scene (world Z is minus simulation Z). Restrict only the part of
-// the ray actually inside a room: an observer indoors can still see outdoor air through a door.
-const room = (a: typeof AREAS.gatehouse | typeof AREAS.chapel, bottom: number, top: number): [string, string] => [
-  `vec3(${[a.x0, bottom, -a.z1].map((n) => n.toFixed(2)).join(', ')})`,
+// These are shelter volumes, not new geometry. Render Z is minus simulation Z.
+const room = (a: typeof AREAS.gatehouse | typeof AREAS.chapel, top: number) => [
+  `vec3(${[a.x0, -0.12, -a.z1].map((n) => n.toFixed(2)).join(', ')})`,
   `vec3(${[a.x1, top, -a.z0].map((n) => n.toFixed(2)).join(', ')})`,
-];
-const gatehouse = room(AREAS.gatehouse, -0.12, 3.6);
-const chapel = room(AREAS.chapel, -0.12, 9.3);
+] as const;
+const gatehouse = room(AREAS.gatehouse, 3.9);
+const chapel = room(AREAS.chapel, 9.3);
 
-export const AIR_VOLUME_GLSL = /* glsl */`
-// Integrate exp(-falloff * max(worldY - base, 0)): finite under the terrain datum,
-// continuous at grazing incidence. Split at the datum instead of extrapolating exponentials.
-float awHeightPath(vec3 origin, vec3 ray, float start, float end) {
-  if (end <= start) return 0.0;
-  float a = origin.y + ray.y * start - uFog.z;
-  float b = origin.y + ray.y * end - uFog.z;
-  float distance = end - start;
+// Closed-form column of two exponential media, bounded below their datum. Used by both the
+// depth composite and the direct-render fallback, so the latter cannot exponentiate below grade.
+export const HEIGHT_COLUMN_GLSL = /* glsl */`
+vec2 awHeightColumn(vec3 origin, vec3 ray, vec2 interval, vec2 falloff, float base) {
+  float distance = max(0.0, interval.y - interval.x);
+  float a = origin.y + ray.y * interval.x - base;
+  float b = origin.y + ray.y * interval.y - base;
   float span = abs(a - b);
   float h0 = min(a, b), h1 = max(a, b);
-  if (h1 <= 0.0) return distance;
-  if (span < 1e-4) return distance * exp(-uFog.y * max((a + b) * 0.5, 0.0));
-  float above = distance * (h1 - max(h0, 0.0)) / span;
-  float q = uFog.y * max(h1 - max(h0, 0.0), 0.0);
-  float average = q < 0.01 ? 1.0 - q * 0.5 : (1.0 - exp(-q)) / q;
-  return distance - above + above * exp(-uFog.y * max(h0, 0.0)) * average;
+  if (h1 <= 0.0) return vec2(distance);
+  if (span < 1e-4) return distance * exp(-falloff * max(0.0, (a + b) * 0.5));
+  float height = h1 - max(h0, 0.0);
+  float above = distance * height / span;
+  vec2 q = falloff * height;
+  vec2 average = mix(1.0 - q * 0.5, (1.0 - exp(-q)) / max(q, vec2(1e-4)), step(0.01, q));
+  return distance - above + above * exp(-falloff * max(h0, 0.0)) * average;
 }
-float awRoomPath(vec3 origin, vec3 ray, vec3 invRay, float end, vec3 lo, vec3 hi) {
+vec2 awRoomInterval(vec3 origin, vec3 invRay, float end, vec3 lo, vec3 hi) {
   vec3 a = (lo - origin) * invRay, b = (hi - origin) * invRay;
   vec3 from = min(a, b), to = max(a, b);
-  float start = max(0.0, max(from.x, max(from.y, from.z)));
-  float stop = min(end, min(to.x, min(to.y, to.z)));
-  return awHeightPath(origin, ray, start, stop);
+  return vec2(max(0.0, max(from.x, max(from.y, from.z))), min(end, min(to.x, min(to.y, to.z))));
 }
-float awUndergroundPath(vec3 origin, vec3 ray, float end) {
-  const float grade = -0.12;
-  if (abs(ray.y) < 1e-4) return origin.y < grade ? awHeightPath(origin, ray, 0.0, end) : 0.0;
-  float crossing = clamp((grade - origin.y) / ray.y, 0.0, end);
-  return ray.y > 0.0 ? awHeightPath(origin, ray, 0.0, crossing) : awHeightPath(origin, ray, crossing, end);
+float awInRoom(vec3 p, vec3 lo, vec3 hi) {
+  vec3 d = min(p - lo, hi - p);
+  return smoothstep(-0.16, 0.22, min(d.x, min(d.y, d.z)));
 }
-float awAirDensity(vec3 world, float sheltered) {
-  return exp(-uFog.y * max(world.y - uFog.z, 0.0)) * sheltered;
+float awAirShelter(vec3 p) {
+  float underground = 1.0 - smoothstep(-0.36, -0.12, p.y);
+  float gatehouse = awInRoom(p, ${gatehouse[0]}, ${gatehouse[1]});
+  float chapel = awInRoom(p, ${chapel[0]}, ${chapel[1]});
+  return max(0.90 * underground, max(0.83 * gatehouse, 0.70 * chapel));
 }
-float awExposureToAir(vec3 world) {
-  if (world.y < -0.12) return 0.06;
-  if (all(greaterThan(world, ${gatehouse[0]})) && all(lessThan(world, ${gatehouse[1]}))) return 0.13;
-  if (all(greaterThan(world, ${chapel[0]})) && all(lessThan(world, ${chapel[1]}))) return 0.32;
-  return 1.0;
-}
-float awAtmosphere(vec3 origin, vec3 ray, float end) {
-  // The existing distance fog handles distant landmarks. A finite local layer prevents a second
-  // veil of fog on the far skyline. Rays into the sky still traverse this same near atmosphere.
-  end = min(end, 60.0);
+`;
+
+export const AIR_VOLUME_GLSL = /* glsl */`
+${HEIGHT_COLUMN_GLSL}
+// The damp ground layer settles quickly; the free air above it carries broader, thinner haze.
+const vec2 AW_FALLOFF = vec2(0.86, 0.105);
+vec2 awOutdoorColumn(vec3 origin, vec3 ray, float end, float base) {
   vec3 raySign = mix(vec3(-1.0), vec3(1.0), step(0.0, ray));
   vec3 invRay = raySign / max(abs(ray), vec3(1e-5));
-  float column = awHeightPath(origin, ray, 0.0, end);
-  column -= 0.94 * awUndergroundPath(origin, ray, end);
-  column -= 0.87 * awRoomPath(origin, ray, invRay, end, ${gatehouse[0]}, ${gatehouse[1]});
-  column -= 0.68 * awRoomPath(origin, ray, invRay, end, ${chapel[0]}, ${chapel[1]});
-  // Soft, sparse air variation in world coordinates. A smooth path average avoids a moving
-  // screen-space pattern, hard fog sheets, or noise boiling in the depth buffer.
-  vec2 p = origin.xz + ray.xz * (0.42 * end);
-  float eddy = sin(dot(p, vec2(0.20, 0.14)) + uAirTime * 0.065)
-             * sin(dot(p, vec2(-0.15, 0.22)) - uAirTime * 0.045);
-  float opticalDepth = uFog.x * max(column, 0.0) * (1.0 + 0.17 * eddy);
-  return 1.0 - exp(-opticalDepth);
+  vec2 a = awRoomInterval(origin, invRay, end, ${gatehouse[0]}, ${gatehouse[1]});
+  vec2 b = awRoomInterval(origin, invRay, end, ${chapel[0]}, ${chapel[1]});
+  float crossing = clamp((-0.12 - origin.y) * invRay.y, 0.0, end);
+  vec2 below = ray.y >= 0.0 ? vec2(0.0, crossing) : vec2(crossing, end);
+  vec2 column = awHeightColumn(origin, ray, vec2(0.0, end), AW_FALLOFF, base);
+  // Volumes do not overlap below grade. Only subtract the sheltered portion of the ray,
+  // including when the camera is looking *out* through an opening.
+  if (a.y > a.x) column -= vec2(0.91, 0.76) * awHeightColumn(origin, ray, a, AW_FALLOFF, base);
+  if (b.y > b.x) column -= vec2(0.85, 0.63) * awHeightColumn(origin, ray, b, AW_FALLOFF, base);
+  if (below.y > below.x) column -= vec2(0.98, 0.93) * awHeightColumn(origin, ray, below, AW_FALLOFF, base);
+  return max(column, 0.0);
+}
+vec3 awAtmosphere(vec3 c, vec3 origin, vec3 ray, float end) {
+  // A bounded local layer, then the existing long-range surface aerial perspective.
+  // Do not accumulate background radiance over the whole sky distance.
+  end = min(end, 64.0);
+  vec2 column = awOutdoorColumn(origin, ray, end, uFog.z);
+  // Two broad world-anchored variations sampled on the path, no screen noise or temporal history.
+  vec2 p = origin.xz + ray.xz * (0.24 * end);
+  vec2 q = origin.xz + ray.xz * (0.68 * end);
+  vec2 k = vec2(0.25, -0.16);
+  float eddy = sin(dot(p, k) + uAirTime * 0.045) + sin(dot(q, k) + uAirTime * 0.045);
+  vec2 tau = column * uFog.xy * vec2(1.0 + 0.11 * eddy, 1.0);
+  float total = tau.x + tau.y;
+  float tint = tau.y / max(1e-5, total);
+  // Broad forward scatter, not an unoccluded sun shaft. Shadowed rooms receive little sky mist.
+  float key = pow(max(0.0, dot(ray, uKeyDir)), 5.0);
+  vec3 inscatter = mix(uGroundAir, uAirColor * (0.87 + uKeyAir * key), tint);
+  return mix(inscatter, c, exp(-total));
 }
 `;

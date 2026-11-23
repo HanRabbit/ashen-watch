@@ -18,7 +18,8 @@ export const LightGlowShader = {
     uNear: { value: 0.1 }, uFar: { value: 320 },
     uAspect: { value: 1 }, uStrength: { value: 0.5 },
     // 雾内 in-scatter（解析近似）：uFog = (heightDensity, falloff, base)
-    uVolumeFog: { value: 0 }, uAirColor: { value: new THREE.Color() }, uAirTime: { value: 0 },
+    uAirColor: { value: new THREE.Color() }, uGroundAir: { value: new THREE.Color() }, uAirTime: { value: 0 },
+    uKeyDir: { value: new THREE.Vector3(0, 1, 0) }, uKeyAir: { value: 0 },
     uScatter: { value: 0.4 }, uFog: { value: new THREE.Vector3(0.012, 0.1, 0) },
     uTanHalfFov: { value: new THREE.Vector2(1, 1) },
     uInvView: { value: new THREE.Matrix4() }, uCamPos: { value: new THREE.Vector3() },
@@ -33,8 +34,8 @@ export const LightGlowShader = {
   fragmentShader: /* glsl */`
     uniform sampler2D tDiffuse, tDepth;
     uniform float uHasDepth, uNear, uFar, uAspect, uStrength, uScatter, uHiThresh, uHiKneeCool, uHiKneeWarm;
-    uniform float uVolumeFog, uAirTime;
-    uniform vec3 uFog, uCamPos, uAirColor;
+    uniform float uAirTime, uKeyAir;
+    uniform vec3 uFog, uCamPos, uAirColor, uGroundAir, uKeyDir;
     uniform vec2 uTanHalfFov;
     uniform mat4 uInvView;
     uniform int uCount;
@@ -72,8 +73,10 @@ export const LightGlowShader = {
       float phase = (1.0 - g * g) / (12.566 * pow(1.0 + g * g - 2.0 * g * cosTheta, 1.5));
       vec3 world = uCamPos + worldRay * center;
       // A hearth can light a little indoor dust even with almost no incoming courtyard mist.
-      float shelter = uVolumeFog > 0.5 ? max(0.32, awExposureToAir(world)) : 1.0;
-      float density = uFog.x * awAirDensity(world, shelter);
+      float shelter = 1.0 - 0.58 * awAirShelter(world);
+      float height = max(world.y - uFog.z, 0.0);
+      vec2 localDensity = max(uFog.xy, vec2(0.0)) * exp(-AW_FALLOFF * height);
+      float density = shelter * (localDensity.x + localDensity.y + 0.003);
       return max(0.0, integral) * density * phase;
     }
     void main() {
@@ -82,10 +85,7 @@ export const LightGlowShader = {
       vec3 viewRay = normalize(vec3((vUv * 2.0 - 1.0) * uTanHalfFov, -1.0));
       float rayEnd = here / -viewRay.z;
       vec3 worldRay = (uInvView * vec4(viewRay, 0.0)).xyz;
-      if (uHasDepth > 0.5 && uVolumeFog > 0.5 && uFog.x > 0.0) {
-        float atmosphere = awAtmosphere(uCamPos, worldRay, rayEnd);
-        c = mix(c, uAirColor, atmosphere);
-      }
+      if (uHasDepth > 0.5) c = awAtmosphere(c, uCamPos, worldRay, rayEnd);
       for (int i = 0; i < ${MAX_GLOW_LIGHTS}; i++) {
         if (i >= uCount) break;
         vec4 L = uLights[i];

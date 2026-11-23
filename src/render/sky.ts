@@ -15,6 +15,7 @@ varying vec3 vDir;
 void main() {
   vDir = normalize(position);
   gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+  gl_Position.z = gl_Position.w;
 }`;
 
 const SKY_FRAG = /* glsl */`
@@ -48,7 +49,7 @@ float cloudShape(vec2 uv) {
   return base * 0.65 + detail * 0.35;
 }
 // 大尺度密度场：供梯度伪法线（便宜，5 octave）
-float cloudGradField(vec2 uv) { return fbm(uv * 1.8); }
+float cloudGradField(vec2 uv) { return fbm3(uv * 1.8); }
 void main() {
   vec3 d = normalize(vDir);
   float h = d.y;
@@ -61,12 +62,12 @@ void main() {
   col += uSunColor * uGlow * 0.22 * pow(clamp(cosA, 0.0, 1.0), 3.0);
 
   // 云投影到水平面：抬高偏移减少地平线拉伸，团块保持圆润
-  float hh = max(h, 0.02);
+  float hh = 0.02 + 0.5 * (h + sqrt(h * h + 0.006));
   vec2 proj = d.xz / (hh + 0.39);
 
   // 第一层：极薄高幕云，仅垫纵深（夜晚几乎关闭，避免涂抹条带）
   vec2 uv1 = proj * 0.45 + uTime * vec2(0.003, 0.0013) + 2.3;
-  float veilD = fbm(uv1);
+  float veilD = fbm3(uv1);
   float veil = smoothstep(0.55, 0.95, veilD) * 0.22 * (1.0 - uStars * 0.6) * smoothstep(-0.02, 0.12, h);
   vec3 veilCol = mix(uHorizon, uCloudLit, 0.35);
   col = mix(col, veilCol, veil);
@@ -99,10 +100,9 @@ void main() {
   col = mix(col, cloudCol, cover);
 
   // 日/月盘 + 光晕：厚云遮挡时减弱；晕宽而柔，不过曝
-  float ang = acos(cosA);
   float disc = 0.0, mare = 1.0;
-  if (uDiscSize > 0.0 && ang < uDiscSize) {
-    disc = 1.0 - smoothstep(uDiscSize * 0.92, uDiscSize, ang);
+  if (uDiscSize > 0.0 && cosA > cos(uDiscSize)) {
+    disc = smoothstep(cos(uDiscSize), cos(uDiscSize * 0.91), cosA);
     // Resolve surface structure in disc-relative coordinates, regardless of position in the sky.
     vec3 up = abs(sunDir.y) < 0.98 ? vec3(0.0, 1.0, 0.0) : vec3(0.0, 0.0, 1.0);
     vec3 right = normalize(cross(up, sunDir));
@@ -123,7 +123,7 @@ void main() {
     float rnd = hash21(cell);
     float star = step(0.982, rnd) * (1.0 - smoothstep(0.025, 0.10, length(f)));
     float clarity = (1.0 - cover) * (1.0 - cover) * (1.0 - veil);
-    col += vec3(0.50, 0.63, 0.88) * star * clarity * uStars * smoothstep(0.08, 0.36, h);
+    col += vec3(0.23, 0.30, 0.41) * star * clarity * uStars * smoothstep(0.08, 0.36, h);
   }
   gl_FragColor = vec4(col, 1.0);
   #include <tonemapping_fragment>

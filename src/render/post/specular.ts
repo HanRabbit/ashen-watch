@@ -20,6 +20,16 @@ const SPEC_CAP = /* glsl */`
 export function installSpecularCap(): void {
   if (installed) return;
   installed = true;
+  // Small finite flame core. Sub-metre attenuation no longer approaches a point singularity
+  // on a nearby coat, door jamb or hearth stone; normal play range is essentially unchanged.
+  THREE.ShaderChunk.lights_pars_begin = THREE.ShaderChunk.lights_pars_begin.replace(
+    'light.color *= getDistanceAttenuation( lightDistance, pointLight.distance, pointLight.decay );', /* glsl */`
+      #if defined( STANDARD )
+        lightDistance = sqrt(lightDistance * lightDistance + 0.17);
+      #endif
+      light.color *= getDistanceAttenuation( lightDistance, pointLight.distance, pointLight.decay );
+    `,
+  );
   // 声明放全局 scope（lights_pars_begin），钳制块放 main 内（lights_fragment_end）
   THREE.ShaderChunk.lights_pars_begin = 'uniform float uAwSpecCool;\nuniform float uAwSpecWarm;\n' + THREE.ShaderChunk.lights_pars_begin;
   THREE.ShaderChunk.lights_fragment_end = THREE.ShaderChunk.lights_fragment_end + SPEC_CAP;
@@ -31,28 +41,5 @@ export function installSpecularCap(): void {
   for (const shader of Object.values(THREE.ShaderLib)) {
     const u = shader.uniforms as Record<string, THREE.IUniform> | undefined;
     if (u && u.fogColor) Object.assign(u, extra);
-  }
-}
-
-/** 每帧把冷/暖镜面上限写进已编译材质。 */
-export class SpecularCapController {
-  private cache = new Map<THREE.Material, Record<string, THREE.IUniform>>();
-  constructor(private renderer: THREE.WebGLRenderer, private scene: THREE.Scene) {}
-  update(cool: number, warm: number): void {
-    this.scene.traverse((o) => {
-      const mesh = o as THREE.Mesh;
-      if (!mesh.material) return;
-      const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
-      for (const mat of mats) {
-        const props = this.renderer.properties.get(mat) as { uniforms?: Record<string, THREE.IUniform> };
-        const pu = props?.uniforms;
-        if (!pu || !pu.uAwSpecCool) continue; // 尚未编译或无此 uniform
-        // 贴图异步加载会触发重编译、uniforms 换新对象：缓存失效时刷新，避免写旧克隆
-        let u = this.cache.get(mat);
-        if (u !== pu) { u = pu; this.cache.set(mat, u); }
-        u.uAwSpecCool.value = cool;
-        u.uAwSpecWarm.value = warm;
-      }
-    });
   }
 }
