@@ -82,7 +82,7 @@ export function variants(m: Materials): Variants {
 
   // —— 石墙族（冷灰，亮度互相 ±12% 内）——
   const wallRubble = m.stone; // 乱石幕墙：复用 castle_wall_varriation（已去饱和冷灰）
-  const wallAshlar = stoneMat('medieval_blocks_03', { floor: 0, wet: 0.3, desat: 0.72, tint: [0.80, 0.84, 0.92], hs: 0.02, ns: 1.0, rough: 0.85, band: [2.2, 4.15] }, pending);
+  const wallAshlar = stoneMat('medieval_blocks_03', { floor: 0, wet: 0.3, desat: 0.72, tint: [0.68, 0.72, 0.80], hs: 0.02, ns: 1.0, rough: 0.85, band: [2.2, 4.15] }, pending);
   const wallTrim = stoneMat('granite_wall', { floor: 0, wet: 0.28, desat: 0.6, tint: [0.82, 0.86, 0.94], hs: 0.02, ns: 1.1, rough: 0.8, band: [2.2, 4.15] }, pending);
   const wallRough = stoneMat('rustic_stone_wall_02', { floor: 0, wet: 0.35, desat: 0.55, tint: [0.70, 0.74, 0.82], hs: 0.03, ns: 1.2, rough: 0.9, band: [0.5, 3.0] }, pending);
   const wallPlaster = stoneMat('grey_plaster', { floor: 0, wet: 0.2, desat: 0.6, tint: [0.46, 0.49, 0.55], hs: 0.01, ns: 0.5, rough: 0.9, peel: 1 }, pending);

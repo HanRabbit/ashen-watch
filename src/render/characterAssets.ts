@@ -353,7 +353,9 @@ export function ghostCloth(mat: THREE.MeshStandardMaterial, localHeight: number)
         diffuseColor.a *= 1.0 - 0.3 * rimF * (1.0 - en);
         float hemH = 1.0 - smoothstep(0.0, 0.3 * uHeight, vLocal.y);
         if (hemH > 0.4 && en < (hemH - 0.4) * 0.7) discard;
-        diffuseColor.a *= uOpacity;`);
+        diffuseColor.a *= uOpacity;`)
+      .replace('#include <lights_physical_fragment>', /* glsl */`#include <lights_physical_fragment>
+        material.specularColor = vec3(0.0);`);
   };
   mat.customProgramCacheKey = () => 'ghostCloth';
   return u;
@@ -413,6 +415,24 @@ function prepReaper(gltf: GLTF): ReaperAsset {
   const b = body!;
   b.castShadow = true;
   b.frustumCulled = false;
+  // 塌缩腰间沙漏杂物：归一化后世界坐标中前突的腰部顶点收进袍内（兜帽/围裙之外的根治）。
+  b.updateMatrixWorld(true);
+  {
+    const pos = b.geometry.attributes.position as THREE.BufferAttribute;
+    const inv = b.matrixWorld.clone().invert();
+    const v = new THREE.Vector3();
+    for (let i = 0; i < pos.count; i++) {
+      v.fromBufferAttribute(pos, i).applyMatrix4(b.matrixWorld);
+      if (v.y > 0.85 && v.y < 1.35 && v.z < -0.22 && v.x > -0.42 && v.x < 0.12) {
+        v.z = -0.1;
+        v.x *= 0.4;
+        v.applyMatrix4(inv);
+        pos.setXYZ(i, v.x, v.y, v.z);
+      }
+    }
+    pos.needsUpdate = true;
+    b.geometry.computeVertexNormals();
+  }
   const geo = b.geometry;
   geo.computeBoundingBox();
   const bb = geo.boundingBox!;

@@ -125,14 +125,20 @@ export function cyl(mat: THREE.Material, rTop: number, rBot: number, h: number, 
 export const lerp = (a: number, b: number, t: number): number => a + (b - a) * t;
 export const clamp01 = (t: number): number => Math.max(0, Math.min(1, t));
 
-/** 木拱肋：跨宽 w、矢高 rise、截面 thick 的 curved 方料肋（本地 XY 平面，沿 x 跨、y 起拱）。 */
+/** 木拱肋：跨宽 w、矢高 rise、截面 thick 的粗壮方料肋（倒角矩形截面，沿曲线起拱；圣经 2 木构方料）。 */
 export function archRib(w: number, rise: number, thick: number): THREE.BufferGeometry {
   const curve = new THREE.QuadraticBezierCurve3(
     new THREE.Vector3(-w / 2, 0, 0),
     new THREE.Vector3(0, rise * 1.7, 0),
     new THREE.Vector3(w / 2, 0, 0),
   );
-  return new THREE.TubeGeometry(curve, 18, thick / 2, 6, false);
+  const s = thick / 2, c = thick * 0.2; // 倒角
+  const shape = new THREE.Shape();
+  shape.moveTo(-s + c, -s); shape.lineTo(s - c, -s); shape.lineTo(s, -s + c);
+  shape.lineTo(s, s - c); shape.lineTo(s - c, s); shape.lineTo(-s + c, s);
+  shape.lineTo(-s, s - c); shape.lineTo(-s, -s + c); shape.closePath();
+  const geo = new THREE.ExtrudeGeometry(shape, { steps: 24, extrudePath: curve, bevelEnabled: false });
+  return scaleUV(geo, 2.2); // 木纹密度
 }
 export const smooth = (t: number): number => { const c = clamp01(t); return c * c * (3 - 2 * c); };
 

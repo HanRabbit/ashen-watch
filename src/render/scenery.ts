@@ -1,9 +1,7 @@
-// 远景（art pass 3 · 第三轮）：单一主导山崖城堡（画面右上）+ 柔和低矮的全景剪影远山 + 中景补充 + 分层松林。
-// 远层（>=120 m）用「圆柱全景剪影带」：顶边噪声缓起伏、材质自上而下雾渐变、无光照 —— 明度可直接按验收指标调，
-// 轮廓为绘画感剪影而非低模锥体，draw calls 个位数。近层 foothill 与城堡山崖保持 3D。
-// 明度关系（显示空间）：天空 > 远山脊(越远越贴近天空) > 城堡(略暗于天空,差<=0.12) > 坡面 > 松树(比坡面暗0.04-0.10)。
-// 近景（庭院墙/礼拜堂）保持深值不变；压的是远景与天空的差（提亮远景/加雾混合），不压天空。
-// 昼夜读 scene.userData.night；驱动挂在恒可见的地盘上。大块风化（5.2）：岩层/碎石/坍塌缺口/补砌/残塔顶。
+// 远景（art pass 3 · 第六轮 / 圣经 v2.9）：远景森林 = 画布程序化「林冠团块」贴图带（连续深色林体 +
+// 锯齿冠廓 + 多频噪声斑驳），不再是实例化圆锥树阵列；只有最近 foothill 保留少量 3D 单株。
+// 坡面/岩崖/石材用冷灰偏深固有色贴图再叠雾，不得为白；逐片段天空上限仅作保护上限。
+// 城堡石砌体与深色屋面拆两个合批网格；植被落点采样实际地形高度场；大气锚定天空地平线。
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { Materials } from './materials';
@@ -12,8 +10,20 @@ export interface Scenery {
   group: THREE.Group;
 }
 
+const clamp01 = (t: number): number => Math.max(0, Math.min(1, t));
+const HALF_PI = Math.PI / 2;
 
-// —— 逐片段天空上限：与主天空同梯度+同云，保证远景任何像素不亮于背后局部天空 ——
+function rng(seed: number): () => number {
+  let s = seed >>> 0;
+  return () => {
+    s = (s + 0x6d2b79f5) >>> 0;
+    let t = Math.imul(s ^ (s >>> 15), 1 | s);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+// —— 逐片段天空上限（与主天空同梯度+同云，共享 uniform 值）——
 const SKYCAP_GLSL = /* glsl */`
 uniform vec3 uScHorizon, uScZenith, uScCloudDark, uScCloudLit, uScSunColor, uScSunDir;
 uniform float uScTime, uScCover, uScStars, uScGlow, uScRim;
@@ -56,20 +66,117 @@ vec3 awSkyCap(vec3 d){
 }
 `;
 
-const clamp01 = (t: number): number => Math.max(0, Math.min(1, t));
-const HALF_PI = Math.PI / 2;
-
-function rng(seed: number): () => number {
-  let s = seed >>> 0;
-  return () => {
-    s = (s + 0x6d2b79f5) >>> 0;
-    let t = Math.imul(s ^ (s >>> 15), 1 | s);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+/** 值噪声 + fbm（画布程序化肌理用）。 */
+function vnoise(x: number, y: number, seed: number): number {
+  const xi = Math.floor(x), yi = Math.floor(y);
+  const xf = x - xi, yf = y - yi;
+  const h = (a: number, b: number): number => {
+    let n = a * 374761393 + b * 668265263 + seed * 1442695041;
+    n = (n ^ (n >> 13)) * 1274126177;
+    return ((n ^ (n >> 16)) >>> 0) / 4294967296;
   };
+  const u = xf * xf * (3 - 2 * xf), v = yf * yf * (3 - 2 * yf);
+  return (h(xi, yi) * (1 - u) + h(xi + 1, yi) * u) * (1 - v) + (h(xi, yi + 1) * (1 - u) + h(xi + 1, yi + 1) * u) * v;
+}
+function fbm2(x: number, y: number, seed: number): number {
+  return 0.55 * vnoise(x, y, seed) + 0.3 * vnoise(x * 2.1 + 7, y * 2.1 + 3, seed + 1) + 0.15 * vnoise(x * 4.3 + 11, y * 4.3 + 5, seed + 2);
 }
 
-/** 烘焙形体明暗 + 高度渐变到顶点色（3D 近层用）。 */
+/** 画布林冠团块贴图：顶边锯齿冠廓（alpha 裁切），下方连续深色林体 + 多频噪声斑驳。 */
+function canopyTexture(seed: number, scale: number, hazeMix: number): THREE.CanvasTexture {
+  const W = 1024, H = 256;
+  const c = document.createElement('canvas');
+  c.width = W; c.height = H;
+  const g = c.getContext('2d')!;
+  const r = rng(seed);
+  const waves = Array.from({ length: 7 }, () => ({ f: 1 + r() * 6, ph: r() * 6.28, a: 0.4 + r() * 0.6 }));
+  const crown = (x: number): number => {
+    let n = 0;
+    for (const w of waves) n += w.a * Math.sin((x / W) * w.f * Math.PI * 2 * scale + w.ph);
+    n /= waves.length;
+    const crowns = fbm2(x * 0.3 * scale, 8.7, seed + 13);
+    return H * (0.023 + (n * 0.5 + 0.5) * 0.072 + crowns * 0.036);
+  };
+  const img = g.createImageData(W, H);
+  const haze = [142, 159, 174];
+  for (let x = 0; x < W; x++) {
+    const cl = crown(x);
+    for (let y = 0; y < H; y++) {
+      const i = (y * W + x) * 4;
+      if (y < cl) { img.data[i + 3] = 0; continue; }
+      const depth = clamp01((y - cl) / (H - cl));
+      // 有机多频噪声：大冠团 / 中凹凸 / 细树隙 / 竖向冠簇
+      const n1 = fbm2(x * 0.018 * scale, y * 0.03, seed) * 2 - 1;
+      const n2 = fbm2(x * 0.07 * scale, y * 0.1 + 40, seed + 9) * 2 - 1;
+      const n3 = fbm2(x * 0.22 * scale, y * 0.22, seed + 17);
+      const clump = fbm2(x * 0.045 * scale, 0.5, seed + 23) * 2 - 1;
+      const lit = clamp01(0.5 + 0.62 * n1 + 0.29 * n2 + 0.32 * clump - 0.25 * depth);
+      const gap = clamp01(n3 - 0.66) * 3.2; // 树隙阴影
+      let rr = 34 + lit * 34 - gap * 20;
+      let gg = 42 + lit * 36 - gap * 22;
+      let bb = 40 + lit * 36 - gap * 20;
+      // 冠顶受光边
+      if (depth < 0.12) { rr += 12; gg += 13; bb += 11; }
+      rr = rr * (1 - hazeMix) + haze[0] * hazeMix;
+      gg = gg * (1 - hazeMix) + haze[1] * hazeMix;
+      bb = bb * (1 - hazeMix) + haze[2] * hazeMix;
+      img.data[i] = rr; img.data[i + 1] = gg; img.data[i + 2] = bb; img.data[i + 3] = 255;
+    }
+  }
+  g.putImageData(img, 0, 0);
+  const t = new THREE.CanvasTexture(c);
+  t.wrapS = THREE.RepeatWrapping;
+  t.wrapT = THREE.ClampToEdgeWrapping;
+  t.colorSpace = THREE.SRGBColorSpace;
+  t.anisotropy = 4;
+  return t;
+}
+
+/** 岩石贴图：冷灰偏深 + 斑驳 + 水平岩层 + 垂直节理 + 少量苔。 */
+function rockTexture(seed: number, hazeMix: number, grassy = false): THREE.CanvasTexture {
+  const S = 512;
+  const c = document.createElement('canvas');
+  c.width = c.height = S;
+  const g = c.getContext('2d')!;
+  const img = g.createImageData(S, S);
+  const haze = [174, 182, 191];
+  for (let y = 0; y < S; y++) {
+    for (let x = 0; x < S; x++) {
+      const i = (y * S + x) * 4;
+      const n1 = fbm2(x * 0.02, y * 0.02, seed) * 2 - 1;
+      const n2 = fbm2(x * 0.08, y * 0.08, seed + 5) * 2 - 1;
+      const n3 = fbm2(x * 0.3, y * 0.3, seed + 11) * 2 - 1;
+      let v = 0.5 + 0.5 * n1 + 0.3 * n2 + 0.15 * n3;
+      const strata = fbm2(0.5, y * 0.05, seed + 41) > 0.62 ? -0.16 : 0;
+      const joint = fbm2(x * 0.03, 0.5, seed + 47) > 0.72 ? -0.26 : 0;
+      v = clamp01(v + strata + joint);
+      let rr = 76 + v * 60, gg = 82 + v * 62, bb = 88 + v * 64;
+      if (grassy) {
+        const moss = clamp01(fbm2(x * 0.02, y * 0.024, seed + 31) - 0.55) * 2.4;
+        rr = rr * (1 - moss * 0.5) + 75 * moss * 0.5;
+        gg = gg * (1 - moss * 0.5) + 90 * moss * 0.5;
+        bb = bb * (1 - moss * 0.5) + 60 * moss * 0.5;
+      } else {
+        const moss = clamp01(n3 * 0.5 + 0.5 - 0.78) * 2;
+        rr = rr * (1 - moss * 0.4) + 75 * moss * 0.4;
+        gg = gg * (1 - moss * 0.4) + 90 * moss * 0.4;
+        bb = bb * (1 - moss * 0.4) + 60 * moss * 0.4;
+      }
+      rr = rr * (1 - hazeMix) + haze[0] * hazeMix;
+      gg = gg * (1 - hazeMix) + haze[1] * hazeMix;
+      bb = bb * (1 - hazeMix) + haze[2] * hazeMix;
+      img.data[i] = rr; img.data[i + 1] = gg; img.data[i + 2] = bb; img.data[i + 3] = 255;
+    }
+  }
+  g.putImageData(img, 0, 0);
+  const t = new THREE.CanvasTexture(c);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  t.colorSpace = THREE.SRGBColorSpace;
+  t.anisotropy = 4;
+  return t;
+}
+
+/** 烘焙形体明暗到顶点色（contrast 控制内部对比）。 */
 function bakeForm(geo: THREE.BufferGeometry, y0: number, span: number, contrast = 0.35): void {
   const pos = geo.getAttribute('position') as THREE.BufferAttribute;
   const nor = geo.getAttribute('normal') as THREE.BufferAttribute;
@@ -79,50 +186,78 @@ function bakeForm(geo: THREE.BufferGeometry, y0: number, span: number, contrast 
     const west = clamp01(-nor.getX(i));
     let raw = 0.5 + 0.4 * top + 0.25 * west;
     raw *= 0.8 + 0.3 * clamp01((pos.getY(i) - y0) / span);
-    // contrast=1 恢复强形体明暗（城堡/山崖/松林要读出形体）；小值=远景雾感压平
     const form = 1 - contrast * (1 - Math.max(0.15, Math.min(1.0, raw)));
     cols[i * 3] = cols[i * 3 + 1] = cols[i * 3 + 2] = form;
   }
   geo.setAttribute('color', new THREE.BufferAttribute(cols, 3));
 }
 
-/** 屋面/锥顶：整体压暗 + 轻微受光变化（深色锥顶是认出城堡的关键）。 */
+/** 屋面/锥顶整体压暗 + 轻微受光变化。 */
 function bakeFlat(geo: THREE.BufferGeometry, base: number): void {
-  const pos = geo.getAttribute('position') as THREE.BufferAttribute;
   const nor = geo.getAttribute('normal') as THREE.BufferAttribute;
-  const cols = new Float32Array(pos.count * 3);
-  for (let i = 0; i < pos.count; i++) {
+  const cols = new Float32Array(nor.count * 3);
+  for (let i = 0; i < nor.count; i++) {
     const v = base * (0.85 + 0.3 * clamp01(nor.getY(i)));
     cols[i * 3] = cols[i * 3 + 1] = cols[i * 3 + 2] = v;
   }
   geo.setAttribute('color', new THREE.BufferAttribute(cols, 3));
 }
 
-/** 中景「苔斑 / 雨渍」顶点色暗示（局部，不满铺）。 */
-function weatherTint(geo: THREE.BufferGeometry, seed: number): void {
-  const pos = geo.getAttribute('position') as THREE.BufferAttribute;
-  const col = geo.getAttribute('color') as THREE.BufferAttribute;
-  const r = rng(seed);
-  const patches = Array.from({ length: 14 }, () => ({ x: (r() - 0.5) * 220, z: (r() - 0.5) * 220, y: r() * 30, rad: 4 + r() * 9, kind: r() < 0.5 ? 0 : 1 }));
-  for (let i = 0; i < pos.count; i++) {
-    const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
-    let moss = 0, streak = 0;
-    for (const p of patches) {
-      const d = Math.hypot(x - p.x, z - p.z);
-      if (p.kind === 0 && y < p.y + 6 && d < p.rad) moss = Math.max(moss, 1 - d / p.rad);
-      if (p.kind === 1 && Math.abs(x - p.x) < 1.2 && y < p.y && y > p.y - 14) streak = Math.max(streak, 1 - Math.abs(x - p.x) / 1.2);
+/** 圆柱全景带：顶边噪声缓起伏 + UV（u 环向重复、v 自底向顶），供林冠贴图。 */
+function panoramaBand(radius: number, crest: number, amp: number, seed: number, repeatU: number): THREE.BufferGeometry {
+  const SEG = 160;
+  const pos: number[] = [];
+  const uv: number[] = [];
+  const idx: number[] = [];
+  const crestAt = (a: number): number =>
+    crest + amp * (0.5 * Math.sin(a * 3 + seed) + 0.3 * Math.sin(a * 7 + seed * 2.3) + 0.2 * Math.sin(a * 13 + seed * 4.1));
+  for (let i = 0; i <= SEG; i++) {
+    const a = (i / SEG) * Math.PI * 2;
+    const x = Math.sin(a) * radius, z = Math.cos(a) * radius;
+    const yTop = crestAt(a);
+    pos.push(x, yTop, z, x, -14, z);
+    const u = (i / SEG) * repeatU;
+    uv.push(u, 1, u, 0);
+    if (i < SEG) {
+      const t0 = i * 2, b0 = i * 2 + 1, t1 = i * 2 + 2, b1 = i * 2 + 3;
+      idx.push(t0, b0, t1, b0, b1, t1);
     }
-    let rr = col.getX(i), gg = col.getY(i), bb = col.getZ(i);
-    rr = rr * (1 - moss * 0.25) + 0.29 * moss * 0.25;
-    gg = gg * (1 - moss * 0.25) + 0.35 * moss * 0.25;
-    bb = bb * (1 - moss * 0.25) + 0.24 * moss * 0.25;
-    const s = streak * 0.2;
-    col.setXYZ(i, rr * (1 - s), gg * (1 - s), bb * (1 - s));
   }
-  col.needsUpdate = true;
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+  g.setIndex(idx);
+  return g;
 }
 
-/** 从实际地形网格 rasterize 高度场（取每格最高三角形 y），供植被落点采样，杜绝浮空。 */
+/** 低缓 foothill mound 环（3D 近层）。 */
+function moundRing(radius: number, baseH: number, varH: number, peaks: number, seed: number): THREE.BufferGeometry {
+  const r = rng(seed);
+  const parts: THREE.BufferGeometry[] = [];
+  for (let i = 0; i < peaks; i++) {
+    const a = (i / peaks) * Math.PI * 2 + (r() - 0.5) * 0.2;
+    const h = baseH + (r() - 0.35) * varH;
+    const pr = radius * (0.3 + r() * 0.2);
+    const cone = new THREE.ConeGeometry(pr, h, 9, 3);
+    const pos = cone.getAttribute('position') as THREE.BufferAttribute;
+    for (let k = 0; k < pos.count; k++) {
+      const px = pos.getX(k), py = pos.getY(k), pz = pos.getZ(k);
+      const n = Math.sin(px * 0.16 + pz * 0.13 + seed) * Math.cos(pz * 0.11 - px * 0.07);
+      if (py < h / 2 - 0.1) {
+        pos.setX(k, px * (1 + n * 0.2));
+        pos.setZ(k, pz * (1 + n * 0.2));
+      }
+    }
+    cone.computeVertexNormals();
+    cone.translate(Math.sin(a) * radius, h / 2 - 6, Math.cos(a) * radius);
+    parts.push(cone);
+  }
+  const geo = mergeGeometries(parts.map((g) => g.toNonIndexed()), false)!;
+  for (const g of parts) g.dispose();
+  return geo;
+}
+
+/** 高度场：rasterize 实际地形网格，供植被落点双线性采样。 */
 function heightGrid(geo: THREE.BufferGeometry, extent: number, step: number): { g: Float32Array; n: number; extent: number; step: number } {
   const n = Math.ceil((extent * 2) / step) + 1;
   const g = new Float32Array(n * n).fill(-1e9);
@@ -161,33 +296,7 @@ function sampleH(hg: HGrid, x: number, z: number): number {
   return (a * (1 - tx) + b * tx) * (1 - tz) + (c * (1 - tx) + d * tx) * tz;
 }
 
-/** 圆柱全景剪影带：顶边 = 多频噪声缓起伏（非等腰三角），顶点色自上而下雾渐变（顶贴近天空、底略深）。 */
-function panoramaBand(radius: number, crest: number, amp: number, seed: number, bottomFactor: number): THREE.BufferGeometry {
-  const SEG = 160;
-  const pos: number[] = [];
-  const col: number[] = [];
-  const idx: number[] = [];
-  const crestAt = (a: number): number =>
-    crest + amp * (0.5 * Math.sin(a * 3 + seed) + 0.3 * Math.sin(a * 7 + seed * 2.3) + 0.2 * Math.sin(a * 13 + seed * 4.1));
-  for (let i = 0; i <= SEG; i++) {
-    const a = (i / SEG) * Math.PI * 2;
-    const x = Math.sin(a) * radius, z = Math.cos(a) * radius;
-    const yTop = crestAt(a);
-    pos.push(x, yTop, z, x, -14, z);
-    col.push(1, 1, 1, bottomFactor, bottomFactor, bottomFactor);
-    if (i < SEG) {
-      const t0 = i * 2, b0 = i * 2 + 1, t1 = i * 2 + 2, b1 = i * 2 + 3;
-      idx.push(t0, b0, t1, b0, b1, t1);
-    }
-  }
-  const g = new THREE.BufferGeometry();
-  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
-  g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
-  g.setIndex(idx);
-  return g;
-}
-
-/** 分层枝条松树：可见树干 + 6 层外伸枝盘（锯齿底环、层间留空）+ 尖顶。 */
+/** 近层单株松（仅 foothill，角尺寸够大）：分层枝盘 + 尖顶 + 单株明暗。 */
 function pineGeometry(): THREE.BufferGeometry {
   const parts: THREE.BufferGeometry[] = [];
   const trunk = new THREE.CylinderGeometry(0.09, 0.17, 1.6, 5);
@@ -211,20 +320,7 @@ function pineGeometry(): THREE.BufferGeometry {
   parts.push(spike);
   const geo = mergeGeometries(parts.map((g) => g.toNonIndexed()), false)!;
   for (const g of parts) g.dispose();
-  bakeForm(geo, 0, 7.4, 1.0); // 单株内部受光/背光明暗 => 森林内部对比
-  return geo;
-}
-
-function canopyGeometry(): THREE.BufferGeometry {
-  const parts: THREE.BufferGeometry[] = [];
-  for (let i = 0; i < 3; i++) {
-    const c = new THREE.ConeGeometry(1.5 * (1 - i * 0.3), 1.6, 6, 1, true);
-    c.translate(0, 1.4 + i * 1.3, 0);
-    parts.push(c);
-  }
-  const geo = mergeGeometries(parts.map((g) => g.toNonIndexed()), false)!;
-  for (const g of parts) g.dispose();
-  bakeForm(geo, 0, 5.2, 1.0);
+  bakeForm(geo, 0, 7.4, 1.0);
   return geo;
 }
 
@@ -250,40 +346,12 @@ function deadTreeGeometry(): THREE.BufferGeometry {
   return geo;
 }
 
-/** 低缓 foothill  mound 环（3D 近层）。 */
-function moundRing(radius: number, baseH: number, varH: number, peaks: number, seed: number): THREE.BufferGeometry {
-  const r = rng(seed);
-  const parts: THREE.BufferGeometry[] = [];
-  for (let i = 0; i < peaks; i++) {
-    const a = (i / peaks) * Math.PI * 2 + (r() - 0.5) * 0.2;
-    const h = baseH + (r() - 0.35) * varH;
-    const pr = radius * (0.3 + r() * 0.2);
-    const cone = new THREE.ConeGeometry(pr, h, 9, 3);
-    const pos = cone.getAttribute('position') as THREE.BufferAttribute;
-    for (let k = 0; k < pos.count; k++) {
-      const px = pos.getX(k), py = pos.getY(k), pz = pos.getZ(k);
-      const n = Math.sin(px * 0.16 + pz * 0.13 + seed) * Math.cos(pz * 0.11 - px * 0.07);
-      if (py < h / 2 - 0.1) {
-        pos.setX(k, px * (1 + n * 0.2));
-        pos.setZ(k, pz * (1 + n * 0.2));
-      }
-    }
-    cone.computeVertexNormals();
-    cone.translate(Math.sin(a) * radius, h / 2 - 6, Math.cos(a) * radius);
-    parts.push(cone);
-  }
-  const geo = mergeGeometries(parts.map((g) => g.toNonIndexed()), false)!;
-  for (const g of parts) g.dispose();
-  return geo;
-}
-
-/** 圆塔：分段 + 收分（下粗上细）+ 檐口环 + 锥顶脊线 / 残缺顶 + 可选垛口。
- *  石砌体进 stone[]，锥顶/脊线/残顶进 roof[]（屋面比墙面暗，靠内部对比认出城堡）。 */
+/** 圆塔：分段收分 + 檐口环 + 锥顶脊线/残顶 + 垛口；石进 stone[]、屋面进 roof[]。 */
 function tower(stone: THREE.BufferGeometry[], roof: THREE.BufferGeometry[], x: number, z: number, y0: number, r: number, h: number, spire: number, opts: { merlons?: boolean; broken?: boolean } = {}): void {
   const seg = 10;
   for (let b = 0; b < 3; b++) {
     const bh = h / 3;
-    const rr = r * (1.12 - b * 0.09); // 收分
+    const rr = r * (1.12 - b * 0.09);
     const body = new THREE.CylinderGeometry(rr * 0.97, rr * 1.04, bh, seg);
     body.translate(x, y0 + bh * (b + 0.5), z);
     stone.push(body);
@@ -340,7 +408,6 @@ export function buildScenery(_m: Materials): Scenery {
   const dummy = new THREE.Object3D();
   const tmpC = new THREE.Color();
 
-  // 与主天空同步的 uniform 值（每帧拷贝），供逐片段天空上限
   const skyU = {
     uScHorizon: { value: new THREE.Color() }, uScZenith: { value: new THREE.Color() },
     uScCloudDark: { value: new THREE.Color() }, uScCloudLit: { value: new THREE.Color() },
@@ -352,7 +419,7 @@ export function buildScenery(_m: Materials): Scenery {
       Object.assign(shader.uniforms, skyU);
       shader.vertexShader = 'varying vec3 vAwSkyPos;\n' + shader.vertexShader.replace(
         '#include <project_vertex>',
-        '#include <project_vertex>\n vAwSkyPos = (modelMatrix * vec4(transformed, 1.0)).xyz;',
+        '#include <project_vertex>\n vec4 awPos = vec4(transformed, 1.0);\n#ifdef USE_INSTANCING\n  awPos = instanceMatrix * awPos;\n#endif\nvAwSkyPos = (modelMatrix * awPos).xyz;',
       );
       shader.fragmentShader = SKYCAP_GLSL + 'varying vec3 vAwSkyPos;\n' + shader.fragmentShader.replace(
         '#include <tonemapping_fragment>',
@@ -361,70 +428,67 @@ export function buildScenery(_m: Materials): Scenery {
     };
     mat.customProgramCacheKey = () => 'aw-skycap';
   };
-  const atmo: { mat: THREE.MeshBasicMaterial; day: THREE.Color; night: THREE.Color; df: number; nf: number; crestY: number; dist: number; K: number }[] = [];
+
+  const atmo: { mat: THREE.MeshBasicMaterial; day: THREE.Color; night: THREE.Color; df: number; nf: number }[] = [];
   const basic = (day: number, night: number, df: number, nf: number, vc = true): THREE.MeshBasicMaterial => {
     const mat = new THREE.MeshBasicMaterial({ color: day, fog: false, vertexColors: vc });
     attachSkyCap(mat);
-    atmo.push({ mat, day: new THREE.Color(day), night: new THREE.Color(night), df, nf, crestY: 30, dist: 100, K: 0.9 });
+    atmo.push({ mat, day: new THREE.Color(day), night: new THREE.Color(night), df, nf });
     return mat;
   };
 
-  /** 登记该层的屏幕高度上限钳制参数：crestY=层顶世界高、dist=水平距、K=天空上限系数。 */
-  const setClamp = (mat: THREE.MeshBasicMaterial, crestY: number, dist: number, K: number): void => {
-    const e = atmo.find((a) => a.mat === mat);
-    if (e) { e.crestY = crestY; e.dist = dist; e.K = K; }
-  };
-
-  // ——— 大地盘（恒可见，承载大气驱动）———
+  // ——— 大地盘 ———
   const ground = new THREE.Mesh(new THREE.CircleGeometry(600, 48), new THREE.MeshStandardMaterial({ color: 0x4a4a44, roughness: 1 }));
   ground.rotation.x = -Math.PI / 2;
   ground.position.y = -0.62;
   ground.receiveShadow = false;
   group.add(ground);
 
-  // ——— 中景 foothill（3D 低缓 mound，承载中景元素）———
+  // ——— 中景 foothill（3D，岩石+枯草固有色贴图）———
   const footGeo = moundRing(70, 14, 6, 34, 71);
-  bakeForm(footGeo, -6, 24, 0.5);
-  weatherTint(footGeo, 72);
-  const footMat = basic(0x9aa4ae, 0x161e2b, 0.68, 0.4);
-  setClamp(footMat, 22, 70, 0.9);
+  bakeForm(footGeo, -6, 24, 0.6);
+  const footMat = basic(0xffffff, 0x2a3644, 0, 0);
+  footMat.map = rockTexture(72, 0.2, true);
+  footMat.map.repeat.set(5, 2);
+  footMat.needsUpdate = true;
+  footMat.vertexColors = true;
   const foot = new THREE.Mesh(footGeo, footMat);
-  const hg = heightGrid(footGeo, 110, 2);
   foot.castShadow = false; foot.receiveShadow = false;
   group.add(foot);
+  const hg = heightGrid(footGeo, 110, 2);
 
-  // ——— 四层全景剪影带（120/220/350/500 m）：低矮柔和、越远越贴近天空 ———
-  // [radius, crest, amp, seed, day, df, bottomFactor]
+  // ——— 四层林冠团块全景带（连续深色林体 + 锯齿冠廓 + 斑驳；越远雾越多）———
   const bandSpec: [number, number, number, number, number, number, number][] = [
-    [120, 40, 10, 11, 0xa8b2bc, 0.72, 0.9],
-    [220, 52, 12, 22, 0xb4bec8, 0.82, 0.92],
-    [350, 64, 14, 33, 0xc0cad4, 0.88, 0.94],
-    [500, 78, 16, 44, 0xccd6e0, 0.93, 0.96],
+    // [radius, crest, amp, seed, repeatU, hazeMix, noiseScale]
+    [118, 32, 9, 11, 7, 0.17, 1.0],
+    [225, 73, 15, 22, 8, 0.35, 1.4],
+    [345, 128, 19, 33, 10, 0.57, 1.8],
+    [485, 184, 22, 44, 12, 0.74, 2.2],
   ];
-  for (const [rad, crest, amp, sd, day, df, bf] of bandSpec) {
-    const g = panoramaBand(rad, crest, amp, sd, bf);
-    const mat = basic(day, 0x1a2433, df, 0.4 + df * 0.3);
-    mat.side = THREE.DoubleSide;
-    setClamp(mat, crest + amp, rad, rad === 120 ? 0.7 : rad === 220 ? 0.92 : rad === 350 ? 0.96 : 0.98);
+  for (const [rad, crest, amp, sd, rep, hm, ns] of bandSpec) {
+    const g = panoramaBand(rad, crest, amp, sd, rep);
+    const mat = new THREE.MeshBasicMaterial({ map: canopyTexture(sd * 7 + 3, ns, hm), alphaTest: 0.5, side: THREE.DoubleSide, fog: false, color: 0xffffff });
+    attachSkyCap(mat);
+    atmo.push({ mat, day: new THREE.Color(0xffffff), night: new THREE.Color(0x567095), df: 0, nf: 0.18 });
     const mesh = new THREE.Mesh(g, mat);
     mesh.castShadow = false; mesh.receiveShadow = false;
     group.add(mesh);
   }
 
-  // ——— 城堡岩崖（单一视觉主导，画面右上）+ 坡脚碎石 ———
-  const cx = 120, czSim = -55, cy = 60;
+  // ——— 城堡岩崖（岩石固有色贴图 + 块面明暗 + 坡脚碎石）———
+  const cx = 118, czSim = -121, cy = 53;
   const cz = -czSim;
-  const crag = new THREE.CylinderGeometry(16, 40, cy + 6, 12, 7);
+  const crag = new THREE.CylinderGeometry(19, 46, cy + 6, 20, 10);
   {
     const pos = crag.getAttribute('position') as THREE.BufferAttribute;
     for (let i = 0; i < pos.count; i++) {
       const px = pos.getX(i), py = pos.getY(i), pz = pos.getZ(i);
       const ang = Math.atan2(px, pz);
       const strata = Math.floor((py + cy / 2) / 7) * 0.9;
-      const joint = Math.sin(ang * 6) > 0.72 ? -2.2 : 0;
+      const joint = Math.sin(ang * 6 + 1.7) * 0.17 + Math.sin(ang * 11 + py * 0.07) * 0.09;
       const n = Math.sin(px * 0.3 + pz * 0.22) * Math.cos(pz * 0.26 - px * 0.15);
       if (py < (cy + 6) / 2 - 0.1) {
-        const s = 1 + n * 0.16 + joint * 0.02 - strata * 0.012;
+        const s = 1 + n * 0.23 + joint - strata * 0.012;
         pos.setX(i, px * s); pos.setZ(i, pz * s); pos.setY(i, py + n * 1.4);
       }
     }
@@ -445,30 +509,20 @@ export function buildScenery(_m: Materials): Scenery {
   }
   const cragGeo = mergeGeometries(cragParts, false)!;
   for (const g of cragParts) g.dispose();
-  bakeForm(cragGeo, -6, cy + 10, 1.8);
-  { // 块面明暗：节理阴影 + 岩层阴面 + 阳面/阴面
-    const pp = cragGeo.getAttribute('position') as THREE.BufferAttribute;
-    const cc = cragGeo.getAttribute('color') as THREE.BufferAttribute;
-    const nn = cragGeo.getAttribute('normal') as THREE.BufferAttribute;
-    for (let i = 0; i < pp.count; i++) {
-      const ang = Math.atan2(pp.getX(i), pp.getZ(i));
-      let f = 0.65 + 0.55 * clamp01(-nn.getX(i));
-      if (Math.sin(ang * 6) > 0.72) f *= 0.4;
-      if (nn.getY(i) < -0.15) f *= 0.6;
-      if (Math.floor((pp.getY(i) + 33) / 7) % 2 === 0) f *= 0.75; // 岩层阳/阴交替
-      cc.setXYZ(i, cc.getX(i) * f, cc.getY(i) * f, cc.getZ(i) * f);
-    }
-    cc.needsUpdate = true;
-  }
-  weatherTint(cragGeo, 73);
-  const cragMat = basic(0xb4bec8, 0x151d2a, 0.68, 0.42);
-  setClamp(cragMat, cy + 6, 140, 0.95);
+  bakeForm(cragGeo, -6, cy + 10, 0.7);
+  const cragY = cy / 2 - 3;
+  const cragSupport = heightGrid(cragGeo, 55, 1.5);
+  const cliffTexture = rockTexture(73, 0.12, true);
+  const cragMat = basic(0xadb8c0, 0x576b83, 0.05, 0.2);
+  cragMat.map = cliffTexture;
+  cliffTexture.repeat.set(3, 1.2);
+  cragMat.needsUpdate = true;
   const cragMesh = new THREE.Mesh(cragGeo, cragMat);
-  cragMesh.position.set(cx, (cy + 6) / 2 - 6, cz);
+  cragMesh.position.set(cx, cragY, cz);
   cragMesh.castShadow = false; cragMesh.receiveShadow = false;
   group.add(cragMesh);
 
-  // ——— 山顶城堡 ———
+  // ——— 山顶城堡（石砌体冷灰 + 深色屋面双网格）———
   const cp: THREE.BufferGeometry[] = [];
   const cr: THREE.BufferGeometry[] = [];
   const kw = 13, kh = 26;
@@ -481,7 +535,6 @@ export function buildScenery(_m: Materials): Scenery {
     band.translate(cx, cy + bh * (b + 1), cz);
     cp.push(band);
   }
-  // 主楼壁柱（竖向砌体分段）
   for (const [dx, dz] of [[-1, 0], [1, 0], [0, -1], [0, 1]]) {
     const pil = new THREE.BoxGeometry(dx ? 0.7 : kw * 0.9, kh, dz ? 0.7 : kw * 0.9);
     pil.translate(cx + dx * (kw / 2), cy + kh / 2, cz + dz * (kw / 2));
@@ -562,19 +615,21 @@ export function buildScenery(_m: Materials): Scenery {
   const castleGeo = mergeGeometries(cp.map((g) => g.toNonIndexed()), false)!;
   for (const g of cp) g.dispose();
   bakeForm(castleGeo, cy - 6, 50, 1.4);
-  weatherTint(castleGeo, 74);
-  const castleMat = basic(0xccd6e0, 0x1a2434, 0.5, 0.45);
-  setClamp(castleMat, cy + 40, 140, 0.95);
+  const masonry = rockTexture(123, 0.12);
+  const castleMat = basic(0xa2afbd, 0x526584, 0.06, 0.18);
+  castleMat.map = masonry;
   const castle = new THREE.Mesh(castleGeo, castleMat);
   castle.castShadow = false; castle.receiveShadow = false;
   group.add(castle);
-  for (const g of cr) bakeFlat(g, 0.30);
+  for (const g of cr) bakeFlat(g, 0.13);
 
   // 门洞暗色 + 吊闸（合批）
   const archDark = new THREE.MeshBasicMaterial({ color: 0x0a0d12, fog: false });
   const archParts: THREE.BufferGeometry[] = [];
   const a1 = new THREE.BoxGeometry(3, 5.5, 3.6); a1.translate(cx, cy + 0.5, cz - 16); archParts.push(a1);
-  const gx = 40, gzSim = 60, gy = 16, gz = -gzSim;
+  const gx = 80, gzSim = 45, gz = -gzSim;
+  const gateBase = sampleH(hg, gx, gz);
+  const gy = gateBase < -1e8 ? -0.65 : gateBase - 1;
   const a2 = new THREE.BoxGeometry(2.8, 5, 3.4); a2.translate(gx, gy + 2.5, gz); archParts.push(a2);
   const a3 = new THREE.BoxGeometry(2.6, 3.6, 0.12); a3.translate(gx, gy + 3, gz + 1.75); archParts.push(a3);
   const archGeo = mergeGeometries(archParts.map((g) => g.toNonIndexed()), false)!;
@@ -588,7 +643,7 @@ export function buildScenery(_m: Materials): Scenery {
   for (const g of glowParts) g.dispose();
   group.add(new THREE.Mesh(glowGeo, glowMat));
 
-  // 城堡暖窗（不整齐、亮度不一；白天暗洞）
+  // 城堡暖窗
   const winMat = new THREE.MeshBasicMaterial({ color: 0x0d1118, fog: false, side: THREE.DoubleSide });
   const winSpots: [number, number, number, number, number][] = [
     [cx - 6.6, cy + 12, cz - 3, -HALF_PI, 0.9],
@@ -615,7 +670,7 @@ export function buildScenery(_m: Materials): Scenery {
   if (winInst.instanceColor) winInst.instanceColor.needsUpdate = true;
   group.add(winInst);
 
-  // ——— 第二城门塔（画面左侧远景）———
+  // ——— 第二城门塔（冷灰石材）———
   const gp: THREE.BufferGeometry[] = [];
   const gr: THREE.BufferGeometry[] = [];
   tower(gp, gr, gx - 3.6, gz, gy, 2.5, 17, 7, { merlons: true });
@@ -629,16 +684,15 @@ export function buildScenery(_m: Materials): Scenery {
   gr.push(groof);
   const gateGeo = mergeGeometries(gp.map((g) => g.toNonIndexed()), false)!;
   for (const g of gp) g.dispose();
-  bakeForm(gateGeo, gy, 26, 0.7);
-  for (const g of gr) bakeFlat(g, 0.30);
-  weatherTint(gateGeo, 75);
-  const gateMat = basic(0xb8c2cc, 0x182231, 0.6, 0.42);
-  setClamp(gateMat, gy + 24, 70, 0.92);
+  bakeForm(gateGeo, gy, 26, 0.9);
+  const gateMat = basic(0x8a9cac, 0x4e5d75, 0.05, 0.18);
+  gateMat.map = masonry;
   const gate = new THREE.Mesh(gateGeo, gateMat);
   gate.castShadow = false; gate.receiveShadow = false;
   group.add(gate);
+  for (const g of gr) bakeFlat(g, 0.13);
 
-  // ——— 中景补充：下城郭 / 坍塌墙 / 瞭望塔 ———
+  // ——— 中景：下城郭 / 坍塌墙 / 瞭望塔（冷灰）———
   const midParts: THREE.BufferGeometry[] = [];
   const mr: THREE.BufferGeometry[] = [];
   const townSpots: [number, number][] = [[62, -26], [70, -10], [58, 8], [76, -38], [52, 26], [44, 48], [30, 62], [-24, 58], [-36, 44]];
@@ -646,8 +700,9 @@ export function buildScenery(_m: Materials): Scenery {
     const n = 3 + Math.floor(R() * 3);
     for (let i = 0; i < n; i++) {
       const hx = tx + (R() - 0.5) * 12, hz = tz + (R() - 0.5) * 12;
-      const sy = sampleH(hg, hx, hz);
-      const hy = (sy < -1e8 ? 6 : sy - 0.5) + R() * 1.5;
+      const sy = sampleH(hg, hx, -hz);
+      if (sy < -1e8) continue;
+      const hy = sy - 0.45;
       const hw = 2.0 + R() * 1.6, hh = 3 + R() * 1.6;
       const body = new THREE.BoxGeometry(hw, hh, hw * 1.4);
       body.translate(hx, hy + hh / 2, -hz);
@@ -655,13 +710,14 @@ export function buildScenery(_m: Materials): Scenery {
       const rf = new THREE.ConeGeometry(hw * 0.95, 2.6, 4);
       rf.rotateY(Math.PI / 4);
       rf.translate(hx, hy + hh + 1.3, -hz);
-      midParts.push(rf);
+      mr.push(rf);
     }
   }
   for (let i = 0; i < 7; i++) {
     const h = i === 3 ? 1.5 : 4 + (i % 2);
-    const cwY = sampleH(hg, 46 + i * 3, -40);
-    const base = cwY < -1e8 ? 8 : cwY - 0.5;
+    const cwY = sampleH(hg, 46 + i * 3, 40);
+    if (cwY < -1e8) continue;
+    const base = cwY - 0.5;
     const seg = new THREE.BoxGeometry(3, h, 1.6);
     seg.translate(46 + i * 3, base + h / 2, -40);
     midParts.push(seg);
@@ -674,37 +730,34 @@ export function buildScenery(_m: Materials): Scenery {
     }
   }
   const wtY = sampleH(hg, -28, -62);
-  tower(midParts, mr, -28, -62, wtY < -1e8 ? 10 : wtY - 0.5, 2.2, 22, 6, { merlons: true });
+  if (wtY >= -1e8) tower(midParts, mr, -28, -62, wtY - 0.5, 2.2, 22, 6, { merlons: true });
   const midGeo = mergeGeometries(midParts.map((g) => g.toNonIndexed()), false)!;
   for (const g of midParts) g.dispose();
-  bakeForm(midGeo, 4, 30, 0.6);
-  for (const g of mr) bakeFlat(g, 0.30);
-  weatherTint(midGeo, 76);
-  const midMat = basic(0x9aa4ae, 0x161e2b, 0.68, 0.4);
-  setClamp(midMat, 34, 70, 0.9);
+  bakeForm(midGeo, 4, 30, 0.7);
+  const midMat = basic(0x8f9ba4, 0x43566d, 0.06, 0.18);
+  midMat.map = masonry;
   const mid = new THREE.Mesh(midGeo, midMat);
   mid.castShadow = false; mid.receiveShadow = false;
   group.add(mid);
+  for (const g of mr) bakeFlat(g, 0.13);
 
-  // 屋面/锥顶统一合批：比墙面暗 0.10-0.18，靠内部对比认出城堡
+  // 屋面统一合批（深色）
   const roofAll = mergeGeometries([...cr, ...gr, ...mr].map((g) => g.toNonIndexed()), false)!;
   for (const g of [...cr, ...gr, ...mr]) g.dispose();
-  const roofMat = basic(0x8a94a0, 0x141c28, 0.5, 0.45);
-  setClamp(roofMat, cy + 40, 140, 0.95);
+  const roofMat = basic(0x8794a6, 0x54627c, 0.065, 0.18);
   const roofMesh = new THREE.Mesh(roofAll, roofMat);
   roofMesh.castShadow = false; roofMesh.receiveShadow = false;
   group.add(roofMesh);
 
-  // 裸岩 outcrop
+  // 裸岩 outcrop（冷灰）
   const outGeo = new THREE.DodecahedronGeometry(3, 0);
   outGeo.scale(1, 0.7, 1);
-  const outMat = basic(0x9aa4ae, 0x151d2a, 0.68, 0.4, false);
-  setClamp(outMat, 20, 70, 0.9);
+  const outMat = basic(0x6a7076, 0x151d2a, 0.25, 0.3, false);
   const outInst = new THREE.InstancedMesh(outGeo, outMat, 24);
   for (let i = 0; i < 24; i++) {
     const a = R() * Math.PI * 2, rr = 45 + R() * 55;
     const ox = Math.sin(a) * rr, oz = Math.cos(a) * rr;
-    const sy = sampleH(hg, ox, oz);
+    const sy = sampleH(hg, ox, -oz);
     dummy.position.set(ox, sy < -1e8 ? -60 : sy - 0.5, -oz);
     dummy.rotation.set(R() * 0.4, R() * 3, R() * 0.4);
     const s = 0.7 + R() * 1.4;
@@ -716,68 +769,48 @@ export function buildScenery(_m: Materials): Scenery {
   outInst.castShadow = false; outInst.receiveShadow = false;
   group.add(outInst);
 
-  // ——— 松林：foothill 单株（比坡面暗）+ 一脊带顶林冠线 + 枯阔叶 ———
-  const pineGeo = pineGeometry();
-  const mkPines = (spots: { x: number; y: number; z: number; h: number }[], day: number, df: number): void => {
-    const pmat = basic(day, 0x1a2430, df, 0.4, true);
-    setClamp(pmat, 30, 70, 0.7);
-    const inst = new THREE.InstancedMesh(pineGeo, pmat, spots.length);
-    spots.forEach((p, i) => {
-      const s = p.h / 7.4;
-      dummy.position.set(p.x, p.y, -p.z);
-      dummy.rotation.set((R() - 0.5) * 0.12, R() * Math.PI * 2, (R() - 0.5) * 0.12);
-      dummy.scale.set(s * (0.85 + R() * 0.3), s, s * (0.85 + R() * 0.3));
-      dummy.updateMatrix();
-      inst.setMatrixAt(i, dummy.matrix);
-      tmpC.setScalar(0.7 + R() * 0.3);
-      inst.setColorAt(i, tmpC);
-    });
-    inst.instanceMatrix.needsUpdate = true;
-    if (inst.instanceColor) inst.instanceColor.needsUpdate = true;
-    inst.castShadow = false; inst.receiveShadow = false;
-    group.add(inst);
-  };
-  const footPines: { x: number; y: number; z: number; h: number }[] = [];
-  for (let i = 0; i < 420; i++) {
-    const a = R() * Math.PI * 2, rr = 50 + R() * 38;
+  // ——— 仅最近 foothill 保留少量 3D 单株松 + 枯树（采样真实地形）———
+  const pineSpots: { x: number; y: number; z: number; h: number }[] = [];
+  for (let i = 0; i < 120; i++) {
+    const a = R() * Math.PI * 2, rr = 46 + R() * 30;
     const x = Math.sin(a) * rr, z = Math.cos(a) * rr;
     if (x > -13 && x < 32 && z > -11 && z < 32) continue;
-    const sy = sampleH(hg, x, z);
+    const sy = sampleH(hg, x, -z);
     if (sy < -1e8) continue;
-    footPines.push({ x, y: sy - 0.4, z, h: 5 + R() * 4 });
+    pineSpots.push({ x, y: sy - 0.4, z, h: 5 + R() * 4 });
   }
-  mkPines(footPines, 0x5f6961, 0.25); // 比 foothill 坡面(0x9aa4ae/0.62)暗
-
-  // 一脊带顶林冠线（沿 crest 噪声放置，比带面暗）
-  const crest1 = (a: number): number => 40 + 10 * (0.5 * Math.sin(a * 3 + 11) + 0.3 * Math.sin(a * 7 + 25.3) + 0.2 * Math.sin(a * 13 + 45.1));
-  const canMat = basic(0x5f6961, 0x1c2632, 0.25, 0.45, true);
-  setClamp(canMat, 50, 120, 0.7);
-  const canInst = new THREE.InstancedMesh(canopyGeometry(), canMat, 220);
-  for (let i = 0; i < 220; i++) {
-    const a = (i / 220) * Math.PI * 2 + R() * 0.1;
-    const rr = 114 + R() * 4;
-    const s = (7 + R() * 5) / 5.2;
-    dummy.position.set(Math.sin(a) * rr, crest1(a) - 6 + R() * 1.5, -Math.cos(a) * rr);
-    dummy.rotation.set(0, R() * 3, 0);
-    dummy.scale.set(s, s, s);
+  // Colonies on the actual crag, concentrated along shelves, never against blank sky.
+  for (let i = 0; i < 120; i++) {
+    const a = R() * Math.PI * 2, rad = 20 + R() * 26;
+    const x = Math.sin(a) * rad, z = Math.cos(a) * rad;
+    const sy = sampleH(cragSupport, x, z);
+    if (sy < -1e8 || sy > cy * 0.3 || (Math.sin(a * 5) < -0.5 && R() < 0.8)) continue;
+    pineSpots.push({ x: cx + x, y: cragY + sy - 0.55, z: -cz - z, h: 3.2 + R() * 3.9 });
+  }
+  const pineMat = basic(0x3f5757, 0x526981, 0.07, 0.17);
+  const pineInst = new THREE.InstancedMesh(pineGeometry(), pineMat, pineSpots.length);
+  pineSpots.forEach((p, i) => {
+    const s = p.h / 7.4;
+    dummy.position.set(p.x, p.y, -p.z);
+    dummy.rotation.set((R() - 0.5) * 0.12, R() * Math.PI * 2, (R() - 0.5) * 0.12);
+    dummy.scale.set(s * (0.85 + R() * 0.3), s, s * (0.85 + R() * 0.3));
     dummy.updateMatrix();
-    canInst.setMatrixAt(i, dummy.matrix);
+    pineInst.setMatrixAt(i, dummy.matrix);
     tmpC.setScalar(0.7 + R() * 0.3);
-    canInst.setColorAt(i, tmpC);
-  }
-  canInst.instanceMatrix.needsUpdate = true;
-  if (canInst.instanceColor) canInst.instanceColor.needsUpdate = true;
-  canInst.castShadow = false; canInst.receiveShadow = false;
-  group.add(canInst);
+    pineInst.setColorAt(i, tmpC);
+  });
+  pineInst.instanceMatrix.needsUpdate = true;
+  if (pineInst.instanceColor) pineInst.instanceColor.needsUpdate = true;
+  pineInst.castShadow = false; pineInst.receiveShadow = false;
+  group.add(pineInst);
 
-  const deadMat = basic(0x8a8478, 0x1a222c, 0.5, 0.4, false);
-  setClamp(deadMat, 26, 80, 0.88);
-  const deadInst = new THREE.InstancedMesh(deadTreeGeometry(), deadMat, 36);
-  for (let i = 0; i < 36; i++) {
-    const a = R() * Math.PI * 2, rr = 46 + R() * 70;
-    const s = 1.2 + R() * 1.4;
+  const deadMat = basic(0x3a322c, 0x1a222c, 0.15, 0.3, false);
+  const deadInst = new THREE.InstancedMesh(deadTreeGeometry(), deadMat, 12);
+  for (let i = 0; i < 12; i++) {
+    const a = R() * Math.PI * 2, rr = 46 + R() * 34;
     const dx = Math.sin(a) * rr, dz = Math.cos(a) * rr;
-    const sy = sampleH(hg, dx, dz);
+    const sy = sampleH(hg, dx, -dz);
+    const s = 1.2 + R() * 1.4;
     dummy.position.set(dx, sy < -1e8 ? -60 : sy - 0.3, -dz);
     dummy.rotation.set(0, R() * 3, (R() - 0.5) * 0.15);
     dummy.scale.set(s, s, s);
@@ -788,7 +821,7 @@ export function buildScenery(_m: Materials): Scenery {
   deadInst.castShadow = false; deadInst.receiveShadow = false;
   group.add(deadInst);
 
-  // ——— 每帧大气驱动（挂恒可见地盘）；雾感锚定天空地平线值（uHorizon），不随 fog.color 漂移 ———
+  // ——— 每帧大气驱动（锚定天空地平线；逐片段上限保护）———
   const tmpA = new THREE.Color(), tmpB = new THREE.Color();
   let skyUniforms: SkyUniforms | null = null;
   ground.onBeforeRender = (_r, scene, _camera) => {
@@ -807,7 +840,6 @@ export function buildScenery(_m: Materials): Scenery {
       tmpB.copy(haze).multiplyScalar(1 + night * 0.6);
       const amount = Math.min(0.95, a.df) * (1 - night) + a.nf * night;
       a.mat.color.copy(tmpA).lerp(tmpB, Math.min(0.95, amount));
-      a.mat.color.multiplyScalar(a.K); // 层间明度阶梯（近脊略暗于天空，远带贴近天空）
     }
     if (skyUniforms) {
       skyU.uScHorizon.value.copy(skyUniforms.uHorizon.value);

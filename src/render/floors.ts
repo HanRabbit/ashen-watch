@@ -1,16 +1,16 @@
 // 三层新增几何（map）：B1 拱顶/墙/储藏架、S1–S4 踏步与护栏、2F 步道/垛墙/栏板/过街桥/上廊、
-// 洞口护墙、庭院掩体、柱列、楼梯栅门门扇、B1 油瓶与封门。材质全部经 variants(m)（圣经 5.1）。
-// 只读 sim 数据；旧栅门/油瓶视觉按 AABB 隐藏（props.ts 不可改）。
+// 洞口护墙、庭院掩体、柱列与 B1 封门。材质全部经 variants(m)（圣经 5.1）。
+// 只读 sim 数据；可交互模型统一由 props.ts 绘制。
 import * as THREE from 'three';
-import { AREAS, B1_Y, COLUMNS, F2_Y, PROPS, RAISED_Y, SLABS, STAIRS, WALLS } from '../sim/level';
+import { AREAS, B1_Y, COLUMNS, PROPS, RAISED_Y, SLABS, STAIRS, WALLS } from '../sim/level';
 import { World } from '../sim/state';
-import { Batch, mesh } from './geom';
+import { Batch } from './geom';
 import { Materials, scaleUV, tiledBox } from './materials';
 import { variants } from './materialVariants';
 
 export interface Floors {
   group: THREE.Group;
-  update(w: World, dt: number): void;
+  update(w: World): void;
 }
 
 const HALF_PI = Math.PI / 2;
@@ -184,60 +184,10 @@ export function buildFloors(m: Materials): Floors {
   b1.build(g1, true); group.add(g1); // map: B1 子组
   group.traverse((o) => { const me = o as THREE.Mesh; if (me.isMesh) { me.castShadow = false; me.receiveShadow = true; } }); // map: 三层几何不投影，省 shadow pass（swiftshader 稳定+预算）
 
-  // —— 楼梯栅门门扇（随 w.doors.gate 动画）——
-  const gate = new THREE.Group();
-  const gb = new Batch();
-  const gw = 1.6, gh = 2.4;
-  for (let i = 0; i <= 6; i++) gb.geo(m.iron, scaleUV(new THREE.CylinderGeometry(0.025, 0.03, gh, 6), 1), -gw / 2 + (gw / 6) * i, gh / 2, 0);
-  gb.box(m.iron, -gw / 2, -0.04, gw / 2, 0.04, 0.1, 0.16, 1);
-  gb.box(m.iron, -gw / 2, -0.04, gw / 2, 0.04, gh - 0.16, gh - 0.1, 1);
-  gb.build(gate, true);
-  gate.position.set(24.0, F2_Y, -20.4);
-  group.add(gate);
-
-  // —— B1 油瓶（随 w.taken.flask）——
-  const flask = new THREE.Group();
-  const oilMat = new THREE.MeshStandardMaterial({ color: 0xb8741c, emissive: 0x7a4208, emissiveIntensity: 0.35, roughness: 0.3, transparent: true, opacity: 0.9 });
-  const fb = mesh(new THREE.SphereGeometry(0.09, 10, 8), oilMat); fb.position.y = 0.085; fb.scale.y = 0.9;
-  flask.add(fb);
-  flask.position.set(14.8, B1_Y + 0.86, -13.0);
-  group.add(flask);
-
-  // —— 礼拜堂正门双扇（朝西，随 w.doors.chapelFront）——
-  const mkLeaf = (hz: number, dir: number): THREE.Group => {
-    const g = new THREE.Group();
-    const lb = new Batch();
-    lb.box(v.woodPlank, -0.05, 0, 0.05, 0.9 * dir, 0, 3.2, 1.2);
-    for (const yy of [0.5, 1.6, 2.7]) lb.box(m.iron, -0.07, 0.05 * dir, 0.07, 0.85 * dir, yy, yy + 0.08, 1);
-    lb.build(g, true);
-    g.position.set(13.3, RAISED_Y, -hz);
-    return g;
-  };
-  const frontL = mkLeaf(15.6, 1);
-  const frontR = mkLeaf(17.4, -1);
-  group.add(frontL, frontR);
-  // —— 祭台匣（新祭台，随 w.taken.chest）——
-  const chest = new THREE.Group();
-  const cb = new Batch();
-  cb.box(v.woodPlank, -0.5, -0.35, 0.5, 0.35, 0, 0.5, 1.2);
-  cb.box(m.iron, -0.52, -0.37, 0.52, 0.37, 0.45, 0.55, 1);
-  cb.build(chest, true);
-  chest.position.set(29.3, RAISED_Y + 1.1, -16.5);
-  group.add(chest);
-
-  let gateOpen = 0, frontOpen = 0;
   return {
     group,
-    update(w: World, dt: number): void {
-      gateOpen += ((w.doors.gate ? 1 : 0) - gateOpen) * Math.min(1, dt * 6);
-      gate.rotation.y = gateOpen * HALF_PI * 0.95;
-      gate.rotation.z = w.repairs.gate ? 0 : 0.035;
-      flask.visible = !w.taken.flask;
-      g1.visible = w.player.floor === 'B1'; // map: 楼层可见性剔除
-      frontOpen += ((w.doors.chapelFront ? 1 : 0) - frontOpen) * Math.min(1, dt * 6);
-      frontL.rotation.y = -frontOpen * HALF_PI * 0.95;
-      frontR.rotation.y = frontOpen * HALF_PI * 0.95;
-      chest.visible = !w.taken.chest;
+    update(w: World): void {
+      g1.visible = w.player.floor === 'B1';
     },
   };
 }
@@ -250,17 +200,6 @@ export function hideGroundHoles(levelGroup: THREE.Group): void {
     [9.9, 25.1, -0.35, 0.5, 25.4, 29.1],   // 旧外廊地面
   ];
   cull(levelGroup, boxes);
-}
-
-/** 隐藏 props.ts 里旧位置的栅门门扇与门厅油瓶（不可改 props.ts）。 */
-export function hideMovedProps(propsGroup: THREE.Group): void {
-  const boxes: [number, number, number, number, number, number][] = [
-    [10.0, 10.6, 0, 3.0, 5.0, 7.0],   // 旧侧廊栅门
-    [22.0, 22.6, 1.0, 1.6, 22.7, 23.3], // 旧门厅油瓶
-    [17.9, 20.1, 0.4, 3.8, 25.0, 25.5], // 旧正门双扇（朝北旧位）
-    [18.3, 19.7, 1.4, 2.4, 8.9, 9.8],  // 旧祭台匣（旧位）
-  ];
-  cull(propsGroup, boxes);
 }
 
 function cull(group: THREE.Group, boxes: [number, number, number, number, number, number][]): void {

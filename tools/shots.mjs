@@ -26,22 +26,25 @@ const stage = (page, spec) => page.evaluate((s) => {
   Object.assign(w.inv, { wood: 0, iron: 0, oil: 0, meal: 0, hasClapper: false }, s.inv ?? {});
   w.quest.installed = !!s.installed;
   Object.assign(w.player, { x: s.at[0], z: s.at[1], yaw: s.yaw, hp: s.hp ?? 100, cold: s.cold ?? 0, moving: false, sprinting: false });
-  { const sup = window.__awProbe.support ? window.__awProbe.support(s.at[0], s.at[1], s.y ?? 0) : null; if (sup) { w.player.y = sup.y; w.player.floor = sup.floor; } else { w.player.y = s.y ?? 0; w.player.floor = s.floor ?? '1F'; } } // map:
+  const support = (at, y = 0, floor = '1F') => window.__awProbe.support(...at, y) ?? { y, floor };
+  const { y, floor } = support(s.at, s.y, s.floor);
+  Object.assign(w.player, { y, floor });
   d.input.yaw = s.yaw; d.input.pitch = s.pitch ?? 0.1;
   w.ghosts = (s.ghosts ?? []).map((g) => ({
-    kind: g.kind, x: g.at[0], z: g.at[1], yaw: g.yaw ?? 0, mode: g.mode ?? 'patrol', t: g.t ?? 0.3, patrolIdx: 0, path: [], goal: null,
+    kind: g.kind, x: g.at[0], z: g.at[1], ...support(g.at, g.y, g.floor), yaw: g.yaw ?? 0, mode: g.mode ?? 'patrol', t: g.t ?? 0.3, patrolIdx: 0, path: [], goal: null,
     lastKnown: null, canSee: false, loseT: 0, senseT: 9, repathT: 9, stuckT: 0, repelCd: 0, lightT: 0, cowed: 0, sawSprint: false, flankSide: 1, bangOpens: false, waiting: false,
   }));
   d.fixedCam(s.cam ? s.cam.pos : null, s.cam ? s.cam.look : undefined);
   d.zones(!!s.zones);
   d.hud(s.hud !== false);
+  document.getElementById('debug').hidden = s.hud === false;
 }, spec);
 
 const COURT_CAM = { pos: [4, 2.0, 1.2], look: [0.5, 3.0, 19.2] };
 const GHOST_CAM = { pos: [0, 1.5, 17.6], look: [0, 1.0, 22] };
 const DEG = Math.PI / 180;
 // 参考机位：对标 concept/03（左侧壁灯墙、中景井台、右侧东墙栅门、远处礼拜堂与远景城堡）
-const REF_CAM = { pos: [-7.5, 1.7, 16.5], look: [19, 4.6, 16.5] }; // map: 构图对齐 concept/03（正门朝西主角）
+const REF_CAM = { pos: [-9.35, 1.75, 26.5], look: [15.8, 5.2, 15.3] }; // map: 构图对齐 concept/03（正门朝西主角）
 // 天空验收机位：仰角看云层层次与月晕，礼拜堂尖塔作剪影参照
 const SKY_CAM = { pos: [-8.2, 1.75, 3.2], look: [4, 30, 46] };
 
@@ -78,8 +81,8 @@ const SHOTS = [
   ['a13-gate-open', { phase: 'day', clock: 300, at: [7.4, 6], yaw: 90 * DEG, pitch: 0.03, repairs: { gate: true }, doors: { gate: true } }],
   ['a13-side-passage-night', { phase: 'night', at: [11.75, 4.6], yaw: 0, pitch: 0.05, lantern: true, repairs: { gate: true } }],
   // A13：礼拜堂与祭台匣
-  ['a13-chapel-day', { phase: 'day', clock: 300, at: [19, 22.6], yaw: 180 * DEG, pitch: 0.02, doors: { chapelFront: true } }],
-  ['a13-chapel-chest-night', { phase: 'night', at: [19, 12.2], yaw: 180 * DEG, pitch: 0.12, lantern: true }],
+  ['a13-chapel-day', { phase: 'day', clock: 300, at: [15.9, 15.0], yaw: 90 * DEG, pitch: 0.02, doors: { chapelFront: true } }],
+  ['a13-chapel-chest-night', { phase: 'night', at: [25.5, 16.5], yaw: 90 * DEG, pitch: 0.12, lantern: true }],
   ['a13-bell-dawn', { phase: 'dawn', at: [1.2, 3.4], yaw: 150 * DEG, pitch: -0.12, inv: { hasClapper: true }, taken: { chest: true } }],
   // 火盆：未点与点亮
   ['brazier-chapel-unlit', { phase: 'night', at: [19, 14.6], yaw: 150 * DEG, pitch: 0.1, lantern: true, doors: { chapelFront: true } }],

@@ -16,7 +16,7 @@ import { installSpecularCap, SpecularCapController } from './post/specular';
 import { buildLandmarks, hideLegacy } from './landmarks';
 import { buildScenery } from './scenery';
 import { buildStaticLevel, StaticLevel } from './staticLevel';
-import { buildFloors, Floors, hideGroundHoles, hideMovedProps } from './floors'; // map:
+import { buildFloors, Floors, hideGroundHoles } from './floors'; // map:
 import { Vfx } from './vfx';
 
 installHeightFog();
@@ -85,7 +85,7 @@ export interface RenderPose { x: number; z: number; y?: number; ghosts: { x: num
 export class SceneView {
   readonly renderer: THREE.WebGLRenderer;
   readonly scene = new THREE.Scene();
-  readonly camera = new THREE.PerspectiveCamera(62, 1, 0.08, 320);
+  readonly camera = new THREE.PerspectiveCamera(62, 1, 0.08, 610);
   readonly props: Props;
   readonly player: PlayerModel;
   readonly ghosts: GhostModels;
@@ -151,7 +151,7 @@ export class SceneView {
     this.ghosts = new GhostModels();
     this.scene.add(this.level.group, this.props.group, this.player.group, this.ghosts.group, this.floors.group); // map:
     const landmarks = buildLandmarks(m); hideLegacy(this.level.group);
-    hideGroundHoles(this.level.group); hideMovedProps(this.props.group); // map:
+    hideGroundHoles(this.level.group);
     this.scene.add(landmarks.group, buildScenery(m).group);
 
     // 天空穹顶：跟随镜头，渐变天 + 日/月盘 + 夜星
@@ -248,7 +248,7 @@ export class SceneView {
     const heavy = q !== 'low';
     // cinematic 用满设备像素比；high 保留 1.5 上限；low 直出 1x。
     this.renderer.setPixelRatio(q === 'cinematic' ? window.devicePixelRatio : q === 'high' ? Math.min(window.devicePixelRatio, 1.5) : 1);
-    this.renderer.shadowMap.type = heavy ? THREE.VSMShadowMap : THREE.PCFShadowMap;
+    this.renderer.shadowMap.type = q === 'cinematic' ? THREE.VSMShadowMap : THREE.PCFShadowMap;
     this.sun.shadow.mapSize.set(heavy ? 2048 : 1024, heavy ? 2048 : 1024);
     this.sun.shadow.map?.dispose();
     this.sun.shadow.map = null;
@@ -360,7 +360,7 @@ export class SceneView {
     this.pyS = this.pyS === null ? w.player.y : this.pyS + (w.player.y - this.pyS) * k;
     pose.y = this.pyS;
     pose.ghosts.forEach((g, i) => { const t = w.ghosts[i]?.y ?? 0; this.gyS[i] = this.gyS[i] === undefined ? t : this.gyS[i] + (t - this.gyS[i]) * k; g.y = this.gyS[i]; });
-    this.floors.update(w, dt);
+    this.floors.update(w);
     this.applyLighting(w, pose, dt, time);
     this.props.update(w, dt, time);
     this.player.update(w, pose, yaw, dt, time);

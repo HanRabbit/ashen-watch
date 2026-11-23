@@ -7,7 +7,7 @@ import { RenderPose, SceneView } from './render/view';
 import { texturesReady } from './render/materials';
 import { loadSettings, saveSettings } from './settings';
 import { ghostThreatens } from './sim/ghosts';
-import { INTERACTS, regionAt } from './sim/level';
+import { INTERACTS, regionAt, supportY } from './sim/level';
 import { findPath } from './sim/nav';
 import { SaveStore, StorageLike } from './sim/save';
 import { Session } from './sim/session';
@@ -339,6 +339,8 @@ if (params.get('probe') === '1' || preset.debug) {
     resetPerf: () => { frames.length = 0; slowFrames.length = 0; },
     slowFrames: () => slowFrames.slice(),
     interacts: () => INTERACTS,
+    support: supportY,
+
     rules: () => ({ grey: GHOST.grey.repelRange, wraith: GHOST.wraith.repelRange, holdMargin: GHOST.repelHoldMargin }),
     gpu: () => (ext ? String(gl.getParameter(ext.UNMASKED_RENDERER_WEBGL)) : 'unknown'),
     // 只读寻路查询：自动化验收的机器人用它决定往哪走，输入仍是真实的键鼠事件。

@@ -56,34 +56,50 @@ function rng(seed: number): () => number {
 // ---------------------------------------------------------------------------
 
 function ragGeo(w: number, len: number, seed: number, shade: number, taper = 0.4): THREE.BufferGeometry {
-  const segs = 7;
+  const segs = 8;
   const g = new THREE.PlaneGeometry(w, len, 3, segs);
   g.translate(0, -len / 2, 0);
   const pos = g.attributes.position as THREE.BufferAttribute;
   const hang = new Float32Array(pos.count);
   const col = new Float32Array(pos.count * 3);
   const r = rng(seed * 7919 + 13);
-  const bend = (r() - 0.5) * 0.5;
-  const twist = (r() - 0.5) * 1.7;
-  const curlAmp = 0.12 + r() * 0.15;
+  const bend = (r() - 0.5) * 0.7;
+  const twist = (r() - 0.5) * 2.2;
+  const curlAmp = 0.18 + r() * 0.24;
+  const curl2 = 0.06 + r() * 0.1;
   const phase = r() * Math.PI * 2;
+  const flare = r() < 0.3 ? 1.25 : 1.0; // 部分布条末端散开
   const rowW: number[] = [];
-  for (let row = 0; row <= segs; row++) rowW.push(1 - (1 - taper) * (row / segs) + (r() - 0.5) * 0.24);
-  const tipNotch = [r() * 0.26, r() * 0.36, r() * 0.26, r() * 0.32];
+  const sideTearL: number[] = [];
+  const sideTearR: number[] = [];
+  for (let row = 0; row <= segs; row++) {
+    const tt = row / segs;
+    rowW.push((1 - (1 - taper) * tt + (r() - 0.5) * 0.34) * (1 + (flare - 1) * tt * tt));
+    sideTearL.push(r() * 0.3);
+    sideTearR.push(r() * 0.3);
+  }
+  const tipNotch = [r() * 0.3, r() * 0.42, r() * 0.3, r() * 0.38];
   for (let i = 0; i < pos.count; i++) {
     const t = Math.min(1, -pos.getY(i) / len);
     const row = Math.round(t * segs);
+    const colIdx = i % 4;
     let x = pos.getX(i) * rowW[row];
-    let z = Math.sin(t * Math.PI * 1.4 + phase) * curlAmp * len * t + bend * len * t * t;
+    // 侧缘撕裂：边缘列按行随机内收
+    if (colIdx === 0) x += sideTearL[row] * w * 0.5 * t;
+    if (colIdx === 3) x -= sideTearR[row] * w * 0.5 * t;
+    // 卷曲 + 下垂：S 形卷 + 高频皱 + 重力前坠
+    let z = Math.sin(t * Math.PI * 1.5 + phase) * curlAmp * len * t
+      + Math.sin(t * Math.PI * 4.0 + phase * 2.0) * curl2 * len * t
+      + bend * len * t * t;
     const tw = twist * t;
     const nx = x * Math.cos(tw);
     z += x * Math.sin(tw);
     x = nx;
-    let y = pos.getY(i);
-    if (row >= segs - 1) y -= tipNotch[i % 4] * len;
+    let y = pos.getY(i) - t * t * len * 0.12; // 末端下垂
+    if (row >= segs - 1) y -= tipNotch[colIdx] * len;
     pos.setXYZ(i, x, y, z);
     hang[i] = t;
-    const c = shade * (1 - t * 0.3);
+    const c = shade * (1 - t * 0.32);
     col[i * 3] = c; col[i * 3 + 1] = c; col[i * 3 + 2] = c;
   }
   g.setAttribute('aHang', new THREE.BufferAttribute(hang, 1));
@@ -135,9 +151,9 @@ function buildHood(cloakMat: THREE.Material, voidMat: THREE.Material): THREE.Gro
     const x = sp.getX(i), y = sp.getY(i), z = sp.getZ(i);
     const ang = Math.atan2(x, z);
     const theta = Math.acos(Math.min(1, Math.max(-1, y / 0.2)));
-    const fold = 1 + 0.06 * Math.sin(ang * 6 + theta * 2.5) * (0.3 + theta / 2.35)
-      + 0.03 * Math.sin(ang * 13 + 1.7)
-      + 0.04 * Math.exp(-Math.pow(ang / 0.4, 2)) * (theta / 2.35);
+    const fold = 1 + 0.13 * Math.sin(ang * 6 + theta * 2.5) * (0.3 + theta / 2.35)
+      + 0.05 * Math.sin(ang * 13 + 1.7)
+      + 0.06 * Math.exp(-Math.pow(ang / 0.4, 2)) * (theta / 2.35);
     sp.setX(i, x * fold); sp.setZ(i, z * fold);
   }
   shellGeo.computeVertexNormals();
@@ -197,13 +213,16 @@ function makeCloakOutfit(tex: CharTextures | null): {
       .replace('#include <roughnessmap_fragment>', /* glsl */`#include <roughnessmap_fragment>
         float wn = cwNoise(vPos * 8.0);
         float wn2 = cwNoise(vPos * 22.0 + 3.1);
+        // 宏观色差（圣经 §5.1）：轻微明度斑驳，增加明暗层次但不改色相、不满铺
+        diffuseColor.rgb *= 0.66 + 0.68 * cwNoise(vPos * 5.0 + 1.3);
+        diffuseColor.rgb *= 0.8 + 0.4 * cwNoise(vPos * 13.0 + 5.7);
         // 下摆泥渍（水造成，沿重力向上渐淡）：泥 #2b2620，局部噪声遮罩不满铺
         float mudH = smoothstep(-0.12, -0.46, vPos.y);
         float mud = mudH * smoothstep(0.35, 0.72, wn);
         diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.023, 0.019, 0.014), mud * 0.7);
         // 肩背磨亮（人用出来）：只降 roughness，不改色相
         float wear = smoothstep(0.12, 0.34, vPos.y) * smoothstep(0.4, 0.78, wn2);
-        roughnessFactor *= 1.0 - 0.4 * wear;
+        roughnessFactor *= 1.0 - 0.6 * wear;
         // 下摆破边磨损露暖褐
         float fray = mudH * smoothstep(0.62, 0.9, wn2);
         diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.16, 0.12, 0.08), fray * 0.4);`);
@@ -559,7 +578,7 @@ interface WraithUni {
 
 function wraithRags(mat: THREE.MeshStandardMaterial): WraithUni {
   const u: WraithUni = {
-    uTime: { value: 0 }, uRim: { value: 0.55 }, uRimColor: { value: new THREE.Color(0x8d9aa8) },
+    uTime: { value: 0 }, uRim: { value: 0.3 }, uRimColor: { value: new THREE.Color(0x5a6672) },
     uOpacity: { value: 0.96 }, uErode: { value: 0.2 },
   };
   mat.transparent = true;
@@ -588,18 +607,22 @@ function wraithRags(mat: THREE.MeshStandardMaterial): WraithUni {
         }`)
       .replace('#include <map_fragment>', /* glsl */`#include <map_fragment>
         float wLum = dot(diffuseColor.rgb, vec3(0.3333));
-        diffuseColor.rgb = mix(vec3(wLum), diffuseColor.rgb, 0.2) * vec3(0.9, 0.94, 1.0);`)
+        diffuseColor.rgb = mix(vec3(wLum), diffuseColor.rgb, 0.2) * vec3(0.82, 0.86, 0.92) * 0.6;`)
       .replace('#include <emissivemap_fragment>', /* glsl */`#include <emissivemap_fragment>
         float ndv = saturate(dot(normalize(vViewPosition), normal));
-        float rimF = pow(1.0 - ndv, 2.2);
-        float rim2 = pow(1.0 - ndv, 5.0);
-        totalEmissiveRadiance += uRimColor * (rimF * 0.3 + rim2 * 0.5) * uRim;
+        float rimF = pow(1.0 - ndv, 2.6);
+        float rim2 = pow(1.0 - ndv, 5.5);
+        // 月光冷灰轮廓：强度压低并钳制，边缘最亮不超 ~0.5，绝不冲白（圣经 §4.5 不发光）。
+        vec3 rimC = uRimColor * (rimF * 0.2 + rim2 * 0.26) * uRim;
+        totalEmissiveRadiance += min(rimC, vec3(0.08));
         float n = awNoise(vWpos * 2.4 + vec3(0.0, uTime * 0.5, uTime * 0.13));
         float n2 = awNoise(vWpos * 7.0 - vec3(uTime * 0.3, 0.0, 0.0));
-        diffuseColor.a *= uOpacity * (0.82 + 0.18 * n) * (0.82 + 0.18 * n2);
-        diffuseColor.a *= 1.0 - uErode * 0.5 * rimF * (1.0 - n2);
+        diffuseColor.a *= uOpacity * (0.8 + 0.2 * n) * (0.8 + 0.2 * n2);
+        diffuseColor.a *= 1.0 - uErode * 0.55 * rimF * (1.0 - n2);
         float tear = awNoise(vWpos * 10.0 + vec3(uTime * 0.12, 0.0, 0.0));
-        if (vHang > 0.78 && tear < (vHang - 0.78) * 0.6) discard;`);
+        if (vHang > 0.74 && tear < (vHang - 0.74) * 0.65) discard;`)
+      .replace('#include <lights_physical_fragment>', /* glsl */`#include <lights_physical_fragment>
+        material.specularColor = vec3(0.0);`);
   };
   mat.customProgramCacheKey = () => 'wraithRags';
   return u;
@@ -615,7 +638,7 @@ class RagWraith {
   private ph = 0;
 
   constructor() {
-    const ragMat = new THREE.MeshStandardMaterial({ color: 0x2a2b2f, roughness: 1, metalness: 0 });
+    const ragMat = new THREE.MeshStandardMaterial({ color: 0x1c1d21, roughness: 1, metalness: 0 });
     // 实例差异（圣经 §5.2）：每只黑影轻微色值抖动。
     ragMat.color.multiplyScalar(0.9 + Math.random() * 0.2);
     this.uni = wraithRags(ragMat);
@@ -632,12 +655,12 @@ class RagWraith {
     ], false)!, 0.12));
     for (let row = 0; row < 4; row++) {
       const z = -0.42 + row * 0.32;
-      const y = 1.24 - row * 0.06;
+      const y = 1.22 - row * 0.07;
       for (let i = 0; i < 7; i++) {
         const x = -0.28 + i * 0.093 + (r() - 0.5) * 0.05;
-        const len = 0.42 + r() * 0.22 - row * 0.03;
-        back.push(placeRag(ragGeo(0.2 + r() * 0.07, len, row * 31 + i, 0.5 + r() * 0.5, 0.5),
-          x, y, z, -1.95 + (r() - 0.5) * 0.6, (r() - 0.5) * 0.4, (r() - 0.5) * 0.35));
+        const len = 0.3 + r() * 0.16 - row * 0.02;
+        back.push(placeRag(ragGeo(0.18 + r() * 0.08, len, row * 31 + i, 0.45 + r() * 0.4, 0.5),
+          x, y, z, -1.6 + (r() - 0.5) * 0.5, (r() - 0.5) * 0.4, (r() - 0.5) * 0.35));
       }
     }
     // 体侧垂布：密排长条拖向地面
@@ -670,6 +693,8 @@ class RagWraith {
     hoodGeo.rotateX(-2.55);
     hoodGeo.translate(0, 0.0, -0.12);
     const headRags: THREE.BufferGeometry[] = [solidRagAttrs(hoodGeo, 0.15)];
+    // 实心暗色头核：填满布条间隙，杜绝背景月光从针孔透出形成亮点
+    headRags.push(solidRagAttrs(new THREE.SphereGeometry(0.16, 12, 9).translate(0, -0.02, -0.13), 0.12));
     // 兜帽周缘垂布
     for (let i = 0; i < 8; i++) {
       const a = (i / 8) * Math.PI * 2;
@@ -741,13 +766,13 @@ class RagWraith {
     const alpha = g.mode === 'dissolve' ? Math.max(0, 1 - g.t / GHOST.dissolveSecs) : 1;
     const moving = g.mode === 'patrol' || g.mode === 'investigate' || g.mode === 'chase' || g.mode === 'flee';
     this.ph += dt * (g.mode === 'chase' ? 11 : 5.5) * (moving ? 1 : 0);
-    let rear = 0, crouch = 0, flare = 1, lift = 0, rimS = 0.55, reach = 0.1;
+    let rear = 0, crouch = 0, flare = 1, lift = 0, rimS = 0.3, reach = 0.1;
     switch (g.mode) {
-      case 'alert': rear = 0.45 * Math.min(1, g.t / 0.3); rimS = 0.75; break;
+      case 'alert': rear = 0.45 * Math.min(1, g.t / 0.3); rimS = 0.4; break;
       case 'chase': crouch = -0.08; reach = 0.45; break;
       case 'windup': {
         const k = Math.min(1, g.t / GHOST.wraith.windup);
-        rear = lerp(0.1, 0.85, k); flare = 1 + k * 0.5; crouch = -0.14 * (1 - k); rimS = lerp(0.55, 0.8, k); reach = lerp(0.2, 0.9, k);
+        rear = lerp(0.1, 0.85, k); flare = 1 + k * 0.5; crouch = -0.14 * (1 - k); rimS = lerp(0.3, 0.42, k); reach = lerp(0.2, 0.9, k);
         break;
       }
       case 'recover': rear = lerp(-0.3, 0, Math.min(1, g.t / 0.6)); crouch = -0.1; reach = 0.3; break;
@@ -975,13 +1000,39 @@ export class GhostModels {
     voidHood.position.set(0.02, 1.86, -0.16);
     a.root.add(voidHood);
     this.greyVoid = voidHood;
-    // 前腰垂布：遮住原模型腰间杂物（沙漏）
+    // 腰间实心破布围裙（整圈、不透明）：彻底遮住原模型沙漏。晚于本体绘制并写深度。
+    const panelMat = new THREE.MeshStandardMaterial({ color: 0x55534e, roughness: 0.97, metalness: 0, side: THREE.DoubleSide, transparent: true, depthWrite: true });
+    panelMat.onBeforeCompile = (sh) => {
+      sh.uniforms.uLean = a.cloth.uLean;
+      sh.uniforms.uHeight = { value: 2.15 };
+      sh.vertexShader = sh.vertexShader
+        .replace('#include <common>', '#include <common>\nuniform float uLean, uHeight;')
+        .replace('#include <begin_vertex>', /* glsl */`#include <begin_vertex>
+          float hh = clamp(transformed.y / uHeight, 0.0, 1.5);
+          transformed.z += uLean * hh * hh * uHeight * 0.55;`);
+      sh.fragmentShader = sh.fragmentShader.replace('#include <map_fragment>', /* glsl */`#include <map_fragment>
+        float pLum = dot(diffuseColor.rgb, vec3(0.3333));
+        diffuseColor.rgb = mix(vec3(pLum), diffuseColor.rgb, 0.3);`);
+    };
+    panelMat.customProgramCacheKey = () => 'greyPanel';
+    const panelGeo = new THREE.CylinderGeometry(0.46, 0.5, 0.82, 20, 3, true, 0, Math.PI * 2);
+    panelGeo.translate(0, 0.95, 0);
+    const panelMesh = mesh(panelGeo, panelMat, false);
+    panelMesh.renderOrder = 10;
+    a.root.add(panelMesh);
+    // 前腰垂布：密排双层遮住原模型腰间杂物（沙漏）
     const apron: THREE.BufferGeometry[] = [];
-    for (let i = 0; i < 7; i++) {
-      apron.push(placeRag(ragGeo(0.23 + r() * 0.05, 0.58 + r() * 0.15, 500 + i, 0.55 + r() * 0.35, 0.45),
-        -0.21 + i * 0.07, 1.2, -0.31 - r() * 0.03, 0.12, (r() - 0.5) * 0.2, (r() - 0.5) * 0.12));
+    for (let i = 0; i < 10; i++) {
+      apron.push(placeRag(ragGeo(0.26 + r() * 0.05, 0.62 + r() * 0.16, 500 + i, 0.55 + r() * 0.35, 0.45),
+        -0.3 + i * 0.066, 1.24, -0.42 - r() * 0.03, 0.12, (r() - 0.5) * 0.2, (r() - 0.5) * 0.12));
     }
-    a.root.add(mesh(mergeRags(apron), ragMat, false));
+    for (let i = 0; i < 8; i++) {
+      apron.push(placeRag(ragGeo(0.24 + r() * 0.05, 0.52 + r() * 0.14, 560 + i, 0.5 + r() * 0.35, 0.45),
+        -0.27 + i * 0.077, 1.32, -0.38 - r() * 0.03, 0.1, (r() - 0.5) * 0.2, (r() - 0.5) * 0.12));
+    }
+    const apronMesh = mesh(mergeRags(apron), ragMat, false);
+    apronMesh.renderOrder = 11;
+    a.root.add(apronMesh);
     // 袍摆烟雾：下摆溶进烟里
     const hemTex = smokeTexture();
     for (let i = 0; i < 5; i++) {

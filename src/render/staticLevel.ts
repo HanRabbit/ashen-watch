@@ -288,11 +288,14 @@ export function buildStaticLevel(m: Materials): StaticLevel {
   b.geo(v.woodBeam, gable(7.4, 1.7, 0.4), 0, 3.9, 0.25);
   for (const z of [-6.6, -4.1, -1.6]) {
     b.box(v.woodBeam, -3.2, z - 0.16, 3.2, z + 0.16, 3.22, 3.6, 1); // 粗壮方料横梁
-    b.geo(v.woodBeam, archRib(6.0, 0.72, 0.2), 0, 2.5, z); // 木拱肋（concept/02）
-    // 两端斜撑托架（梁下 45° 撑木）
+    b.geo(v.woodBeam, archRib(6.0, 0.72, 0.22), 0, 2.5, z); // 方料木拱肋（concept/02）
+    // 梁端铁箍 + 铁钉（圣经 2 木构铁件）
     for (const sx of [-1, 1]) {
+      b.geo(m.iron, new THREE.TorusGeometry(0.15, 0.022, 6, 12), sx * 2.85, 2.5, z, HALF_PI);
+      b.geo(m.iron, new THREE.SphereGeometry(0.03, 6, 5), sx * 2.85, 2.62, z + 0.13);
+      b.geo(m.iron, new THREE.SphereGeometry(0.03, 6, 5), sx * 2.85, 2.38, z - 0.13);
       const geo = tiledBox(0.16, 0.9, 0.16, 1);
-      b.geo(v.woodBeam, geo, sx * 2.75, 2.85, z, 0, 0, sx * 0.7);
+      b.geo(v.woodBeam, geo, sx * 2.75, 2.85, z, 0, 0, sx * 0.7); // 斜撑托架
     }
   }
   b.box(v.woodBeam, -0.14, -8.4, 0.14, 0.4, 5.35, 5.66, 1); // 脊檩
@@ -407,7 +410,8 @@ export function buildStaticLevel(m: Materials): StaticLevel {
   const ivyPalette = [0x7a2a1c, 0x5e1a1a, 0x6b2418, 0x4a1616, 0xa8642a, 0x3a3a20].map((h) => new THREE.Color(h));
   interface Patch { bx: number; bz: number; nx: number; nz: number; tx: number; tz: number; u0: number; u1: number; top: number; dens: number }
   const patches: Patch[] = [
-    { bx: 0, bz: 28.44, nx: 0, nz: -1, tx: 1, tz: 0, u0: -9.5, u1: -0.5, top: 4.3, dens: 0.98 }, // 北墙主簇（壁灯旁，成片攀爬）
+    { bx: 0, bz: 28.44, nx: 0, nz: -1, tx: 1, tz: 0, u0: -9.5, u1: -0.5, top: 4.8, dens: 1.0 }, // 北墙主簇（壁灯旁，成片攀爬，画面视觉元素）
+    { bx: 0, bz: 28.42, nx: 0, nz: -1, tx: 1, tz: 0, u0: -9, u1: -1, top: 4.0, dens: 0.95 }, // 北墙主簇填充层
     { bx: 0, bz: 28.44, nx: 0, nz: -1, tx: 1, tz: 0, u0: 1.5, u1: 8, top: 3.2, dens: 0.9 },     // 北墙次簇
     { bx: -9.94, bz: 0, nx: 1, nz: 0, tx: 0, tz: 1, u0: 4, u1: 10, top: 3.8, dens: 0.9 },      // 西墙
     { bx: -9.94, bz: 0, nx: 1, nz: 0, tx: 0, tz: 1, u0: 18, u1: 24, top: 3.4, dens: 0.85 },      // 西墙北段
@@ -434,11 +438,11 @@ export function buildStaticLevel(m: Materials): StaticLevel {
   };
   for (const pa of patches) {
     const yaw = Math.atan2(pa.nx, pa.nz);
-    const roots = Math.max(3, Math.round((pa.u1 - pa.u0) / 1.0));
+    const roots = Math.max(3, Math.round((pa.u1 - pa.u0) / (pa.dens >= 0.95 ? 0.7 : 1.0)));
     for (let s = 0; s < roots; s++) {
       // 主簇间距随机化（非等距）：有的墙面光秃、有的成片
       const uRoot = pa.u0 + ivyR() * (pa.u1 - pa.u0);
-      const vigor = 0.35 + ivyR() * 0.65; // 每株长势不一
+      const vigor = pa.dens >= 0.95 ? 0.7 + ivyR() * 0.3 : 0.35 + ivyR() * 0.65; // 主簇更密，其余稀疏随机
       const phase = ivyR() * 6.28, amp = 0.18 + ivyR() * 0.3;
       const top = pa.top * (0.82 + ivyR() * 0.22);
       // 主茎从墙脚攀爬

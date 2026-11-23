@@ -3,7 +3,7 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { BRAZIER, BrazierId, HEARTH, LightZone, WALL_LAMP } from '../config';
-import { BELL_POS, BRAZIER_POS, DOORS, LAMP_POS, RAISED_Y } from '../sim/level';
+import { B1_Y, BELL_POS, BRAZIER_POS, DOORS, INTERACTS, LAMP_POS, PROPS, RAISED_Y } from '../sim/level';
 import { World } from '../sim/state';
 import { archLeaf, boxMesh, cyl, halfArchLeaf, lerp, mesh, put } from './geom';
 import { glowTexture, grimeTexture, Materials, smokeTexture } from './materials';
@@ -464,7 +464,9 @@ export class Props {
     // 尖拱铁栅门（PRP-03）：位置/朝向读 DOORS.gate，布局调整时自动跟随
     const gh = DOORS.gate.hinge;
     this.gateClosedRot = DOORS.gate.axis === 'z' ? HALF_PI : 0;
-    put(this.gate, gh.x, 0, gh.z);
+    const gateBox = DOORS.gate.box;
+    put(this.gate, gh.x, gateBox.y0 ?? 0, gh.z);
+    this.gate.scale.set((gateBox.z1 - gateBox.z0) / 1.8, (gateBox.h - (gateBox.y0 ?? 0)) / 2.95, 1);
     this.gate.add(mesh(gateGeometry(), m.iron));
     const tipIron = m.iron.clone();
     tipIron.roughness = 0.4;
@@ -475,9 +477,18 @@ export class Props {
     this.gate.add(this.gateJam);
     g.add(this.gate);
 
-    // 礼拜堂正门：双开
-    put(this.frontL, 18.1, R, 25.25);
-    put(this.frontR, 19.9, R, 25.25);
+    // South wall: a barred, bricked-up arch, not a second interactable gate.
+    const grille = put(new THREE.Group(), 4.27, 0.18, 0.63);
+    grille.scale.set(1.37, 1.03, 1);
+    grille.add(mesh(gateGeometry(), m.iron), mesh(gateTipsGeometry(), tipIron));
+    g.add(grille);
+
+    // Chapel leaves follow the actual west-facing opening, at the simulated hinges.
+    const front = DOORS.chapelFront;
+    put(this.frontL, front.hinge.x, R, front.box.z0);
+    put(this.frontR, front.hinge.x, R, front.box.z1);
+    this.frontL.rotation.y = HALF_PI;
+    this.frontR.rotation.y = -HALF_PI;
     for (const d of [this.frontL, this.frontR]) {
       d.add(mesh(halfArchLeaf(0.9, 2.2, 3.2, 0.1), m.wood));
       for (const y of [0.5, 1.7]) {
@@ -487,17 +498,13 @@ export class Props {
       const ring = mesh(new THREE.TorusGeometry(0.08, 0.014, 5, 10), m.iron); ring.position.set(0.76, 1.15, 0);
       ring.scale.z = 4; d.add(ring);
     }
-    this.frontR.rotation.y = Math.PI;
     g.add(this.frontL, this.frontR);
-    const fallen = put(boxMesh(m.wood, 1.4, 2.2, 0.08, 1), 12.82, 1.05, 14.2);
-    fallen.rotation.set(0, HALF_PI, 0.12);
-    g.add(fallen);
 
     // 庭院壁灯（PRP-02）：卷草锻铁挂臂 + 悬挂六角铁灯笼（玻璃 + 顶盖），对标概念图
     // 朝向由所在墙推断（西/东/北/南），布局移动 LAMP_POS 时自动跟随
     const ln = Math.abs(LAMP_POS.x) > 9 ? [Math.sign(-LAMP_POS.x), 0] : [0, LAMP_POS.z > 14 ? -1 : 1];
     const lampRot = Math.atan2(ln[1], ln[0]);
-    const lamp = put(new THREE.Group(), LAMP_POS.x - ln[0] * 0.18, LAMP_POS.y, LAMP_POS.z - ln[1] * 0.18);
+    const lamp = put(new THREE.Group(), LAMP_POS.x + ln[0] * 0.32, LAMP_POS.y, LAMP_POS.z + ln[1] * 0.32);
     lamp.rotation.y = lampRot;
     lamp.scale.setScalar(1.15);
     this.lampStub = boxMesh(m.iron, 0.2, 0.05, 0.05, 1); this.lampStub.position.set(0.1, -0.12, 0); this.lampStub.rotation.z = -0.7;
@@ -600,15 +607,20 @@ export class Props {
     const ci = ironPack(m); ci.position.set(0.2, 0, 0.1);
     const cf = oilFlask(m); cf.position.set(0.1, 0, -0.25);
     this.crateItems.add(cw, ci, cf);
-    put(this.crateItems, 16.9, R + 0.8, 28.1);
-    this.crateLid = put(boxMesh(m.wood, 1.0, 0.05, 0.8, 0.8), 17.55, R + 0.42, 28.1);
+    const supply = PROPS.find((p) => p.tag === 'crate')!;
+    const sx = (supply.x0 + supply.x1) / 2, sz = (supply.z0 + supply.z1) / 2;
+    put(this.crateItems, sx, R + supply.h, sz);
+    this.crateLid = put(boxMesh(m.wood, 0.94, 0.05, 0.76, 0.8), supply.x1 - 0.08, R + 0.55, sz);
     this.crateLid.rotation.z = -1.2;
     g.add(this.crateItems, this.crateLid);
-    this.flask = put(oilFlask(m), 22.3, R + 0.86, 23);
+    const flaskAt = INTERACTS.find((it) => it.id === 'flask')!;
+    this.flask = put(oilFlask(m), flaskAt.x, B1_Y + 0.86, flaskAt.z);
     g.add(this.flask);
 
     // 祭台匣（PRP-05）：GLB 圣物箱（CC0），lid 节点挂到后缘枢轴上开合
-    const chest = put(new THREE.Group(), 19, R + 1.1, 9.35);
+    const altar = PROPS.find((p) => p.tag === 'altar')!;
+    const chest = put(new THREE.Group(), altar.x0 + 0.4, R + altar.h, (altar.z0 + altar.z1) / 2);
+    chest.rotation.y = HALF_PI;
     const chestGlb = loadProp({
       name: 'chest', size: 0.72, hide: /lock|handle/,
       normDefault: { color: 0x7a6a52, roughness: 0.8, metalness: 1 },
@@ -720,8 +732,8 @@ export class Props {
     this.gate.rotation.y = this.gateClosedRot + o.gate * HALF_PI;
     this.gate.rotation.z = w.repairs.gate ? 0 : 0.035;
     this.gateJam.visible = !w.repairs.gate;
-    this.frontL.rotation.y = -o.chapelFront * HALF_PI * 0.95;
-    this.frontR.rotation.y = Math.PI + o.chapelFront * HALF_PI * 0.95;
+    this.frontL.rotation.y = HALF_PI * (1 - o.chapelFront * 0.95);
+    this.frontR.rotation.y = -HALF_PI * (1 - o.chapelFront * 0.95);
 
     this.boltAmt = lerp(this.boltAmt, w.bolted ? 1 : 0, Math.min(1, dt * 8));
     this.boltBar.visible = this.boltKnob.visible = w.repairs.bolt;
@@ -775,7 +787,7 @@ export class Props {
     this.pickLantern.visible = !w.inv.hasLantern;
     this.shelfItems.visible = !w.taken.shelf;
     this.crateItems.visible = !w.taken.crate;
-    this.flask.visible = !w.taken.flask;
+    this.flask.visible = w.player.floor === 'B1' && !w.taken.flask;
     this.food.visible = !w.taken.food;
     this.mealBowl.visible = w.inv.meal > 0;
     if (this.mealBowl.visible) {
