@@ -117,6 +117,11 @@ export function circleOverlapsBox(x: number, z: number, r: number, b: Box): bool
   return (x - cx) ** 2 + (z - cz) ** 2 < r * r;
 }
 
+/** True only if the actor's body overlaps the box on the same vertical span. */
+export function bodyOverlapsBox(p: { x: number; y: number; z: number }, r: number, b: Box): boolean {
+  return overlapsY(b, p.y) && circleOverlapsBox(p.x, p.z, r, b);
+}
+
 /** 2D 线段与盒首个交点参数 t（slab 法），不相交 Infinity。导航用。 */
 export function segBoxT(ax: number, az: number, bx: number, bz: number, b: Box): number {
   let t0 = 0, t1 = 1;

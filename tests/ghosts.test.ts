@@ -1,7 +1,8 @@
 // 双鬼：感知、门与灯的反应、共享攻击间隔、门闩与晨曦清场（对应验收 A05、A06、A10）。
 import { describe, expect, it } from 'vitest';
 import { BRAZIER, BrazierId, FIXED_DT, GHOST, PHASE, WALL_LAMP } from '../src/config';
-import { hasLineOfSight } from '../src/sim/collision';
+import { hasLineOfSight, moveCircle, solidBoxes } from '../src/sim/collision';
+import { DOORS, supportY } from '../src/sim/level';
 import { inZone, node } from '../src/sim/nav';
 import { GhostKind, GhostState, newGhost, World } from '../src/sim/state';
 import { Driver, STAND } from './driver';
@@ -248,12 +249,19 @@ describe('门与栅门（A05）', () => {
     const g = place(d.w, 'grey', at.x, at.z, 'patrol', at.y, at.floor);
     const p = d.w.player;
     const visible = () => hasLineOfSight(at.x, at.y + 1.5, at.z, p.x, p.y + 1.5, p.z, d.w.doors);
+    const canCross = () => {
+      const body = { x: at.x, z: at.z };
+      moveCircle(body, p.x - at.x, p.z - at.z, GHOST.radius, solidBoxes(d.w.doors, at.y));
+      return Math.hypot(body.x - p.x, body.z - p.z) < 0.01;
+    };
     expect(visible()).toBe(false);
+    expect(canCross()).toBe(false);
     d.wait(3);
     expect(g.canSee).toBe(false);
     expect(g.mode).toBe('patrol');
     d.w.doors.gate = true;
     expect(visible()).toBe(true);
+    expect(canCross()).toBe(true);
     Object.assign(g, { x: at.x, z: at.z, y: at.y, floor: at.floor, yaw: -Math.PI / 2, path: [], senseT: 0, mode: 'patrol' });
     d.wait(0.5);
     expect(g.canSee).toBe(true);
@@ -262,7 +270,8 @@ describe('门与栅门（A05）', () => {
   it('追逐中玩家回手关上栅门：鬼过不来', () => {
     const d = nightScene(STAND.gateW.x, STAND.gateW.z, 4, '2F');
     d.w.repairs.gate = true; d.w.doors.gate = true; d.w.lantern.on = true;
-    const a = place(d.w, 'grey', 26, 21.15, 'chase', 4, '2F');
+    const at = supportY(26, 21.15, 4)!; // on the S4 run, clear of the gate's swing
+    const a = place(d.w, 'grey', 26, 21.15, 'chase', at.y, at.floor);
     expect(d.use('gate')).toBe(true);
     expect(d.w.doors.gate).toBe(false);
     let crossed = false;
@@ -270,6 +279,23 @@ describe('门与栅门（A05）', () => {
     d.wait(12);
     expect(crossed).toBe(false);
     expect(d.w.player.hp).toBe(100);
+  });
+
+  it('楼梯栅门只被同一高度的实体挡住，楼下的鬼不会阻止关门', () => {
+    const d = nightScene(STAND.gateW.x, STAND.gateW.z, 4, '2F');
+    d.w.repairs.gate = true; d.w.doors.gate = true;
+    const { hinge } = DOORS.gate;
+    const x = hinge.x - 0.45, z = STAND.gateW.z;
+    const upper = supportY(x, z, 4)!;
+    const lower = supportY(x, z, 0.45)!;
+    expect(upper.floor).toBe('2F');
+    expect(lower.floor).toBe('1F');
+    const blocker = place(d.w, 'grey', x, z, 'patrol', upper.y, upper.floor);
+    expect(d.use('gate')).toBe(true);
+    expect(d.w.doors.gate).toBe(true);
+    Object.assign(blocker, { x, z, ...lower, path: [] });
+    expect(d.use('gate')).toBe(true);
+    expect(d.w.doors.gate).toBe(false);
   });
 
   it('加闩的门房门：灰影拍门后离去，门不会被拍开', () => {

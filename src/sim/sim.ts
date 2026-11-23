@@ -1,6 +1,6 @@
 // 固定步长模拟：时段、角色、生存、交互与修复（PRD 第 4、9 节）。不依赖渲染，可在 Node 下测试。
 import { BRAZIER, BRAZIER_NAME, BrazierId, GHOST, HEARTH, LANTERN, MEAL, PHASE, PLAYER, REPAIR_COST, REPAIR_NAME, RepairId, WALL_LAMP } from '../config';
-import { circleBlocked, circleOverlapsBox, cylsAt, findOpening, hasLineOfSight, moveCircle, solidBoxes } from './collision';
+import { bodyOverlapsBox, circleBlocked, circleOverlapsBox, cylsAt, findOpening, hasLineOfSight, moveCircle, solidBoxes } from './collision';
 import { dissolveGhosts, ghostThreatens, invalidatePaths, Noise, updateGhosts } from './ghosts';
 import { Box, DOORS, DoorId, FloorId, INTERACTS, InteractDef, InteractId, NODES, regionAt, regionAt3, SPAWN, supportY } from './level';
 import { cloneWorld, newGhost, SimEvent, UiRequest, World } from './state';
@@ -184,8 +184,8 @@ export function pickTarget(w: World): Target | null {
 function toggleDoor(w: World, id: DoorId, h: Hooks, noises: Noise[]): void {
   const box = DOORS[id].box;
   if (w.doors[id]) {
-    const blocked = circleOverlapsBox(w.player.x, w.player.z, PLAYER.radius, box)
-      || w.ghosts.some((g) => g.mode !== 'gone' && circleOverlapsBox(g.x, g.z, GHOST.radius, box));
+    const blocked = bodyOverlapsBox(w.player, PLAYER.radius, box)
+      || w.ghosts.some((g) => g.mode !== 'gone' && bodyOverlapsBox(g, GHOST.radius, box));
     if (blocked) { h.emit({ kind: 'toast', text: '门口有东西挡着，关不上' }); return; }
   }
   w.doors[id] = !w.doors[id];
