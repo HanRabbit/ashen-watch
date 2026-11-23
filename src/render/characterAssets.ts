@@ -5,6 +5,8 @@
 import * as THREE from 'three';
 import { GLTFLoader, GLTF } from 'three/addons/loaders/GLTFLoader.js';
 
+import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
+
 export interface HunterAsset {
   /** 归一化根节点：脚底 y=0，面朝本地 -Z，身高约 1.75m。 */
   root: THREE.Group;
@@ -26,6 +28,7 @@ export interface ReaperAsset {
   /** 网格局部空间的身高（着色器用）。 */
   localHeight: number;
   cloth: ClothUniforms;
+  animate?: (dt: number) => void;
 }
 
 export interface CharacterAssets { hunter: HunterAsset | null; reaper: ReaperAsset | null }
@@ -172,16 +175,25 @@ function hunterNormalize(mat: THREE.MeshStandardMaterial, source: HunterAsset['l
   mat.customProgramCacheKey = () => 'hunterNormalize';
 }
 
-export function prepHunter(gltf: GLTF): HunterAsset {
+const TRIPO_BONES: Record<string, RegExp> = {
+  hips: /^Hip$/, spine: /^Waist$/, spine1: /^Spine01$/, spine2: /^Spine02$/, head: /^Head$/,
+  toeL: /^L_ToeBase$/, toeR: /^R_ToeBase$/, upLegL: /^L_Thigh$/, upLegR: /^R_Thigh$/,
+  legL: /^L_Calf$/, legR: /^R_Calf$/, footL: /^L_Foot$/, footR: /^R_Foot$/,
+  armL: /^L_Upperarm$/, armR: /^R_Upperarm$/, foreArmL: /^L_Forearm$/, foreArmR: /^R_Forearm$/,
+  handL: /^L_Hand$/, handR: /^R_Hand$/,
+};
+
+export function prepHunter(gltf: GLTF, tripo = false): HunterAsset {
   const scene = gltf.scene;
   const { wrap } = normalize(scene, 1.75, Math.PI);
   const lampSource = { value: new THREE.Vector3(1000, 1000, 1000) };
   const bones: Record<string, THREE.Bone> = {};
-  for (const [k, rx] of Object.entries(HUNTER_BONES)) {
+  for (const [k, rx] of Object.entries(tripo ? TRIPO_BONES : HUNTER_BONES)) {
     const b = findBone(scene, rx);
     if (b) bones[k] = b;
   }
   const mesh = scene.getObjectByProperty('type', 'SkinnedMesh') as THREE.SkinnedMesh | undefined;
+  if (tripo && (!mesh || Object.keys(bones).length !== Object.keys(TRIPO_BONES).length)) throw new Error('Incomplete Tripo watchkeeper rig');
   if (mesh && bones.head && bones.headTop) {
     // 头部圆柱区域（礼帽帽冠/帽檐 + 立领）整体塌缩到头骨中心，由兜帽与披肩遮盖，
     // 避免后脑残留薄片（白天室内近景曾出现"黑球加翘片"）。
@@ -255,12 +267,12 @@ export function prepHunter(gltf: GLTF): HunterAsset {
   });
 
   const mixer = new THREE.AnimationMixer(scene);
-  const source = gltf.animations.find((clip) => /^idle$/i.test(clip.name));
+  const source = gltf.animations.find((clip) => (tripo ? /^standing_relax$/i : /^idle$/i).test(clip.name));
   const idle = source?.clone() ?? new THREE.AnimationClip('idle', 1, []);
   // The only embedded clip is Idle. Keep the small vertical breathing motion,
   // remove horizontal pelvis drift and preserve the model's root transform.
-  idle.tracks = idle.tracks.filter((track) => !/^(RootNode|Armature|Object_\d+)\.position$/.test(track.name));
-  for (const track of idle.tracks) if (/Hips.*\.position$/.test(track.name) && bones.hips) {
+  idle.tracks = idle.tracks.filter((track) => !/^(Root|RootNode|Armature|Object_\d+)\.position$/.test(track.name));
+  for (const track of idle.tracks) if (/(?:Hips.*|Hip)\.position$/.test(track.name) && bones.hips) {
     const { x, z } = bones.hips.position;
     for (let i = 0; i < track.values.length; i += 3) { track.values[i] = x; track.values[i + 2] = z; }
   }
@@ -437,14 +449,45 @@ function prepReaper(gltf: GLTF): ReaperAsset {
   return { root: wrap, body: b, localHeight, cloth };
 }
 
+async function loadTripoReaper(): Promise<ReaperAsset> {
+  const folder = 'models/characters/';
+  const scene = await new FBXLoader().loadAsync(folder + 'tripo-ash-wraith.fbx');
+  const rest = scene.animations.find((clip) => /idle|standing_relax/i.test(clip.name)) ?? scene.animations[0];
+  if (!rest) throw new Error('Tripo ash wraith has no idle animation');
+  const idle = rest.clone();
+  idle.tracks = idle.tracks.filter((track) => !/^(Root|Armature|RootNode)\.position$/i.test(track.name));
+  const mixer = new THREE.AnimationMixer(scene);
+  mixer.clipAction(idle).play();
+  mixer.update(0);
+  const { wrap } = normalize(scene, 2.15, Math.PI);
+  const body = scene.getObjectByProperty('isSkinnedMesh', true) as THREE.SkinnedMesh | undefined;
+  if (!body) throw new Error('Tripo ash wraith has no skinned mesh');
+  const textures = new THREE.TextureLoader();
+  const textureBase = folder + 'tripo_convert_1515c7bd-6f8a-41e1-809e-486f35be9167.fbm/tripo_node_98de760c-ac9c-453c-b2be-b4509b500492';
+  const [map, normalMap] = await Promise.all([
+    textures.loadAsync(textureBase + '_BaseColor.jpg'),
+    textures.loadAsync(textureBase + '_Normal_Bake.jpg'),
+  ]);
+  map.colorSpace = THREE.SRGBColorSpace;
+  body.geometry.computeBoundingBox();
+  const bounds = body.geometry.boundingBox!;
+  const localHeight = bounds.max.y - bounds.min.y;
+  const material = new THREE.MeshStandardMaterial({ map, normalMap, color: 0x8d8b86, roughness: 0.97, metalness: 0 });
+  const cloth = ghostCloth(material, localHeight);
+  body.material = material;
+  body.castShadow = true;
+  body.frustumCulled = false;
+  return { root: wrap, body, localHeight, cloth, animate: (dt) => mixer.update(dt) };
+}
+
 /** 并行加载两个模型；各自失败只影响自己（调用方回退程序化模型）。单例：多处调用共享同一次加载。 */
 let pending: Promise<CharacterAssets> | null = null;
 export function loadCharacterAssets(): Promise<CharacterAssets> {
   if (!pending) {
     pending = (async () => {
       const [h, r] = await Promise.all([
-        loadGLB(URLS.hunter).then(prepHunter).catch((e) => { console.warn('[characters] hunter load failed, procedural fallback', e); return null; }),
-        loadGLB(URLS.reaper).then(prepReaper).catch((e) => { console.warn('[characters] reaper load failed, procedural fallback', e); return null; }),
+        loadGLB('models/characters/tripo-watchkeeper.glb').then((gltf) => prepHunter(gltf, true)).catch(() => loadGLB(URLS.hunter).then((gltf) => prepHunter(gltf))).catch((e) => { console.warn('[characters] hunter load failed, procedural fallback', e); return null; }),
+        loadTripoReaper().catch((error) => { console.warn('[characters] Tripo ash wraith unavailable', error); return loadGLB(URLS.reaper).then(prepReaper); }).catch((e) => { console.warn('[characters] reaper load failed, procedural fallback', e); return null; }),
       ]);
       return { hunter: h, reaper: r };
     })();

@@ -1025,6 +1025,7 @@ export class GhostModels {
     this.reaper = a;
     this.group.add(a.root);
     a.root.visible = false;
+    if (a.animate) return;
     // 附加破布层：肩部披布 + 腰间布带（遮住原模型杂物）+ 下摆碎条，与主体共享动画
     const ragMat = new THREE.MeshStandardMaterial({ color: 0x8d8b86, roughness: 0.97, metalness: 0 });
     ghostRags(ragMat, 2.15, a.cloth);
@@ -1132,6 +1133,7 @@ export class GhostModels {
 
   private updateGrey(g: GhostState, at: Grounded, dt: number, time: number): void {
     const a = this.reaper!;
+    a.animate?.(dt);
     const u = a.cloth;
     a.root.visible = g.mode !== 'gone';
     a.root.position.set(at.x, gy(at), -at.z);
