@@ -7,7 +7,7 @@ import { RenderPose, SceneView } from './render/view';
 import { texturesReady } from './render/materials';
 import { loadSettings, saveSettings } from './settings';
 import { ghostThreatens } from './sim/ghosts';
-import { INTERACTS, regionAt, supportY } from './sim/level';
+import { INTERACTS, regionAt, supportY, type FloorId } from './sim/level';
 import { findPath } from './sim/nav';
 import { SaveStore, StorageLike } from './sim/save';
 import { Session } from './sim/session';
@@ -78,15 +78,18 @@ const frames: number[] = [];
 const slowFrames: { ms: number; phase: string; x: number; z: number }[] = [];
 
 // 渲染插值：模拟固定每秒 60 步，画面帧率另算。用上一步与这一步之间的位置出图，走动时镜头才是匀速的。
-// 数组依次是角色的 x、z，然后是每只鬼的 x、z。
+// 数组依次是角色的 x、z、y，然后是每只鬼的 x、z、y。
 const pose: RenderPose = { x: 0, z: 0, ghosts: [] };
 const lerpFrom: number[] = [], lerpTo: number[] = [], lerpNow: number[] = [];
 let lerpWorld: World | null = null;
 
 function positions(out: number[], w: World): void {
-  out.length = 2 + w.ghosts.length * 2;
-  out[0] = w.player.x; out[1] = w.player.z;
-  w.ghosts.forEach((g, i) => { out[2 + i * 2] = g.x; out[3 + i * 2] = g.z; });
+  out.length = 3 + w.ghosts.length * 3;
+  out[0] = w.player.x; out[1] = w.player.z; out[2] = w.player.y;
+  w.ghosts.forEach((g, i) => {
+    const start = 3 + i * 3;
+    out[start] = g.x; out[start + 1] = g.z; out[start + 2] = g.y;
+  });
 }
 
 function updatePose(w: World, alpha: number): void {
@@ -94,8 +97,8 @@ function updatePose(w: World, alpha: number): void {
   // 读档、重开、入夜生成两鬼或调试摆位之后没有可用的上一步：直接用当前位置
   const ok = lerpWorld === w && lerpFrom.length === lerpNow.length && lerpNow.every((v, i) => v === lerpTo[i]);
   const at = (i: number): number => (ok ? lerpFrom[i] + (lerpTo[i] - lerpFrom[i]) * alpha : lerpNow[i]);
-  pose.x = at(0); pose.z = at(1);
-  pose.ghosts = w.ghosts.map((_, i) => ({ x: at(2 + i * 2), z: at(3 + i * 2) }));
+  pose.x = at(0); pose.z = at(1); pose.y = at(2);
+  pose.ghosts = w.ghosts.map((_, i) => ({ x: at(3 + i * 3), z: at(4 + i * 3), y: at(5 + i * 3) }));
 }
 
 function applySettings(): void {
@@ -344,7 +347,7 @@ if (params.get('probe') === '1' || preset.debug) {
     rules: () => ({ grey: GHOST.grey.repelRange, wraith: GHOST.wraith.repelRange, holdMargin: GHOST.repelHoldMargin }),
     gpu: () => (ext ? String(gl.getParameter(ext.UNMASKED_RENDERER_WEBGL)) : 'unknown'),
     // 只读寻路查询：自动化验收的机器人用它决定往哪走，输入仍是真实的键鼠事件。
-    path: (x: number, z: number) => findPath(session.world.player, { x, z }, { doors: session.world.doors, lit: [] }),
+    path: (x: number, z: number, floor?: FloorId) => findPath(session.world.player, { x, z, floor }, { doors: session.world.doors, lit: [] }),
   };
 }
 

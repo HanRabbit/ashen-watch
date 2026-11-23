@@ -11,7 +11,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "verify:browser": "node tools/browser-verify.mjs",
-    "verify:step2": "node tools/browser-verify.mjs chrome --headless step2"
+    "verify:step2": "node tools/browser-verify.mjs chrome --headless step2",
+    "verify:route": "node tools/browser-verify.mjs chrome --headless route"
   },
   "dependencies": {
     "three": "^0.187.0"

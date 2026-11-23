@@ -92,7 +92,6 @@ export class SceneView {
   quality: Quality = 'cinematic';
   private level: StaticLevel;
   private floors: Floors; // map:
-  private pyS: number | null = null; private gyS: number[] = []; // map:
   private hemi = new THREE.HemisphereLight(0xffffff, 0x444444, 1);
   private sun = new THREE.DirectionalLight(0xffffff, 1);
   private fog = new THREE.Fog(0x888888, 20, 120);
@@ -355,11 +354,6 @@ export class SceneView {
 
   update(w: World, pose: RenderPose, yaw: number, pitch: number, dt: number, time: number): void {
     this.time = time;
-    // map: 平滑竖向高度（楼梯连续），鬼同理
-    const k = Math.min(1, dt * 14);
-    this.pyS = this.pyS === null ? w.player.y : this.pyS + (w.player.y - this.pyS) * k;
-    pose.y = this.pyS;
-    pose.ghosts.forEach((g, i) => { const t = w.ghosts[i]?.y ?? 0; this.gyS[i] = this.gyS[i] === undefined ? t : this.gyS[i] + (t - this.gyS[i]) * k; g.y = this.gyS[i]; });
     this.floors.update(w);
     this.applyLighting(w, pose, dt, time);
     this.props.update(w, dt, time);

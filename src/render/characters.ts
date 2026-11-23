@@ -1005,12 +1005,14 @@ export class GhostModels {
     panelMat.onBeforeCompile = (sh) => {
       sh.uniforms.uLean = a.cloth.uLean;
       sh.uniforms.uHeight = { value: 2.15 };
+      sh.uniforms.uOpacity = a.cloth.uOpacity;
       sh.vertexShader = sh.vertexShader
         .replace('#include <common>', '#include <common>\nuniform float uLean, uHeight;')
         .replace('#include <begin_vertex>', /* glsl */`#include <begin_vertex>
           float hh = clamp(transformed.y / uHeight, 0.0, 1.5);
           transformed.z += uLean * hh * hh * uHeight * 0.55;`);
-      sh.fragmentShader = sh.fragmentShader.replace('#include <map_fragment>', /* glsl */`#include <map_fragment>
+      sh.fragmentShader = 'uniform float uOpacity;\n' + sh.fragmentShader.replace('#include <map_fragment>', /* glsl */`#include <map_fragment>
+        diffuseColor.a *= uOpacity;
         float pLum = dot(diffuseColor.rgb, vec3(0.3333));
         diffuseColor.rgb = mix(vec3(pLum), diffuseColor.rgb, 0.3);`);
     };
@@ -1056,6 +1058,9 @@ export class GhostModels {
     this.greyTrail.update(dt);
     this.wraithTrail.update(dt);
     this.wraithDebris.update(dt);
+    if (this.reaper) this.reaper.root.visible = false;
+    this.procedural.group.visible = !this.reaper && w.ghosts.some((g) => g.kind === 'grey');
+    this.wraith.root.visible = false;
     w.ghosts.forEach((g, i) => {
       const pos = at[i] ?? g;
       if (g.kind === 'grey') {
@@ -1102,7 +1107,10 @@ export class GhostModels {
     a.root.position.y += lift + Math.sin(time * 1.7) * 0.03;
     // 兜帽暗腔与冷光点跟随主体前倾剪切（头部高度 hh≈0.87；剪切在网格局部空间，世界方向取反）
     const leanOff = -u.uLean.value * 0.886;
-    if (this.greyVoid) this.greyVoid.position.z = -0.16 + leanOff;
+    if (this.greyVoid) {
+      this.greyVoid.position.z = -0.16 + leanOff;
+      this.greyVoid.visible = g.mode !== 'dissolve';
+    }
     for (const e of this.eyes) {
       (e.material as THREE.SpriteMaterial).opacity = alpha * (0.22 + 0.08 * Math.sin(time * 2.3));
       e.position.z = -0.27 + leanOff;

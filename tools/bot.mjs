@@ -45,7 +45,9 @@ export class Bot {
   constructor(page, { mouseOnly = false } = {}) {
     this.page = page;
     this.mouseOnly = mouseOnly;
-    this.mx = 960; this.my = 540;
+    const { width, height } = page.viewportSize();
+    this.centerX = width / 2; this.centerY = height / 2;
+    this.mx = this.centerX; this.my = this.centerY;
     this.fwd = false; this.sprint = false; this.raise = false; this.raiseAt = 0;
     this.unexpectedPauses = 0;
     this.lockRetries = 0;
@@ -128,8 +130,8 @@ export class Bot {
     await this.resetInputs();
     for (let i = 0; ; i++) {
       await clickButton(this.page, text);
-      await this.page.mouse.move(960, 540);
-      this.mx = 960; this.my = 540;
+      await this.page.mouse.move(this.centerX, this.centerY);
+      this.mx = this.centerX; this.my = this.centerY;
       if (!expectLock) return;
       try {
         await this.page.waitForFunction(() => window.__awProbe.lite().locked, null, { timeout: 2500, polling: 50 });
@@ -177,10 +179,10 @@ export class Bot {
     await this.page.mouse.move(this.mx, this.my);
   }
 
-  async aim(yaw, tol = 0.02) {
+  async aim(yaw, tol = 0.02, pitch = PITCH) {
     for (let i = 0; i < 10; i++) {
       const s = await this.lite();
-      const ey = wrap(yaw - s.yaw), ep = PITCH - s.pitch;
+      const ey = wrap(yaw - s.yaw), ep = pitch - s.pitch;
       if (Math.abs(ey) < tol && Math.abs(ep) < 0.05) return;
       await this.nudge(ey, ep);
       await sleep(20);
@@ -207,7 +209,7 @@ export class Bot {
   }
 
   /** 沿导航图走到某点附近。night 为 true 时被追就冲刺、鬼近身就举灯。 */
-  async walkTo(x, z, { stop = 0.3, sprint = false, night = false, maxSecs = 150 } = {}) {
+  async walkTo(x, z, { stop = 0.3, sprint = false, night = false, maxSecs = 150, floor } = {}) {
     const t0 = Date.now();
     let path = null, n = 0, mark = null, markAt = Date.now();
     try {
@@ -218,9 +220,9 @@ export class Bot {
         if (s.screen) throw new Error(`走位时出现意外界面：${s.screen}`);
         if (s.world.phase === 'ended') return;
         const p = s.world.player;
-        if (Math.hypot(p.x - x, p.z - z) <= stop) return;
+        if (Math.hypot(p.x - x, p.z - z) <= stop && (!floor || p.floor === floor)) return;
         if (!path || n % 6 === 0) {
-          path = await this.page.evaluate(([a, b]) => window.__awProbe.path(a, b), [x, z]);
+          path = await this.page.evaluate(([a, b, f]) => window.__awProbe.path(a, b, f ?? undefined), [x, z, floor ?? null]);
           if (!path || !path.length) throw new Error(`从 (${p.x.toFixed(1)}, ${p.z.toFixed(1)}) 到 (${x}, ${z}) 没有路径`);
         }
         n++;
@@ -243,9 +245,9 @@ export class Bot {
 
   /** 走到站位、对准交互点并交互一次。返回当时准星是否命中该目标且可用。 */
   async use(id, stand, { night = false, sprint = false, expect = true } = {}) {
-    if (stand) await this.walkTo(stand.x, stand.z, { night, sprint });
-    await this.setForward(false);
     const it = this.interacts.find((i) => i.id === id);
+    if (stand) await this.walkTo(stand.x, stand.z, { night, sprint, floor: it.floor });
+    await this.setForward(false);
     let s = await this.lite();
     for (let i = 0; i < 3; i++) {
       await this.guard(s);

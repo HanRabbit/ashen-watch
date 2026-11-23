@@ -24,7 +24,9 @@ export class CameraRig {
   private springPos = new THREE.Vector3();
   private springVel = new THREE.Vector3();
   private sprung = false;
+  private world: World | null = null;
   private tmp = new THREE.Vector3();
+  private anchor = new THREE.Vector3();
 
   constructor(private camera: THREE.PerspectiveCamera) {}
 
@@ -69,6 +71,14 @@ export class CameraRig {
       this.sprung = false;
       return 10;
     }
+    if (this.world !== w) {
+      this.world = w;
+      this.sprung = false;
+      this.camDist = CAM.dist;
+      this.camShoulder = CAM.shoulder;
+      this.yawS = yaw;
+      this.pitchS = pitch;
+    }
     const moving = w.player.moving;
     const sprinting = moving && w.player.sprinting;
     this.moveBlend = lerp(this.moveBlend, moving ? 1 : 0, Math.min(1, dt * 4));
@@ -110,6 +120,16 @@ export class CameraRig {
     this.springVel.y += (omega * omega * (target.y - this.springPos.y) - 2 * omega * this.springVel.y) * step;
     this.springVel.z += (omega * omega * (target.z - this.springPos.z) - 2 * omega * this.springVel.z) * step;
     this.springPos.addScaledVector(this.springVel, step);
+    // The target boom is collision-tested, but its spring can still lag across
+    // a wall or the lip of a staircase when the player turns while descending.
+    // Clip the resulting boom too, so smoothing never moves the view through stone.
+    const anchor = this.anchor.set(ax, py, -az);
+    const t = cameraClearT(ax, az, py, this.springPos.x, -this.springPos.z, this.springPos.y, w.doors);
+    if (t < 1) {
+      const length = anchor.distanceTo(this.springPos);
+      this.springPos.lerp(anchor, 1 - Math.max(0, t - 0.18 / Math.max(0.18, length)));
+      this.springVel.set(0, 0, 0);
+    }
     this.camera.position.copy(this.springPos);
 
     // 受击冲击： look 目标短促抖动，幅度极小
@@ -129,6 +149,6 @@ export class CameraRig {
       this.camera.fov = this.fov;
       this.camera.updateProjectionMatrix();
     }
-    return d;
+    return anchor.distanceTo(this.springPos);
   }
 }

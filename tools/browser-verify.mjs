@@ -1,6 +1,6 @@
 // 浏览器内验收：在生产构建上用真实键鼠事件跑 A01、A02、A03、A08、A11、A12 的浏览器部分。
 // 用法：node tools/browser-verify.mjs [chrome|msedge] [--headless] [场景名…]
-// 场景：kbm / mouse / tab / storage；step2 跑第二步修复组合与不修复验收矩阵。
+// 场景：kbm / mouse / tab / storage；step2 跑修复矩阵；route 实走三层地图。
 // 需要先 npm run build && npm run preview。结果写到 docs/verification/browser-<场景>-<浏览器>.json。
 import fs from 'node:fs';
 import path from 'node:path';
@@ -267,11 +267,9 @@ async function playthrough(name, { mouseOnly, query, repairs, duskWaitSecs, dayW
   const { browser, page, errors } = await launch({ channel, headless });
   const perf = [];
   try {
+    if (headless) await setInitialQuality(page, 'high');
     await page.goto(`${BASE}?probe=1${query ? `&${query}` : ''}`);
     await ready(page);
-    // map: 无头 swiftshader 下 VSM 阴影间歇崩溃；无头验收用 high(PCF) 档，cinematic 预算另以 ref 机位核验
-    await page.evaluate((hl) => { localStorage.clear(); if (hl) localStorage.setItem('ashen-watch/settings', JSON.stringify({ mode: 'kbm', sensitivity: 1, brightness: 1, volume: 0.7, quality: 'high', binds: {} })); }, headless);
-    await page.reload(); await ready(page);
     rep.data.gpu = await page.evaluate(() => window.__awProbe.gpu());
     rep.data.preset = (await fullOf(page)).preset;
     rep.data.viewport = page.viewportSize();
@@ -320,6 +318,83 @@ async function playthrough(name, { mouseOnly, query, repairs, duskWaitSecs, dayW
   }
   rep.save(errors);
   await browser.close();
+  return rep;
+}
+
+/** A fresh browser context needs no clear/reload that would initialize WebGL twice. */
+async function setInitialQuality(page, quality) {
+  await page.addInitScript((q) => {
+    localStorage.setItem('ashen-watch/settings', JSON.stringify({ mode: 'kbm', sensitivity: 1, brightness: 1, volume: 0.7, quality: q, binds: {} }));
+  }, quality);
+}
+
+/** Play the whole height loop with mouse/key input. No stage changes or fixed cameras. */
+async function routeScenario() {
+  const rep = new Report('route');
+  const { browser, page, errors } = await launch({ channel, headless });
+  const viewport = page.viewportSize();
+  const quality = process.env.AW_ROUTE_QUALITY ?? (headless ? 'high' : 'cinematic');
+  rep.data.viewport = viewport;
+  rep.data.quality = quality;
+  rep.data.stops = [];
+  const bot = new Bot(page);
+  const walk = (x, z, floor = '1F') => bot.walkTo(x, z, { floor, stop: 0.24, maxSecs: 30 });
+  const capture = async (label, floor, yaw, pitch) => {
+    await bot.aim(yaw, 0.025, pitch);
+    await sleep(300);
+    const { world, yaw: aim } = await liteOf(page);
+    const { x, y, z, floor: here } = world.player;
+    const perf = (await fullOf(page)).perf;
+    rep.data.stops.push({ label, x, y, z, floor: here, yaw: aim, calls: perf.calls, triangles: perf.triangles });
+    rep.check(`${label} — ${floor}`, here === floor, `(${x.toFixed(2)}, ${y.toFixed(2)}, ${z.toFixed(2)})`);
+    await shot(page, `route-${label}.png`);
+  };
+  try {
+    await setInitialQuality(page, quality);
+    await page.goto(`${BASE}?preset=dev&dayscale=1`);
+    await ready(page);
+    await page.evaluate(() => { document.getElementById('debug').hidden = true; });
+    await startNewGame(bot);
+    await doTutorial(bot);
+    await bot.use('ghDoor', STAND.doorIn);
+    await walk(4.0, 9.9);
+    await capture('01-cellar-entrance', '1F', Math.PI / 2, 0.4);
+    await walk(10.15, 9.9, 'B1');
+    await capture('02-cellar-landing', 'B1', -Math.PI / 2, -0.2);
+    await bot.use('flask', STAND.flask);
+    rep.check('从真实洞口进入 B1 并取得油瓶', (await liteOf(page)).world.taken.flask);
+    await walk(15.15, 17.28, 'B1');
+    await capture('03-store-stair', 'B1', 0, -0.2);
+    await walk(16.8, 21.0);
+    await capture('04-chapel-from-cellar', '1F', Math.PI, 0.3);
+    await bot.use('chapelFront', STAND.frontIn);
+    rep.check('礼拜堂西门从门厅可开', (await liteOf(page)).world.doors.chapelFront);
+    await walk(12.55, 16.5);
+    await capture('05-chapel-west-door', '1F', Math.PI / 2, 0);
+    await bot.use('crate', STAND.crate);
+    await bot.use('shelf', STAND.shelf);
+    await walk(3.4, 1.4);
+    await capture('06-wall-stair-base', '1F', Math.PI / 2, -0.25);
+    await walk(9.2, 12, '2F');
+    await capture('07-east-walk', '2F', -Math.PI / 3, 0.05);
+    await walk(16.1, 21.15, '2F');
+    await capture('08-chapel-gallery', '2F', Math.PI / 2, 0.12);
+    await repairVia(bot, 'gate', STAND.gateW, 'confirm');
+    await bot.use('gate', null);
+    await walk(29, 21.15);
+    await capture('09-nave-from-gallery', '1F', Math.PI, 0.05);
+    await walk(1.45, 1.65);
+    await capture('10-return-to-gatehouse', '1F', Math.PI, 0.05);
+    rep.check('走过四条楼梯并回到门房门前', (await liteOf(page)).world.repairs.gate);
+    rep.check('全程控制台无报错', errors.length === 0, errors.join(' | '));
+  } catch (e) {
+    rep.check('实走路线完成', false, e.message);
+    rep.data.stateAtError = await liteOf(page).then(({world, yaw, screen}) => ({ player: world.player, doors: world.doors, yaw, screen })).catch(() => null);
+    await shot(page, 'route-error.png').catch(() => {});
+  } finally {
+    rep.save(errors);
+    await browser.close();
+  }
   return rep;
 }
 
@@ -482,6 +557,7 @@ const RUN = {
   'step2-gate-bolt': () => matrix('step2-gate-bolt', ['gate','bolt']),
   'step2-none': () => matrix('step2-none', []),
   'step2-mouse': () => matrix('step2-mouse', ['lamp','gate'], true),
+  route: routeScenario,
   tab: tabScenario,
   storage: storageScenario,
   // 纯鼠标：开发预设但时钟不加速（只为读探针）。不跳过，让白天、黄昏两段计时自己走完
@@ -492,7 +568,7 @@ const RUN = {
 
 let failed = 0;
 for (const name of scenarios) {
-  if (!RUN[name]) { console.error(`未知场景：${name}（可选 ${[...ALL, ...STEP2, 'step2'].join('、')}）`); process.exit(2); }
+  if (!RUN[name]) { console.error(`未知场景：${name}（可选 ${[...ALL, ...STEP2, 'step2', 'route'].join('、')}）`); process.exit(2); }
   const rep = await RUN[name]();
   failed += rep.failed;
   console.log(`  ${name}：${rep.checks.length - rep.failed}/${rep.checks.length} 项通过，用时 ${Math.round((Date.now() - rep.t0) / 1000)} 秒`);

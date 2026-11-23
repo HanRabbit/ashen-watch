@@ -2,7 +2,7 @@
 // 坐标约定与 staticLevel 一致：Batch 接收模拟坐标 (x, y, z)，渲染 z 取负。
 import * as THREE from 'three';
 import { RAISED_Y } from '../sim/level';
-import { archLeaf, archPath, Batch, gable } from './geom';
+import { archBand, archHeader, archLeaf, archPath, Batch, gable } from './geom';
 import { Materials, scaleUV, tiledBox } from './materials';
 import { variants } from './materialVariants';
 
@@ -11,27 +11,6 @@ const HALF_PI = Math.PI / 2;
 
 export interface Landmarks {
   group: THREE.Group;
-}
-
-/** 尖拱饰带（罩拱线脚）：外拱 minus 内拱的单一路径，避免 hole 贴边。 */
-function archBand(w: number, s: number, p: number, t: number, d: number): THREE.BufferGeometry {
-  const k = s + (p - s) * 0.72;
-  const ko = s + (p + t - s) * 0.72;
-  const shape = new THREE.Shape();
-  shape.moveTo(-w / 2 - t, 0);
-  shape.lineTo(-w / 2 - t, s);
-  shape.quadraticCurveTo(-w / 2 - t, ko, 0, p + t);
-  shape.quadraticCurveTo(w / 2 + t, ko, w / 2 + t, s);
-  shape.lineTo(w / 2 + t, 0);
-  shape.lineTo(w / 2, 0);
-  shape.lineTo(w / 2, s);
-  shape.quadraticCurveTo(w / 2, k, 0, p);
-  shape.quadraticCurveTo(-w / 2, k, -w / 2, s);
-  shape.lineTo(-w / 2, 0);
-  shape.lineTo(-w / 2 - t, 0);
-  const geo = new THREE.ExtrudeGeometry(shape, { depth: d, bevelEnabled: false, curveSegments: 10 });
-  geo.translate(0, 0, -d / 2);
-  return scaleUV(geo, 0.5);
 }
 
 /** 矩形墙 + 三角山墙合一的立面，中央开尖拱大窗。base 为墙底，wallH 为檐口高，apex 为山尖高（相对 base）。 */
@@ -176,7 +155,7 @@ export function buildLandmarks(m: Materials): Landmarks {
   // 材质族（圣经 5.1）：立面/侧墙 ashlar，门窗套/券石/扶壁/线脚/尖塔/台阶/压顶 trim，墙基/补砌 rough。
   const v = variants(m);
   const ash = v.wallAshlar, trim = v.wallTrim, rough = v.wallRough;
-  const woodPlank = v.woodPlank, woodBeam = v.woodBeam, roofShingle = v.roofShingle;
+  const woodPlank = v.woodPlank, woodBeam = v.woodBeam;
 
   const glassTex = leadedGlassTexture();
   const glassMat = new THREE.MeshStandardMaterial({
@@ -267,7 +246,7 @@ export function buildLandmarks(m: Materials): Landmarks {
   // ——— 北立面（正门主立面，z 25..25.5）：大山墙 + 玫瑰窗 + 三层退缩门洞 ———
   b.geo(ash, gableFacade(11, 4, 9.2, 4.0, 0.9, 4.0, 7.0, 0.5), 19, 7, 25.25);
   b.geo(glassMat, scaleUV(archLeaf(4.0, 4.0, 7.0, 0.05), 0.3), 19, 7.9, 25.25);
-  tracery(b, trim, 19, 25.18, 7.9, 4.0, 11.9, 14.0, 0, true);
+  tracery(b, trim, 19, 25.46, 7.9, 4.0, 11.9, 14.0, 0, true);
   b.geo(trim, archBand(4.0, 4.0, 7.0, 0.2, 0.22), 19, 7.9, 25.55);
   // 山墙压顶 + 十字
   const nAng = Math.atan2(5.2, 5.5);
@@ -289,40 +268,22 @@ export function buildLandmarks(m: Materials): Landmarks {
   for (let i = 0; i < 3; i++) {
     b.geo(woodPlank, tiledBox(1.5, 0.22, 0.07, 0.6), 22.7, 8.3 + i * 0.75, 25.62, 0, 0, (i % 2 ? -1 : 1) * 0.18);
   }
-  // 三层退缩尖拱门洞（archivolt）
-  b.geo(trim, (() => {
-    const shape = new THREE.Shape();
-    shape.moveTo(-2.3, 0); shape.lineTo(2.3, 0); shape.lineTo(2.3, 5.0); shape.lineTo(-2.3, 5.0); shape.lineTo(-2.3, 0);
-    shape.holes.push(archPath(new THREE.Path(), 3.4, 3.0, 4.6));
-    const g = new THREE.ExtrudeGeometry(shape, { depth: 0.28, bevelEnabled: false, curveSegments: 12 });
-    g.translate(0, 0, -0.14); return scaleUV(g, 0.5);
-  })(), 19, R, 25.6);
-  b.geo(trim, (() => {
-    const shape = new THREE.Shape();
-    shape.moveTo(-1.9, 0); shape.lineTo(1.9, 0); shape.lineTo(1.9, 4.5); shape.lineTo(-1.9, 4.5); shape.lineTo(-1.9, 0);
-    shape.holes.push(archPath(new THREE.Path(), 2.6, 2.7, 4.1));
-    const g = new THREE.ExtrudeGeometry(shape, { depth: 0.26, bevelEnabled: false, curveSegments: 12 });
-    g.translate(0, 0, -0.13); return scaleUV(g, 0.5);
-  })(), 19, R, 25.76);
-  b.geo(trim, (() => {
-    const shape = new THREE.Shape();
-    shape.moveTo(-1.5, 0); shape.lineTo(1.5, 0); shape.lineTo(1.5, 4.0); shape.lineTo(-1.5, 4.0); shape.lineTo(-1.5, 0);
-    shape.holes.push(archPath(new THREE.Path(), 2.0, 2.4, 3.6));
-    const g = new THREE.ExtrudeGeometry(shape, { depth: 0.24, bevelEnabled: false, curveSegments: 12 });
-    g.translate(0, 0, -0.12); return scaleUV(g, 0.5);
-  })(), 19, R, 25.92);
-  // 门侧束柱
-  for (const [dx, r] of [[-1.62, 0.09], [1.62, 0.09], [-1.22, 0.08], [1.22, 0.08]] as [number, number][]) {
-    b.geo(trim, new THREE.CylinderGeometry(r, r, 2.6, 8), 19 + dx, R + 1.3, 25.7);
-    b.geo(trim, new THREE.CylinderGeometry(r + 0.05, r + 0.07, 0.14, 8), 19 + dx, R + 2.65, 25.7);
+  // The opening in the sim wall is rectangular; this infill closes the head above
+  // the leaves. The archivolts are open-bottom bands, so neither triangles nor a
+  // porch intersect the passage or float in front of the hinge when the door opens.
+  b.geo(ash, archHeader(1.8, 2.2, 3.2, 6.55, 0.5), 19, R, 25.25);
+  for (const [w, spring, peak, ring, z] of [
+    [1.85, 2.2, 3.22, 0.21, 25.55],
+    [2.27, 2.37, 3.51, 0.23, 25.7],
+    [2.74, 2.52, 3.84, 0.21, 25.83],
+  ]) b.geo(trim, archBand(w, spring, peak, ring, 0.3), 19, R, z);
+  for (const dx of [-1.43, -1.17, 1.17, 1.43]) {
+    b.geo(trim, new THREE.CylinderGeometry(0.11, 0.14, 0.16, 8), 19 + dx, R + 0.08, 25.93);
+    b.geo(trim, new THREE.CylinderGeometry(0.075, 0.09, 2.25, 8), 19 + dx, R + 1.29, 25.93);
+    b.geo(trim, new THREE.CylinderGeometry(0.13, 0.1, 0.17, 8), 19 + dx, R + 2.48, 25.93);
   }
-  // 门 bay 披檐罩棚（高门洞上方，替代被开洞的外廊披檐段）：向庭院斜落的石板瓦 pent roof
-  b.geo(roofShingle, tiledBox(5.6, 0.14, 2.2, 1.2), 19, 5.2, 26.4, 0, -0.5, 0);
-  b.box(woodBeam, 16.2, 27.3, 21.8, 27.45, 4.62, 4.78, 1); // 檐口封檐板
-  for (const x of [16.4, 21.6]) b.geo(woodBeam, tiledBox(0.14, 0.14, 2.0, 0.6), x, 5.05, 26.4, 0, -0.5, 0); // 斜撑
-  // 门前台阶（两级，贴立面，不挡门扇回转）
-  b.box(trim, 16.9, 25.5, 21.1, 25.78, R, R + 0.14);
-  b.box(trim, 16.9, 25.78, 21.1, 26.1, R, R + 0.07);
+  b.box(trim, 17.1, 25.58, 20.9, 25.95, R - 0.02, R + 0.07);
+  b.box(rough, 17.04, 25.94, 20.96, 26.23, R - 0.03, R + 0.035);
   // 北立面扶壁（出挑 0.45，贴墙）
   for (const x of [13.75, 24.25]) {
     b.box(trim, x - 0.4, 25.5, x + 0.4, 25.95, 0, 7.4);
@@ -434,7 +395,7 @@ export function buildLandmarks(m: Materials): Landmarks {
         const fog = scene.fog as THREE.Fog | null;
         if (!fog) return;
         const night: number = scene.userData.night ?? 0;
-        glassMat.emissiveIntensity = 0.3 * night;
+        glassMat.emissiveIntensity = 0.12 * night;
       };
     }
   });

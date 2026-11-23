@@ -56,6 +56,27 @@ export class Batch {
   }
 }
 
+/** 尖拱饰带（罩拱线脚）：外拱 minus 内拱的单一路径，避免 hole 贴边。 */
+export function archBand(w: number, s: number, p: number, t: number, d: number): THREE.BufferGeometry {
+  const k = s + (p - s) * 0.72;
+  const ko = s + (p + t - s) * 0.72;
+  const shape = new THREE.Shape();
+  shape.moveTo(-w / 2 - t, 0);
+  shape.lineTo(-w / 2 - t, s);
+  shape.quadraticCurveTo(-w / 2 - t, ko, 0, p + t);
+  shape.quadraticCurveTo(w / 2 + t, ko, w / 2 + t, s);
+  shape.lineTo(w / 2 + t, 0);
+  shape.lineTo(w / 2, 0);
+  shape.lineTo(w / 2, s);
+  shape.quadraticCurveTo(w / 2, k, 0, p);
+  shape.quadraticCurveTo(-w / 2, k, -w / 2, s);
+  shape.lineTo(-w / 2, 0);
+  shape.lineTo(-w / 2 - t, 0);
+  const geo = new THREE.ExtrudeGeometry(shape, { depth: d, bevelEnabled: false, curveSegments: 10 });
+  geo.translate(0, 0, -d / 2);
+  return scaleUV(geo, 0.5);
+}
+
 /** 尖拱轮廓：宽 w，起拱高 s，拱顶高 p，底边在 y=0，中心在 x=0。 */
 export function archPath<T extends THREE.Path>(path: T, w: number, s: number, p: number): T {
   const k = s + (p - s) * 0.72;
