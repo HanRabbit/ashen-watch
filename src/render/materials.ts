@@ -620,12 +620,12 @@ float awPolish;
 uniform vec3 uAwTint;
 uniform sampler2D uAwHeightMap;
 uniform sampler2D uAwBlendAlbedo, uAwBlendNormal, uAwBlendRough, uAwBlendDisp;
-vec2 awUv;
+vec2 awUv, awDx, awDy;
 float awWet, awMoss, awPuddle, awBlend;
 ${STONE_POOL_GLSL}
 float awHeight(vec2 uv) {
-  float h = texture2D(uAwHeightMap, uv).r;
-  if (uAwHasBlend > 0.5) h = mix(h, texture2D(uAwBlendDisp, uv).r, awBlend);
+  float h = textureGrad(uAwHeightMap, uv, awDx, awDy).r;
+  if (awBlend > 0.001) h = mix(h, textureGrad(uAwBlendDisp, uv, awDx, awDy).r, awBlend);
   return h;
 }
 vec2 awPom(vec2 uv, vec3 vTs) {
@@ -668,10 +668,12 @@ const AW_MAP_BLOCK = /* glsl */`
     awBlend *= awUp * awCourtY * (1.0 - smoothstep(10.5, 11.5, abs(vAwWorldPos.x)));
   }
   vec3 dp1 = dFdx(vAwWorldPos), dp2 = dFdy(vAwWorldPos);
-  vec2 duv1 = dFdx(vMapUv), duv2 = dFdy(vMapUv);
+  // The undisplaced UV derivatives stay valid inside divergent POM steps, and prevent
+  // mip selection from jumping as the parallax intersection crosses a stone joint.
+  awDx = dFdx(vMapUv); awDy = dFdy(vMapUv);
   vec3 dp2p = cross(dp2, awN), dp1p = cross(awN, dp1);
-  vec3 T = dp2p * duv1.x + dp1p * duv2.x;
-  vec3 B = dp2p * duv1.y + dp1p * duv2.y;
+  vec3 T = dp2p * awDx.x + dp1p * awDy.x;
+  vec3 B = dp2p * awDx.y + dp1p * awDy.y;
   float invmax = inversesqrt(max(dot(T, T), dot(B, B)) + 1e-8);
   mat3 awTBN = mat3(T * invmax, B * invmax, awN);
   awUv = awPom(vMapUv, awV * awTBN);
@@ -699,8 +701,8 @@ const AW_MAP_BLOCK = /* glsl */`
 
   // Diffuse/normal/AO already carry the scanned joints. A thresholded height mask
   // cannot distinguish a low slab from mortar and paints away its surface detail.
-  vec4 awSample = texture2D(map, awUv);
-  if (awBlend > 0.001) awSample = mix(awSample, texture2D(uAwBlendAlbedo, awUv), awBlend);
+  vec4 awSample = textureGrad(map, awUv, awDx, awDy);
+  if (awBlend > 0.001) awSample = mix(awSample, textureGrad(uAwBlendAlbedo, awUv, awDx, awDy), awBlend);
   float awLum = dot(awSample.rgb, vec3(0.2126, 0.7152, 0.0722));
   if (uAwRubble > 0.0) {
     // Toned lime mortar, not white hand-painted outlines. Keep grain and spatial variation.
@@ -733,7 +735,7 @@ const AW_MAP_BLOCK = /* glsl */`
 
 const AW_ROUGH_BLOCK = /* glsl */`
 // Compress the raw scan range for dielectric stone; polished traffic is not a mirror.
-if (awBlend > 0.001) roughnessFactor = mix(roughnessFactor, texture2D(uAwBlendRough, awUv).g, awBlend);
+if (awBlend > 0.001) roughnessFactor = mix(roughnessFactor, textureGrad(uAwBlendRough, awUv, awDx, awDy).g, awBlend);
 roughnessFactor = mix(0.58, 1.0, roughnessFactor);
 roughnessFactor -= 0.12 * awWet + 0.10 * awPolish;
 roughnessFactor = mix(roughnessFactor, 0.94, awMoss * 0.35);
@@ -743,13 +745,18 @@ roughnessFactor = mix(roughnessFactor, 0.23, awPuddle);
 const AW_NORMAL_BLOCK = /* glsl */`
 #ifdef USE_NORMALMAP_TANGENTSPACE
 if (awBlend > 0.001) {
-  vec3 awBN = texture2D(uAwBlendNormal, awUv).xyz * 2.0 - 1.0;
+  vec3 awBN = textureGrad(uAwBlendNormal, awUv, awDx, awDy).xyz * 2.0 - 1.0;
   awBN.xy *= normalScale;
   normal = normalize(mix(normal, normalize(tbn * awBN), awBlend));
 }
 #endif
 normal = normalize(mix(normal, nonPerturbedNormal, awPuddle * 0.9 + awMoss * 0.09));
 `;
+
+function stoneMapUV(chunk: string, slot: string, uv: string): string {
+  return chunk.replace(new RegExp(`texture2D\\(\\s*${slot}\\s*,\\s*${uv}\\s*\\)`, 'g'),
+    `textureGrad(${slot}, awUv, awDx, awDy)`);
+}
 
 /** 给石材类材质挂上共享着色器扩展。uniforms 存 userData 供 enhance 写入 disp 高度图。 */
 export function stoneShader(mat: THREE.MeshStandardMaterial, u: AwUniforms): void {
@@ -761,9 +768,9 @@ export function stoneShader(mat: THREE.MeshStandardMaterial, u: AwUniforms): voi
       .replace('#include <project_vertex>', '#include <project_vertex>\n' + AW_VERT_POS);
     shader.fragmentShader = AW_FRAG_PREFIX + shader.fragmentShader
       .replace('#include <map_fragment>', AW_MAP_BLOCK)
-      .replace('#include <roughnessmap_fragment>', THREE.ShaderChunk.roughnessmap_fragment.replaceAll('vRoughnessMapUv', 'awUv') + AW_ROUGH_BLOCK)
-      .replace('#include <normal_fragment_maps>', THREE.ShaderChunk.normal_fragment_maps.replaceAll('vNormalMapUv', 'awUv') + AW_NORMAL_BLOCK)
-      .replace('#include <aomap_fragment>', THREE.ShaderChunk.aomap_fragment.replaceAll('vAoMapUv', 'awUv'))
+      .replace('#include <roughnessmap_fragment>', stoneMapUV(THREE.ShaderChunk.roughnessmap_fragment, 'roughnessMap', 'vRoughnessMapUv') + AW_ROUGH_BLOCK)
+      .replace('#include <normal_fragment_maps>', stoneMapUV(THREE.ShaderChunk.normal_fragment_maps, 'normalMap', 'vNormalMapUv') + AW_NORMAL_BLOCK)
+      .replace('#include <aomap_fragment>', stoneMapUV(THREE.ShaderChunk.aomap_fragment, 'aoMap', 'vAoMapUv'))
       .replace('#include <lights_physical_fragment>', /* glsl */`
         #include <lights_physical_fragment>
         // Water IOR ≈ 1.33: F0 ≈ 0.02, versus 0.04 for the base dielectric stone.

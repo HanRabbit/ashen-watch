@@ -35,9 +35,9 @@ float awRoomPath(vec3 origin, vec3 ray, vec3 invRay, float end, vec3 lo, vec3 hi
 }
 float awUndergroundPath(vec3 origin, vec3 ray, float end) {
   const float grade = -0.12;
-  if (abs(ray.y) < 1e-4) return origin.y < grade ? end : 0.0;
+  if (abs(ray.y) < 1e-4) return origin.y < grade ? awHeightPath(origin, ray, 0.0, end) : 0.0;
   float crossing = clamp((grade - origin.y) / ray.y, 0.0, end);
-  return ray.y > 0.0 ? crossing : end - crossing;
+  return ray.y > 0.0 ? awHeightPath(origin, ray, 0.0, crossing) : awHeightPath(origin, ray, crossing, end);
 }
 float awAirDensity(vec3 world, float sheltered) {
   return exp(-uFog.y * max(world.y - uFog.z, 0.0)) * sheltered;
