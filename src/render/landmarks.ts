@@ -2,81 +2,16 @@
 // 坐标约定与 staticLevel 一致：Batch 接收模拟坐标 (x, y, z)，渲染 z 取负。
 import * as THREE from 'three';
 import { RAISED_Y } from '../sim/level';
-import { archBand, archHeader, archLeaf, archPath, Batch, gable } from './geom';
+import { archBand, archHeader, archLeaf, Batch } from './geom';
 import { Materials, scaleUV, tiledBox } from './materials';
 import { variants } from './materialVariants';
+import { chapelGlass, glazedWall, type Light } from './chapelWindows';
 
 const R = RAISED_Y;
 const HALF_PI = Math.PI / 2;
 
 export interface Landmarks {
   group: THREE.Group;
-}
-
-/** 矩形墙 + 三角山墙合一的立面，中央开尖拱大窗。base 为墙底，wallH 为檐口高，apex 为山尖高（相对 base）。 */
-function gableFacade(width: number, wallH: number, apex: number, winW: number, winBase: number, winSpring: number, winPeak: number, d: number): THREE.BufferGeometry {
-  const shape = new THREE.Shape();
-  shape.moveTo(-width / 2, 0);
-  shape.lineTo(width / 2, 0);
-  shape.lineTo(width / 2, wallH);
-  shape.lineTo(0, apex);
-  shape.lineTo(-width / 2, wallH);
-  shape.lineTo(-width / 2, 0);
-  const k = winSpring + (winPeak - winSpring) * 0.72;
-  const hole = new THREE.Path();
-  hole.moveTo(-winW / 2, winBase);
-  hole.lineTo(-winW / 2, winSpring);
-  hole.quadraticCurveTo(-winW / 2, k, 0, winPeak);
-  hole.quadraticCurveTo(winW / 2, k, winW / 2, winSpring);
-  hole.lineTo(winW / 2, winBase);
-  hole.lineTo(-winW / 2, winBase);
-  shape.holes.push(hole);
-  const geo = new THREE.ExtrudeGeometry(shape, { depth: d, bevelEnabled: false, curveSegments: 12 });
-  geo.translate(0, 0, -d / 2);
-  return scaleUV(geo, 0.5);
-}
-
-/** 铅条玻璃：暗蓝灰底 + 菱形铅条网格。bright 版为夜内烛光 emissiveMap：
- *  暗金底、每格烛光不均匀（下部烛位偏亮、上部渐暗、个别格熄灭），铅条保持近黑。 */
-function leadedGlassTexture(bright = false): THREE.CanvasTexture {
-  const W = 128, H = 256;
-  const c = document.createElement('canvas');
-  c.width = W; c.height = H;
-  const g = c.getContext('2d')!;
-  g.fillStyle = bright ? '#160d06' : '#1a222e';
-  g.fillRect(0, 0, W, H);
-  let s = 401;
-  const rnd = (): number => { s = (s * 1103515245 + 12345) & 0x7fffffff; return s / 0x7fffffff; };
-  // 菱形格子的明暗变化（每格一块玻璃）
-  const cell = 16;
-  for (let y = -1; y < H / cell + 1; y++) {
-    for (let x = -1; x < W / cell + 1; x++) {
-      const v = rnd();
-      if (bright) {
-        // 烛光：垂直方向下亮上暗 + 每格随机强弱，约 1/5 格几乎熄灭
-        const heightFall = 0.35 + 0.65 * Math.pow(y / (H / cell), 1.4);
-        const candle = v < 0.2 ? 0.04 : 0.25 + rnd() * 0.75;
-        const a = Math.min(1, heightFall * candle);
-        g.fillStyle = `rgba(255,236,205,${(a * 0.85).toFixed(3)})`;
-      } else {
-        g.fillStyle = v < 0.5 ? `rgba(8,12,20,${0.25 + rnd() * 0.3})` : `rgba(70,86,104,${0.1 + rnd() * 0.18})`;
-      }
-      g.beginPath();
-      const cx = x * cell + (y % 2) * cell * 0.5, cy = y * cell;
-      g.moveTo(cx, cy - cell * 0.6); g.lineTo(cx + cell * 0.5, cy); g.lineTo(cx, cy + cell * 0.6); g.lineTo(cx - cell * 0.5, cy);
-      g.closePath(); g.fill();
-    }
-  }
-  // 铅条
-  g.strokeStyle = bright ? 'rgba(4,3,2,0.95)' : 'rgba(6,8,10,0.9)'; g.lineWidth = 1.6;
-  for (let i = -H; i < W + H; i += cell) {
-    g.beginPath(); g.moveTo(i, 0); g.lineTo(i + H, H); g.stroke();
-    g.beginPath(); g.moveTo(i + H, 0); g.lineTo(i, H); g.stroke();
-  }
-  const t = new THREE.CanvasTexture(c);
-  t.wrapS = t.wrapT = THREE.RepeatWrapping;
-  t.colorSpace = THREE.SRGBColorSpace;
-  return t;
 }
 
 /** 小尖塔：八角塔身 + 卷叶饰 + 尖锥 + 顶珠。y0 为基座底。 */
@@ -115,39 +50,6 @@ function buttress(b: Batch, mat: THREE.Material, z: number, tall: boolean): void
   else b.geo(mat, new THREE.ConeGeometry(0.3, 0.9, 4), 12.9, top + 0.6, z, Math.PI / 4);
 }
 
-/** 窗花：中梃 + 小尖拱 + 三叶/四叶饰。rotY 用于西墙（HALF_PI）。 */
-function tracery(b: Batch, mat: THREE.Material, cx: number, cz: number, yBase: number, w: number, spring: number, peak: number, rotY: number, rose: boolean): void {
-  const mullions = rose ? [-w / 6, w / 6] : [0];
-  const subW = rose ? w / 3 : w / 2;
-  for (const off of mullions) {
-    const mx = cx + (rotY ? 0 : off), mz = cz + (rotY ? off : 0);
-    b.geo(mat, tiledBox(rotY ? 0.14 : 0.11, spring - yBase + 0.5, rotY ? 0.11 : 0.14, 0.5), mx, (yBase + spring + 0.5) / 2, mz);
-  }
-  // 子尖拱罩
-  for (let i = 0; i < (rose ? 3 : 2); i++) {
-    const off = (i - (rose ? 1 : 0.5)) * subW;
-    const sx = cx + (rotY ? 0 : off), sz = cz + (rotY ? off : 0);
-    b.geo(mat, archBand(subW - 0.1, spring - yBase - 0.35, peak - yBase - (rose ? 1.5 : 0.9), 0.09, 0.12), sx, yBase + 0.35, sz, rotY);
-  }
-  if (rose) {
-    // 玫瑰窗：大环 + 六瓣
-    const ry = yBase + (peak - yBase) * 0.78;
-    b.geo(mat, new THREE.TorusGeometry(w * 0.2, 0.07, 6, 18), cx, ry, cz, rotY);
-    for (let i = 0; i < 6; i++) {
-      const a = (i / 6) * Math.PI * 2;
-      const ox = Math.cos(a) * w * 0.115, oy = Math.sin(a) * w * 0.115;
-      b.geo(mat, new THREE.TorusGeometry(w * 0.075, 0.05, 5, 12), cx + (rotY ? 0 : ox), ry + oy, cz + (rotY ? ox : 0), rotY);
-    }
-    // 两侧小三叶圆
-    for (const sgn of [-1, 1]) {
-      const ox = sgn * w * 0.24;
-      b.geo(mat, new THREE.TorusGeometry(w * 0.085, 0.05, 5, 12), cx + (rotY ? 0 : ox), yBase + (peak - yBase) * 0.6, cz + (rotY ? ox : 0), rotY);
-    }
-  } else {
-    b.geo(mat, new THREE.TorusGeometry(w * 0.14, 0.05, 5, 12), cx, yBase + (peak - yBase) * 0.74, cz, rotY);
-  }
-}
-
 export function buildLandmarks(m: Materials): Landmarks {
   const group = new THREE.Group();
   group.name = 'landmarks';
@@ -157,43 +59,22 @@ export function buildLandmarks(m: Materials): Landmarks {
   const ash = v.wallAshlar, trim = v.wallTrim, rough = v.wallRough;
   const woodPlank = v.woodPlank, woodBeam = v.woodBeam;
 
-  const glassTex = leadedGlassTexture();
-  const glassMat = new THREE.MeshStandardMaterial({
-    map: glassTex, color: 0xb8c4d4, roughness: 0.32, metalness: 0.15,
-    emissive: 0xffb25e, emissiveMap: leadedGlassTexture(true), emissiveIntensity: 0, side: THREE.DoubleSide,
-  });
+  const { glass: glassMat, lead } = chapelGlass();
+  const windowFabric = { ash, trim, iron: m.iron, glass: glassMat, lead };
+  const narrow = (u: number): Light => ({ u, sill: 0.53, width: 1.25, spring: 1.54, height: 2.65, pattern: 'pair' });
   const waxMat = new THREE.MeshStandardMaterial({ color: 0xcfc4a8, roughness: 0.85 });
   const ribbonMat = new THREE.MeshStandardMaterial({ color: 0x6e5a48, roughness: 1, side: THREE.DoubleSide });
   const ribbonRed = new THREE.MeshStandardMaterial({ color: 0x5b1f24, roughness: 1, side: THREE.DoubleSide });
   const crowMat = new THREE.MeshStandardMaterial({ color: 0x14151a, roughness: 0.9 });
 
-  // ——— 西墙高窗层（y 7..11）：窗间墙 + 尖拱高窗 ———
-  b.box(trim, 13, 7.5, 13.5, 25.5, 7, 7.5); // 窗台带
-  // 南段 z[7.5,17.6]：三扇高窗
-  for (const zc of [9.6, 12.4, 15.2]) {
-    b.geo(ash, (() => {
-      const shape = new THREE.Shape();
-      shape.moveTo(-1.7, 0); shape.lineTo(1.7, 0); shape.lineTo(1.7, 3.5); shape.lineTo(-1.7, 3.5); shape.lineTo(-1.7, 0);
-      shape.holes.push(archPath(new THREE.Path(), 1.3, 2.1, 3.2));
-      const g = new THREE.ExtrudeGeometry(shape, { depth: 0.5, bevelEnabled: false, curveSegments: 10 });
-      g.translate(0, 0, -0.25); return scaleUV(g, 0.5);
-    })(), 13.25, 7.5, zc, HALF_PI);
-    b.geo(glassMat, scaleUV(archLeaf(1.3, 2.1, 3.2, 0.05), 0.35), 13.25, 7.5, zc, HALF_PI);
-    tracery(b, trim, 13.22, zc, 7.5, 1.3, 9.6, 10.7, HALF_PI, false);
-    b.geo(trim, archBand(1.3, 2.1, 3.2, 0.14, 0.16), 13.0, 7.5, zc, HALF_PI); // 罩拱
-  }
-  // 窗间墙垛（南段端头）
-  b.box(ash, 13, 7.5, 13.5, 7.9, 7.5, 11);
-  b.box(ash, 13, 16.9, 13.5, 17.6, 7.5, 11);
-  // 北段 z[23.4,25.5]：实墙 + 盲拱
-  b.box(ash, 13, 23.4, 13.5, 25.5, 7.5, 11);
+  // The authored west long wall faces south after the landmark rotation.
+  // One continuous perforated wall per bay: no overlapping panels or cross-eave over the panes.
+  glazedWall(b, windowFabric, { x: 13.25, z: 12.55, y: 7, rot: -HALF_PI, width: 10.1, eaves: 4,
+    lights: [9.6, 12.4, 15.2].map(z => narrow(12.55 - z)) });
+  b.box(ash, 13, 23.4, 13.5, 25.5, 7, 11);
   b.geo(trim, archBand(1.0, 1.7, 2.7, 0.1, 0.1), 13.0, 7.8, 24.45, HALF_PI);
-
-  // ——— 西墙主山墙 bay（z 17.6..23.4）：大尖拱窗 + 山墙 + 十字 ———
-  b.geo(ash, gableFacade(5.8, 3.5, 7.3, 3.4, 0.4, 3.3, 6.1, 0.5), 13.25, 7.5, 20.5, HALF_PI);
-  b.geo(glassMat, scaleUV(archLeaf(3.4, 3.3, 6.1, 0.05), 0.3), 13.25, 7.9, 20.5, HALF_PI);
-  tracery(b, trim, 13.18, 20.5, 7.9, 3.4, 11.2, 14.0, HALF_PI, true);
-  b.geo(trim, archBand(3.4, 3.3, 6.1, 0.18, 0.2), 12.98, 7.9, 20.5, HALF_PI);
+  glazedWall(b, windowFabric, { x: 13.25, y: 7, z: 20.5, rot: -HALF_PI, width: 5.8, eaves: 4, peak: 7.8,
+    lights: [{ u: 0, sill: 0.9, width: 3.36, spring: 2.93, height: 5.68, pattern: 'great' }] });
   // 山墙压顶（两条斜脊）
   const bayAng = Math.atan2(3.8, 2.9);
   const baySlope = Math.hypot(3.8, 2.9) + 0.3;
@@ -236,18 +117,13 @@ export function buildLandmarks(m: Materials): Landmarks {
   // 门与玫瑰窗之间的腰线 + 盲拱四叶饰，打破空白墙
   b.box(trim, 12.9, 17.8, 13.12, 23.2, 4.95, 5.15);
   b.geo(trim, archBand(1.2, 1.0, 1.8, 0.1, 0.1), 12.98, 5.4, 20.5, HALF_PI);
-  b.geo(trim, new THREE.TorusGeometry(0.22, 0.05, 5, 12), 12.98, 6.5, 20.5, HALF_PI);
-  // 山墙风化：缺块凹口与补砌石块（倒角崩边叙事）
-  for (const [y, z, s] of [[12.2, 19.3, 0.3], [13.0, 21.6, 0.26], [11.6, 20.0, 0.22]] as [number, number, number][]) {
-    b.box(rough, 12.96, z - s / 2, 13.06, z + s / 2, y - s * 0.4, y + s * 0.4);
-  }
-  b.box(rough, 12.94, 21.0, 13.08, 21.4, 12.4, 12.7);
 
-  // ——— 北立面（正门主立面，z 25..25.5）：大山墙 + 玫瑰窗 + 三层退缩门洞 ———
-  b.geo(ash, gableFacade(11, 4, 9.2, 4.0, 0.9, 4.0, 7.0, 0.5), 19, 7, 25.25);
-  b.geo(glassMat, scaleUV(archLeaf(4.0, 4.0, 7.0, 0.05), 0.3), 19, 7.9, 25.25);
-  tracery(b, trim, 19, 25.46, 7.9, 4.0, 11.9, 14.0, 0, true);
-  b.geo(trim, archBand(4.0, 4.0, 7.0, 0.2, 0.22), 19, 7.9, 25.55);
+  // Authored north gable = actual west door / yard hero. The flanks are real
+  // pierced lancets, not strips in front of an uncut ashlar wall.
+  glazedWall(b, windowFabric, { x: 19, y: 7, z: 25.25, rot: Math.PI, width: 11, eaves: 4, peak: 9.2, lights: [
+    { u: 0, sill: 0.90, width: 4, spring: 3.10, height: 6.10, pattern: 'great' },
+    ...[-3.68, 3.68].map((u): Light => ({ u, sill: 0.94, width: 0.89, spring: 1.54, height: 2.44, pattern: 'single' })),
+  ] });
   // 山墙压顶 + 十字
   const nAng = Math.atan2(5.2, 5.5);
   const nSlope = Math.hypot(5.2, 5.5) + 0.35;
@@ -260,14 +136,6 @@ export function buildLandmarks(m: Materials): Landmarks {
   // 山墙坡面小尖塔
   pinnacle(b, trim, 16.1, 25.25, 13.15, 0.6);
   pinnacle(b, trim, 21.9, 25.25, 13.15, 0.6);
-  // 两侧盲拱（右侧钉死木板）
-  for (const x of [15.3, 22.7]) {
-    b.geo(trim, archBand(1.1, 1.8, 2.8, 0.12, 0.14), x, 7.8, 25.55);
-    b.geo(glassMat, scaleUV(archLeaf(1.1, 1.8, 2.8, 0.04), 0.4), x, 7.8, 25.3);
-  }
-  for (let i = 0; i < 3; i++) {
-    b.geo(woodPlank, tiledBox(1.5, 0.22, 0.07, 0.6), 22.7, 8.3 + i * 0.75, 25.62, 0, 0, (i % 2 ? -1 : 1) * 0.18);
-  }
   // The opening in the sim wall is rectangular; this infill closes the head above
   // the leaves. The archivolts are open-bottom bands, so neither triangles nor a
   // porch intersect the passage or float in front of the hinge when the door opens.
@@ -292,15 +160,13 @@ export function buildLandmarks(m: Materials): Landmarks {
   }
 
   // ——— 东墙与南墙高窗层 + 南山墙 ———
-  b.box(ash, 24.5, 7.5, 25, 25.5, 7, 11);
-  b.box(ash, 13.5, 7.5, 24.5, 8, 7, 11);
-  b.geo(ash, gable(11.6, 5.2, 0.5), 19, 11, 7.75);
+  glazedWall(b, windowFabric, { x: 24.75, y: 7, z: 16.5, rot: HALF_PI, width: 18, eaves: 4,
+    lights: [9.3, 12.1, 15.2, 20.4, 24.6].map(z => narrow(z - 16.5)) });
+  glazedWall(b, windowFabric, { x: 19, y: 7, z: 7.75, rot: 0, width: 11.6, eaves: 4, peak: 9.2,
+    lights: [{ u: 0, sill: 0.92, width: 2.28, spring: 2.54, height: 4.42, pattern: 'pair' }] });
   b.geo(trim, tiledBox(nSlope, 0.2, 0.7, 0.6), 16.25, 13.6, 7.75, 0, 0, nAng);
   b.geo(trim, tiledBox(nSlope, 0.2, 0.7, 0.6), 21.75, 13.6, 7.75, 0, 0, -nAng);
   cross(b, trim, 19, 7.75, 16.15, 1.0);
-  // 东墙盲拱（远景可见面）
-  for (const z of [10, 13.5, 17, 20.5, 24]) b.geo(trim, archBand(1.1, 1.8, 2.8, 0.1, 0.1), 25.02, 7.7, z, HALF_PI);
-
   // ——— 勒脚（墙基粗石，凸出墙面）+ 水平腰线/壁柱：打断连续墙面（≤6 m）并给出结构层次 ———
   b.box(rough, 12.8, 7.5, 13.0, 25.5, 0, 0.55);   // 西勒脚
   b.box(rough, 13, 25.5, 25, 25.7, 0, 0.55);      // 北勒脚
@@ -315,10 +181,29 @@ export function buildLandmarks(m: Materials): Landmarks {
   const roofAng = Math.atan2(5.6, 5.8);
   const roofSlope = Math.hypot(5.6, 5.8) + 0.35;
   b.geo(m.roof, tiledBox(roofSlope, 0.18, 19.0, 1.2), 21.9, 13.4, 16.5, 0, 0, -roofAng);
-  b.geo(m.roof, tiledBox(roofSlope, 0.18, 19.0, 1.2), 16.1, 13.4, 16.5, 0, 0, roofAng);
+  // The tall side light needs an actual cross-gable, or the old continuous
+  // roof slices the upper glass in half on the reverse view from the nave.
+  const xEdge = 16.1 - 0.5 * roofSlope * Math.cos(roofAng), xRidge = 32.2 - xEdge;
+  const mainY = (x: number) => 13.4 + (x - 16.1) * Math.tan(roofAng);
+  const bayY = (z: number) => 14.78 - Math.abs(z - 20.5) * Math.tan(bayAng);
+  const valley = (14.78 - mainY(xEdge)) / Math.tan(bayAng);
+  const zL = 20.5 - valley, zR = 20.5 + valley, xMeet = 16.1 + (14.78 - 13.4) / Math.tan(roofAng);
+  const roofPatch = (outline: [number, number][], y: (x: number, z: number) => number) => {
+    const shape = new THREE.Shape(outline.map(([x, z]) => new THREE.Vector2(x, z)));
+    const g = new THREE.ExtrudeGeometry(shape, { depth: 0.19, bevelEnabled: false });
+    const pos = g.getAttribute('position');
+    for (let i = 0; i < pos.count; i++) {
+      const x = pos.getX(i), z = pos.getY(i);
+      pos.setXYZ(i, x, y(x, z) - 0.095 + pos.getZ(i), -z);
+    }
+    g.computeVertexNormals(); b.geo(m.roof, scaleUV(g, 1 / 1.2), 0, 0, 0);
+  };
+  roofPatch([[xEdge, 7], [xRidge, 7], [xRidge, 26], [xEdge, 26], [xEdge, zR], [xMeet, 20.5], [xEdge, zL]], mainY);
+  roofPatch([[xEdge, zL], [xMeet, 20.5], [xEdge, 20.5]], (_, z) => bayY(z));
+  roofPatch([[xEdge, 20.5], [xMeet, 20.5], [xEdge, zR]], (_, z) => bayY(z));
   b.box(trim, 18.82, 7.0, 19.18, 26.0, 16.05, 16.32); // 脊瓦
   // 檐口线脚
-  b.box(trim, 12.8, 7.5, 13.5, 25.5, 10.45, 10.65);
+  for (const [a, z] of [[7.5, 17.6], [23.4, 25.5]]) b.box(trim, 12.8, a, 13.5, z, 10.45, 10.65);
   b.box(trim, 24.5, 7.5, 25.2, 25.5, 10.45, 10.65);
 
   // ——— 屋脊小尖塔（flèche）：八角鼓座 + 尖锥 + 十字，全庭院可见的导航地标 ———
@@ -326,7 +211,7 @@ export function buildLandmarks(m: Materials): Landmarks {
   b.geo(trim, scaleUV(new THREE.CylinderGeometry(0.72, 0.85, 1.5, 8), 0.5), 19, 16.95, fz);
   for (let i = 0; i < 4; i++) {
     const a = (i / 4) * Math.PI * 2 + Math.PI / 8;
-    b.geo(glassMat, new THREE.PlaneGeometry(0.22, 0.8), 19 + Math.cos(a) * 0.74, 16.95, fz + Math.sin(a) * 0.74, -a + HALF_PI);
+    b.geo(glassMat, new THREE.PlaneGeometry(0.17, 0.70), 19 + Math.cos(a) * 0.75, 16.95, fz + Math.sin(a) * 0.75, a + HALF_PI);
   }
   b.geo(m.roof, scaleUV(new THREE.ConeGeometry(0.95, 3.4, 8), 0.5), 19, 19.4, fz);
   for (let tier = 0; tier < 3; tier++) {
@@ -347,7 +232,7 @@ export function buildLandmarks(m: Materials): Landmarks {
   b.geo(trim, archBand(2.1, 2.2, 3.2, 0.14, 0.14), 13.02, R, 16, HALF_PI);
 
   // ———  interior 系梁（高屋顶下的拉结木梁）———
-  for (const z of [10.5, 13.5, 16.5, 19.5, 22.5]) b.box(woodBeam, 13.5, z - 0.12, 24.5, z + 0.12, 9.3, 9.55, 1);
+  for (const z of [10.7, 13.5, 16.5, 17.85, 23.35]) b.box(woodBeam, 13.5, z - 0.12, 24.5, z + 0.12, 9.3, 9.55, 1);
 
   // ——— 任务 C：环境叙事 ———
   // 门前熄灭的烛台 ×2（蜡油堆，靠墙不挡门）
@@ -386,19 +271,11 @@ export function buildLandmarks(m: Materials): Landmarks {
   crow(12.9, 14.55, 23.4, 0.7);
 
   b.build(group, true);
-
-  // 夜晚烛光：读 view.ts 写入的 scene.userData.night（0 昼 → 1 夜）。
-  // 挂在主窗玻璃网格上，渲染时自动更新，无需改 view.ts 的 update。
-  group.traverse((o) => {
-    if ((o as THREE.Mesh).isMesh && (o as THREE.Mesh).material === glassMat) {
-      o.onBeforeRender = (_r, scene) => {
-        const fog = scene.fog as THREE.Fog | null;
-        if (!fog) return;
-        const night: number = scene.userData.night ?? 0;
-        glassMat.emissiveIntensity = 0.12 * night;
-      };
-    }
-  });
+  // Only the cames, saddle bars and carved stone occlude the sun/moon.
+  // Do not let a depth-only shadow pass turn the translucent quarries solid.
+  for (const mesh of group.children as THREE.Mesh[]) {
+    if (mesh.material === glassMat) mesh.castShadow = false;
+  }
 
   // map: 礼拜堂转 90°，正门朝西面向庭院（构图对齐 concept/03）。
   // 旧占地 x13.5–24.5/z8–25 → 新占地 x13.5–30.5/z11–22。渲染 z=−sim.z。

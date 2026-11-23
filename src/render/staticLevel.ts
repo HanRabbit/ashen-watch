@@ -1,12 +1,17 @@
 // 静态建筑：墙、地面、屋顶、地标与不随状态变化的陈设。按材质合并为少量网格。
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-import { cutRect, DOORS, inArea, PROPS, Rect, S1_SHAFT, SUBGRADE_GROUND_CUTOUTS, WALLS, WELL } from '../sim/level';
+import { DOORS, inArea, PROPS, S1_SHAFT, WALLS, WELL } from '../sim/level';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { archHeader, archLeaf, archRib, Batch, gable } from './geom';
+import { archHeader, archRib, Batch, gable } from './geom';
+import { buildGatehouseLights, windowWallPieces } from './gatehouseWindows';
 import { buildFurniture } from './furniture';
+import { addGroundSlab, buildYardDrain } from './yardSurface';
+import { addYardBreaks } from './yardBreaks';
+import { buildYardIvy, YARD_LITTER_POCKETS } from './yardPlanting';
+import { addCurtainDetails, addCurtainPlinth } from './masonry';
 import { variants } from './materialVariants';
-import { grassTexture, ivyLeafTexture, leadedGlass, leafTexture, Materials, mossTexture, rugTexture, rustTexture, scaleUV, smokeTexture, tiledBox, trackPending } from './materials';
+import { grassTexture, leafTexture, Materials, rugTexture, rustTexture, smokeTexture, tiledBox, trackPending } from './materials';
 
 const HALF_PI = Math.PI / 2;
 
@@ -27,27 +32,6 @@ export interface StaticLevel {
   windowMat: THREE.MeshStandardMaterial;
   /** 门房朝庭院的窗：炉火点着时透出琥珀色，是回程地标。 */
   hearthWindowMat: THREE.MeshStandardMaterial;
-}
-
-interface MerlonXf { x: number; y: number; z: number; ry: number; w: number; h: number; t: number }
-/** 垛口：带倒角的顶缘 + 宽度/高度轻微不规则，少数风化残缺。收集变换供 InstancedMesh。 */
-function merlons(list: MerlonXf[], x0: number, z0: number, x1: number, z1: number, y: number): void {
-  const alongX = x1 - x0 > z1 - z0;
-  const len = alongX ? x1 - x0 : z1 - z0;
-  const n = Math.max(1, Math.floor(len / 1.5));
-  const stepLen = len / n;
-  const r = drng(Math.round(x0 * 7 + z0 * 13 + y * 3) + 5);
-  const thick = alongX ? z1 - z0 : x1 - x0;
-  for (let i = 0; i < n; i++) {
-    const c = (alongX ? x0 : z0) + stepLen * (i + 0.5);
-    // 风化：少数垛口残缺或降低，避免整齐如新
-    const wear = ((i * 37 + Math.round(c * 3)) % 11);
-    if (wear === 0) continue;
-    const h = (wear === 1 ? 0.3 : 0.55 + r() * 0.14);
-    const w = 0.62 + r() * 0.16;
-    if (alongX) list.push({ x: c, y, z: (z0 + z1) / 2, ry: 0, w, h, t: thick });
-    else list.push({ x: (x0 + x1) / 2, y, z: c, ry: HALF_PI, w, h, t: thick });
-  }
 }
 
 /** 墙角凸出角石（quoin）：大小交替、微微出墙，从勒脚砌到墙顶。 */
@@ -115,22 +99,9 @@ function archFrame(b: Batch, mat: THREE.Material, cx: number, cz: number, w: num
 export function buildStaticLevel(m: Materials): StaticLevel {
   const group = new THREE.Group();
   const b = new Batch();
-  const merlonXf: MerlonXf[] = [];
   const rubbleXf: { x: number; y: number; z: number; s: number; r: number }[] = [];
-  // 高窗：暗玻璃 + 铅条窗格。白天微弱冷天光（不再过曝成白洞），夜晚近乎全黑。
-  const coldGlass = leadedGlass(false);
-  const windowMat = new THREE.MeshStandardMaterial({
-    color: 0x2a3440, map: coldGlass.map, roughness: 0.22, metalness: 0.05,
-    emissive: 0x3a4a5c, emissiveMap: coldGlass.panes, emissiveIntensity: 0.45,
-  });
-  // 门房朝庭院的窗：炉火点着时透过铅条窗格透出琥珀暖光，是回程地标。
-  const warmGlass = leadedGlass(true);
-  const hearthWindowMat = new THREE.MeshStandardMaterial({
-    color: 0x3a2a1c, map: warmGlass.map, roughness: 0.3, metalness: 0.05,
-    emissive: 0xff9a3c, emissiveMap: warmGlass.panes, emissiveIntensity: 1.2,
-  });
-
   const v = variants(m);
+  const { windowMat, hearthWindowMat } = buildGatehouseLights(b, group, v.wallTrim, m.iron);
   // 世界空间 UV + 每段随机偏移：打破长墙平铺重复（圣经 5.1 反重复）
   const boxOff = (mat: THREE.Material, x0: number, z0: number, x1: number, z1: number, y0: number, y1: number, tile: number, ou: number, ov: number): void => {
     const g = tiledBox(x1 - x0, y1 - y0, z1 - z0, tile);
@@ -148,86 +119,28 @@ export function buildStaticLevel(m: Materials): StaticLevel {
     const mat = isCellar ? v.wallRough : (isChapel || isGH) ? v.wallAshlar : v.wallRubble;
     const ou = ((Math.round(w.x0 * 7 + w.z0 * 13) % 10) / 10) * 3.1;
     const ov = ((Math.round(w.x1 * 5 + w.z1 * 3) % 10) / 10) * 2.3;
-    boxOff(mat, w.x0, w.z0, w.x1, w.z1, 0, w.h, 4.5, ou, ov);
-    b.box(v.wallTrim, w.x0 - 0.08, w.z0 - 0.08, w.x1 + 0.08, w.z1 + 0.08, 0, 0.35, 2.2); // 勒脚
+    for (const a of windowWallPieces({ ...w, y0: 0 })) {
+      boxOff(mat, a.x0, a.z0, a.x1, a.z1, a.y0, a.h, 4.5, ou + (a.x0-w.x0)/4.5, ov + a.y0/4.5);
+    }
+    if (!addCurtainPlinth(b, v, w)) b.box(v.wallTrim, w.x0 - 0.08, w.z0 - 0.08, w.x1 + 0.08, w.z1 + 0.08, 0, 0.35, 2.2); // 勒脚
     if (w.h >= 5) b.box(v.wallTrim, w.x0 - 0.05, w.z0 - 0.05, w.x1 + 0.05, w.z1 + 0.05, w.h - 0.12, w.h, 2.2); // 压顶
-    if (w.h === 5 && w.tag !== 'cellar' && !(w.x0 === 10.5 && w.z0 === 17.5)) merlons(merlonXf, w.x0, w.z0, w.x1, w.z1, w.h);
   }
-  merlons(merlonXf, -10.5, 0, -3.6, 0.5, 4.2);
-  merlons(merlonXf, 3.6, 0, 10.5, 0.5, 4.2);
-  // 垛口实例化：单位倒角盒 + 每实例缩放/朝向（wallTrim 细凿大石）
-  {
-    const shape = new THREE.Shape();
-    shape.moveTo(-0.5, 0); shape.lineTo(0.5, 0); shape.lineTo(0.5, 1); shape.lineTo(-0.5, 1); shape.closePath();
-    const geo = new THREE.ExtrudeGeometry(shape, { depth: 1, bevelEnabled: true, bevelThickness: 0.06, bevelSize: 0.05, bevelSegments: 1, curveSegments: 1 });
-    geo.translate(0, 0, -0.5);
-    scaleUV(geo, 1 / 2.2);
-    const im = new THREE.InstancedMesh(geo, v.wallTrim, merlonXf.length);
-    const mm = new THREE.Matrix4(), qq = new THREE.Quaternion();
-    merlonXf.forEach((t, i) => {
-      qq.setFromAxisAngle(new THREE.Vector3(0, 1, 0), t.ry);
-      mm.compose(new THREE.Vector3(t.x, t.y, -t.z), qq, new THREE.Vector3(t.w, t.h, t.t));
-      im.setMatrixAt(i, mm);
-      const k = 0.82 + ((i * 37) % 10) / 40;
-      im.setColorAt(i, new THREE.Color(k, k, k * 1.03));
-    });
-    im.castShadow = im.receiveShadow = true;
-    group.add(im);
-  }
-
-  // 长墙打断（5.1：宽 > 6 m 用壁柱/补砌打断）：庭院西/东/南墙加壁柱 + 粗石补砌段
-  {
-    const pil = (x: number, z: number, nx: number, nz: number, h: number): void => {
-      const w = 0.5, out = 0.16;
-      const x0 = nx !== 0 ? Math.min(x, x + nx * out) - (nz !== 0 ? w / 2 : 0) : x - w / 2;
-      const x1 = nx !== 0 ? Math.max(x, x + nx * out) + (nz !== 0 ? w / 2 : 0) : x + w / 2;
-      const z0 = nz !== 0 ? Math.min(z, z + nz * out) - (nx !== 0 ? w / 2 : 0) : z - w / 2;
-      const z1 = nz !== 0 ? Math.max(z, z + nz * out) + (nx !== 0 ? w / 2 : 0) : z + w / 2;
-      b.box(v.wallTrim, x0, z0, x1, z1, 0.35, h, 2.2);
-      b.box(v.wallTrim, x0 - 0.04, z0 - 0.04, x1 + 0.04, z1 + 0.04, h - 0.1, h + 0.08, 2.2); // 柱帽
-    };
-    for (const z of [7, 14, 21]) pil(-10, z, 1, 0, 4.2);   // 西墙内面
-    for (const z of [10, 24]) pil(10, z, -1, 0, 5);    // 东墙内面
-    for (const x of [-7]) pil(x, 0.5, 0, 1, 4.2);       // 南墙内面
-    // 粗石补砌段（风化修补，材质变化打断重复）
-    b.box(v.wallRough, -10.02, 9.5, -9.9, 12.5, 0.35, 3.2, 2.6);
-    b.box(v.wallRough, 9.9, 19, 10.02, 22, 0.35, 3.6, 2.6);
-    b.box(v.wallRough, -4.5, 0.48, -1.5, 0.6, 0.35, 2.8, 2.6);
-  }
+  addCurtainDetails(b, v, WALLS);
 
   // 庭院四角与门房角的凸出角石（wallTrim）
   for (const [x, z, h] of [[-10.25, 0.25, 4.2], [10.25, 0.25, 4.2], [-10.25, 28.75, 4.2], [10.25, 28.75, 3.2], [-3.25, -8.25, 3.6], [3.25, -8.25, 3.6]] as [number, number, number][]) {
     quoin(b, v.wallTrim, x, z, h);
   }
-  // 墙面少量突出石块（风化鼓出），只在庭院可见面
-  {
-    const r = drng(401);
-    const faces: [number, number, number, number, number][] = [
-      [-10, 14.5, 1, 0, 28], [10, 5.5, -1, 0, 10.4], [0, 0.5, 0, 1, 20],
-    ];
-    for (const [fx, fz, nx, nz, len] of faces) {
-      for (let i = 0; i < 9; i++) {
-        const t = (r() - 0.5) * len;
-        const y = 0.7 + r() * 3.4;
-        const w = 0.26 + r() * 0.22, h = 0.18 + r() * 0.14, out = 0.05 + r() * 0.06;
-        const x = fx + (nz !== 0 ? t : 0), z = fz + (nx !== 0 ? t : 0);
-        if (nz !== 0 && Math.abs(x) < 3.6) continue;
-        const bx = fx - nx * 0.06, bz = fz - nz * 0.06;
-        const x0 = nx !== 0 ? Math.min(bx, bx + nx * (out + 0.06)) : x - w / 2;
-        const x1 = nx !== 0 ? Math.max(bx, bx + nx * (out + 0.06)) : x + w / 2;
-        const z0 = nz !== 0 ? Math.min(bz, bz + nz * (out + 0.06)) : z - w / 2;
-        const z1 = nz !== 0 ? Math.max(bz, bz + nz * (out + 0.06)) : z + w / 2;
-        b.box(v.wallRubble, x0, z0, x1, z1, y, y + h, 1.6);
-      }
-    }
-  }
-
   // 门房内墙：全部石墙（concept/02，圣经 v2.8）——下半 wallRubble + 上半 wallAshlar，不用抹灰
   {
     const gh = (x0: number, z0: number, x1: number, z1: number): void => {
-      b.box(v.wallRubble, x0, z0, x1, z1, 0.05, 1.5, 3.2);
-      b.box(v.wallAshlar, x0, z0, x1, z1, 1.5, 3.5, 2.6);
-      b.box(v.wallTrim, x0, z0, x1, z1, 1.46, 1.54, 2.2); // 石腰线
+      for (const [mat, y0, top, tile] of [
+        [v.wallRubble, 0.05, 1.5, 3.2], [v.wallAshlar, 1.5, 3.5, 2.6], [v.wallTrim, 1.46, 1.54, 2.2],
+      ] as const) {
+        for (const a of windowWallPieces({ x0, z0, x1, z1, y0, h: top })) {
+          boxOff(mat, a.x0, z0, a.x1, z1, a.y0, a.h, tile, (a.x0-x0)/tile, (a.y0-y0)/tile);
+        }
+      }
     };
     gh(-3.0, -8.0, -2.94, 0.0);   // 西内墙
     gh(2.94, -8.0, 3.0, 0.0);     // 东内墙
@@ -241,23 +154,13 @@ export function buildStaticLevel(m: Materials): StaticLevel {
   b.geo(v.wallTrim, archHeader(ghWidth, 1.9, ghDoor.box.h, 4.2, 0.5), 0, 0, ghDoor.hinge.z);
   archFrame(b, v.wallTrim, 0, ghDoor.hinge.z, ghWidth, 1.9, ghDoor.box.h, 0);
 
-  // Cut every ground layer before batching. In particular the huge exterior
-  // gravel box used to cap both stairways and show through the B1 ceiling.
-  const ground = (mat: THREE.Material, rect: Rect, y0: number, h: number, tile: number): void => {
-    const pieces = SUBGRADE_GROUND_CUTOUTS.reduce((slabs, cut) => slabs.flatMap((r) => cutRect(r, cut)), [rect]);
-    // Preserve UV scale and phase across the split, instead of visibly retiling each piece.
-    for (const p of pieces) boxOff(mat, p.x0, p.z0, p.x1, p.z1, y0, h, tile,
-      ((p.x0 + p.x1) - (rect.x0 + rect.x1)) / (2 * tile),
-      ((rect.z0 + rect.z1) - (p.z0 + p.z1)) / (2 * tile));
-  };
-  ground(m.gravel, { x0: -90, z0: -70, x1: 90, z1: 110 }, -0.6, -0.04, 3);
-  ground(v.floorFlag, { x0: -10.5, z0: 0, x1: 10.5, z1: 29 }, -0.3, 0, 3.6);
-  ground(v.floorCobble, { x0: WELL.x - 2.3, z0: WELL.z - 2.3, x1: WELL.x + 2.3, z1: WELL.z + 2.3 }, -0.3, 0.004, 1.6);
-  ground(v.floorCobble, { x0: 10.5, z0: 1.5, x1: 13, z1: 17.5 }, -0.3, 0.004, 1.6);
-  ground(v.floorDirt, { x0: -10, z0: 0.5, x1: -9.3, z1: 28.5 }, -0.3, 0.006, 2);
-  ground(v.floorDirt, { x0: 9.3, z0: 0.5, x1: 10, z1: 28.5 }, -0.3, 0.006, 2);
-  ground(v.floorDirt, { x0: -10, z0: 0.5, x1: 10, z1: 1.2 }, -0.3, 0.006, 2);
-  ground(v.floorDirt, { x0: -10, z0: 27.8, x1: 10, z1: 28.5 }, -0.3, 0.006, 2);
+  // Let the valley terrain reach the fortress instead of covering its base with
+  // a bright rectangular gravel plane. Bury exterior wall feet into that terrain.
+  const footings = WALLS.filter((w) => w.y0 === undefined && w.h >= 3.6);
+  for (const w of footings) addGroundSlab(b, v.wallRough, w, -0.79, 0, 2.5);
+  addGroundSlab(b, v.floorFlag, { x0: -10.5, z0: 0, x1: 10.5, z1: 29 }, -0.3, 0, 3.6);
+  buildYardDrain(b, v.wallTrim, m.iron, new THREE.MeshStandardMaterial({ color: 0x191811, roughness: 0.98 }));
+  addYardBreaks(b, m, v);
   // 门房室内石板（concept/02）+ 中央织纹地毯（单幅图案 + 流苏破边 + 磨损污渍）
   b.box(v.floorInterior, -3.5, -8.5, 3.5, 0, -0.3, 0.005, 2);
   {
@@ -295,99 +198,10 @@ export function buildStaticLevel(m: Materials): StaticLevel {
   b.box(v.woodBeam, 1.4, 1.02, 3.0, 1.18, 3.11, 3.27, 1);
   b.geo(m.roof, tiledBox(1.9, 0.08, 1.5, 1.2), 2.2, 3.5, 1.2, 0, 0.3, 0);
 
-  // 门房窗：后墙一扇冷光窗，朝庭院一扇透出炉火
-  b.geo(windowMat, archLeaf(0.7, 1.0, 1.5, 0.05), 0.6, 1.5, -7.97);
-  b.geo(hearthWindowMat, archLeaf(0.7, 0.9, 1.3, 0.05), -2.0, 1.5, 0.53);
-  b.geo(hearthWindowMat, archLeaf(0.7, 0.9, 1.3, 0.05), -2.0, 1.5, -0.03);
-
   // —— 地表细节：爬藤（实例化叶片）、苔痕、草丛（实例化）、落叶（实例化）、枯木、瓦砾 ——
   const decal = new Batch();
-  const mossMat = new THREE.MeshStandardMaterial({ map: mossTexture(), roughness: 1, transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -1 });
+  buildYardIvy(group, decal, drng(131));
   const bark = new THREE.MeshStandardMaterial({ color: 0x3a322c, roughness: 1 });
-  // 墙脚苔痕（竖贴）与井台、地面苔斑
-  for (const [x, z, w, rot] of [[-9.95, 12, 5, HALF_PI], [-9.95, 22, 4, HALF_PI], [9.95, 12, 5, -HALF_PI], [0, 28.45, 6, 0]] as [number, number, number, number][]) {
-    decal.geo(mossMat, new THREE.PlaneGeometry(w, 0.7), x, 0.35, z, rot);
-  }
-
-  // 爬藤：从墙脚往上爬的主茎 + 簇生叶（红褐-酒红-少量橙黄，圣经 4.2）。主簇北墙（画面左墙）。
-  // 主茎贴墙蜿蜒、偶有分枝；叶成簇、上密下疏、边缘破碎、前后分层；只在墙脚/门洞边/背阴处。
-  const ivyR = drng(131);
-  const ivyMat = new THREE.MeshStandardMaterial({ map: ivyLeafTexture(), roughness: 0.8, side: THREE.DoubleSide, alphaTest: 0.45 });
-  const ivyPalette = [0x7a2a1c, 0x5e1a1a, 0x6b2418, 0x4a1616, 0xa8642a, 0x3a3a20].map((h) => new THREE.Color(h));
-  interface Patch { bx: number; bz: number; nx: number; nz: number; tx: number; tz: number; u0: number; u1: number; top: number; dens: number }
-  const patches: Patch[] = [
-    { bx: 0, bz: 28.44, nx: 0, nz: -1, tx: 1, tz: 0, u0: -9.5, u1: -0.5, top: 4.8, dens: 1.0 }, // 北墙主簇（壁灯旁，成片攀爬，画面视觉元素）
-    { bx: 0, bz: 28.42, nx: 0, nz: -1, tx: 1, tz: 0, u0: -9, u1: -1, top: 4.0, dens: 0.95 }, // 北墙主簇填充层
-    { bx: 0, bz: 28.44, nx: 0, nz: -1, tx: 1, tz: 0, u0: 1.5, u1: 8, top: 3.2, dens: 0.9 },     // 北墙次簇
-    { bx: -9.94, bz: 0, nx: 1, nz: 0, tx: 0, tz: 1, u0: 4, u1: 10, top: 3.8, dens: 0.9 },      // 西墙
-    { bx: -9.94, bz: 0, nx: 1, nz: 0, tx: 0, tz: 1, u0: 18, u1: 24, top: 3.4, dens: 0.85 },      // 西墙北段
-    { bx: 0, bz: 0.56, nx: 0, nz: 1, tx: 1, tz: 0, u0: -8, u1: -4, top: 3.0, dens: 0.85 },       // 南墙门洞边
-    { bx: 9.94, bz: 0, nx: -1, nz: 0, tx: 0, tz: 1, u0: 18, u1: 24, top: 3.5, dens: 0.82 },     // 东墙背阴
-    { bx: 12.94, bz: 0, nx: -1, nz: 0, tx: 0, tz: 1, u0: 9, u1: 13, top: 4.2, dens: 0.65 },      // 礼拜堂西墙脚
-  ];
-  const ivyPos: THREE.Vector3[] = [];
-  const ivyQuat: THREE.Quaternion[] = [];
-  const ivyScale: number[] = [];
-  const ivyCol: THREE.Color[] = [];
-  const qTmp = new THREE.Quaternion();
-  const eTmp = new THREE.Euler();
-  const pushLeaf = (px: number, py: number, pz: number, yaw: number, nx: number, nz: number, scale: number): void => {
-    const out = 0.03 + ivyR() * 0.24; // 前后分层：贴墙到外探
-    ivyPos.push(new THREE.Vector3(px + nx * out, py, -(pz + nz * out)));
-    eTmp.set((ivyR() - 0.5) * 1.4, (ivyR() - 0.5) * 1.4, ivyR() * Math.PI * 2);
-    qTmp.setFromEuler(eTmp);
-    ivyQuat.push(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), yaw).multiply(qTmp));
-    ivyScale.push(scale);
-    // 降饱和：以红褐/酒红为主（圣经 4.2），橙黄少量；亮度克制避免艳红
-    const c = ivyPalette[ivyR() < 0.05 ? 4 : ivyR() < 0.1 ? 5 : Math.floor(ivyR() * 4)];
-    ivyCol.push(c.clone().multiplyScalar(0.7 + ivyR() * 0.3));
-  };
-  for (const pa of patches) {
-    const yaw = Math.atan2(pa.nx, pa.nz);
-    const roots = Math.max(3, Math.round((pa.u1 - pa.u0) / (pa.dens >= 0.95 ? 0.7 : 1.0)));
-    for (let s = 0; s < roots; s++) {
-      // 主簇间距随机化（非等距）：有的墙面光秃、有的成片
-      const uRoot = pa.u0 + ivyR() * (pa.u1 - pa.u0);
-      const vigor = pa.dens >= 0.95 ? 0.7 + ivyR() * 0.3 : 0.35 + ivyR() * 0.65; // 主簇更密，其余稀疏随机
-      const phase = ivyR() * 6.28, amp = 0.18 + ivyR() * 0.3;
-      const top = pa.top * (0.82 + ivyR() * 0.22);
-      // 主茎从墙脚攀爬
-      for (let y = 0.06; y < top; y += 0.11) {
-        const t = y / top;
-        const u = uRoot + Math.sin(y * 1.3 + phase) * amp * (0.4 + t) + (ivyR() - 0.5) * 0.08;
-        const px = pa.bx + pa.tx * u, pz = pa.bz + pa.tz * u;
-        decal.geo(bark, new THREE.BoxGeometry(0.02, 0.15, 0.02), px + pa.nx * 0.025, y, pz + pa.nz * 0.025, yaw, (ivyR() - 0.5) * 0.25, (ivyR() - 0.5) * 0.25);
-        // 上密下疏 + 顶端破碎 + 每株长势不一：密度随高度上升，顶梢 ragged
-        const densEff = pa.dens * vigor * (0.55 + 0.45 * t) * (t > 0.9 ? 0.55 : 1);
-        if (ivyR() > densEff) continue; // 裸茎节点（gaps）
-        const n = 5 + Math.floor(ivyR() * 6);
-        const rad = 0.14 + ivyR() * 0.16;
-        for (let l = 0; l < n; l++) {
-          const du = (ivyR() - 0.5) * rad * 2, dv = (ivyR() - 0.5) * rad * 1.6;
-          pushLeaf(px + pa.tx * du, y + dv, pz + pa.tz * du, yaw, pa.nx, pa.nz, 0.12 + ivyR() * 0.08); // 叶片缩小到 ~1/2
-        }
-        // 偶有分枝向外探出再缀叶
-        if (ivyR() < 0.28) {
-          const bu = u + (ivyR() - 0.5) * 0.6, by = y + 0.1 + ivyR() * 0.2;
-          const bpx = pa.bx + pa.tx * bu, bpz = pa.bz + pa.tz * bu;
-          decal.geo(bark, new THREE.BoxGeometry(0.015, 0.3, 0.015), bpx + pa.nx * 0.1, by, bpz + pa.nz * 0.1, yaw, 0.6, 0);
-          for (let l = 0; l < 6; l++) pushLeaf(bpx + pa.tx * (ivyR() - 0.5) * 0.34, by + (ivyR() - 0.5) * 0.3, bpz + pa.tz * (ivyR() - 0.5) * 0.34, yaw, pa.nx, pa.nz, 0.12 + ivyR() * 0.07);
-        }
-      }
-    }
-  }
-  const ivyMesh = new THREE.InstancedMesh(new THREE.PlaneGeometry(1, 1), ivyMat, ivyPos.length);
-  {
-    const mm = new THREE.Matrix4();
-    for (let i = 0; i < ivyPos.length; i++) {
-      mm.compose(ivyPos[i], ivyQuat[i], new THREE.Vector3(ivyScale[i], ivyScale[i], ivyScale[i]));
-      ivyMesh.setMatrixAt(i, mm);
-      ivyMesh.setColorAt(i, ivyCol[i]);
-    }
-    ivyMesh.castShadow = false;
-    ivyMesh.receiveShadow = true;
-    group.add(ivyMesh);
-  }
 
   // 石板缝草丛：实例化十字面片，墙脚 / 井台周围 / 板缝，数量提高
   const grassMat = new THREE.MeshStandardMaterial({ map: grassTexture(), roughness: 1, side: THREE.DoubleSide, alphaTest: 0.4 });
@@ -395,30 +209,22 @@ export function buildStaticLevel(m: Materials): StaticLevel {
   const grassPos: [number, number, number][] = [];
   const grassH: number[] = [];
   const grassEdge: boolean[] = [];
+  const plantedGround = (x: number, z: number): boolean =>
+    x > -9.89 && x < 9.89 && z > 0.66 && z < 28.38 && !inArea(S1_SHAFT, x, z)
+    && Math.hypot(x - WELL.x, z - WELL.z) > 1.22
+    && !PROPS.some((p) => (p.y0 ?? 0) === 0 && inArea(p, x, z));
   const pushGrass = (x: number, z: number, edge = false): void => {
-    if (inArea(S1_SHAFT, x, z)) return;
+    if (!plantedGround(x, z)) return;
     grassPos.push([x, 0, z]);
-    grassH.push(edge ? 0.26 + gr() * 0.22 : 0.16 + gr() * 0.16);
+    grassH.push(edge ? 0.17 + gr() * 0.22 : 0.09 + gr() * 0.13);
     grassEdge.push(edge);
   };
-  // 石缝枯草：成簇（每簇 1–3 株），克制数量，只在缝里
-  for (let i = 0; i < 70; i++) {
-    const row = 1 + Math.floor(gr() * 36);
-    const z = row * 0.75 + (gr() - 0.5) * 0.12;
-    const off = (row % 2) * 0.375;
-    const x = (-13 + Math.floor(gr() * 27)) * 0.75 + off + (gr() - 0.5) * 0.12;
-    if (x < -9.6 || x > 9.6 || z < 0.8 || z > 28.2) continue;
-    const n = 1 + Math.floor(gr() * 3);
-    for (let k = 0; k < n; k++) pushGrass(x + (gr() - 0.5) * 0.18, z + (gr() - 0.5) * 0.18);
+  // Tufts share leaf-catching eddies, not a grid across well-used flagstones.
+  for (const [x, z, wx, wz, n] of YARD_LITTER_POCKETS) {
+    for (let i = 0; i < n * 0.51; i++) pushGrass(x + (gr() + gr() - 1) * wx, z + (gr() + gr() - 1) * wz, true);
   }
-  // 墙脚成簇枯草（北墙主簇区加密）
-  for (let i = 0; i < 45; i++) pushGrass(-9.55 + gr() * 0.55, 1 + gr() * 27, true);
-  for (let i = 0; i < 40; i++) pushGrass(9.0 + gr() * 0.55, 1 + gr() * 27, true);
-  for (let i = 0; i < 28; i++) pushGrass(-9 + gr() * 18, 0.65 + gr() * 0.5, true);
-  for (let i = 0; i < 44; i++) pushGrass(-9 + gr() * 18, 27.6 + gr() * 0.7, true);
-  for (let i = 0; i < 42; i++) {
-    const a = gr() * Math.PI * 2, rr = 1.45 + gr() * 1.0;
-    pushGrass(WELL.x + Math.cos(a) * rr, WELL.z + Math.sin(a) * rr, true);
+  for (const [x, z] of [[-5.5, 5.1], [-4.9, 11.95], [-7.3, 14.85], [-5.45, 20.52], [-0.1, 23.21], [6.8, 23.6], [7.3, 7.21]]) {
+    for (let i = 0; i < 3; i++) pushGrass(x + (gr() - 0.5) * 0.45, z + (gr() - 0.5) * 0.28);
   }
   // 枯黄绿（圣经 4.2，不得鲜绿）：干草色调乘到草模型上
   const grassCol = (): THREE.Color => {
@@ -534,10 +340,17 @@ export function buildStaticLevel(m: Materials): StaticLevel {
       rubbleXf.push({ x: bx + ((i * 53) % 10) / 11, y: s * 0.5, z: bz + ((i * 71) % 10) / 11, s, r: i + 3 });
     }
   }
-  // 瓦砾实例化
+  // Fallen individual stones carry quarry grain, not a scan of a whole brick wall.
   {
-    const geo = scaleUV(new THREE.DodecahedronGeometry(1, 0), 1 / 1.2);
-    const im = new THREE.InstancedMesh(geo, m.stone, rubbleXf.length);
+    const geo = new THREE.DodecahedronGeometry(1, 0);
+    const pos = geo.getAttribute('position'), nor = geo.getAttribute('normal'), uv = geo.getAttribute('uv');
+    for (let i = 0; i < pos.count; i++) {
+      // Triangles in a fracture share a planar UV projection; no polar stretch.
+      const nx = Math.abs(nor.getX(i)), ny = Math.abs(nor.getY(i)), nz = Math.abs(nor.getZ(i));
+      uv.setXY(i, 0.29 + (nx > nz && nx > ny ? pos.getZ(i) : pos.getX(i)) * 0.25,
+        0.43 + (ny >= Math.max(nx, nz) ? pos.getZ(i) : pos.getY(i)) * 0.25);
+    }
+    const im = new THREE.InstancedMesh(geo, v.rock, rubbleXf.length);
     const mm = new THREE.Matrix4(), qq = new THREE.Quaternion(), ee = new THREE.Euler();
     rubbleXf.forEach((t, i) => {
       ee.set(t.r * 0.7, t.r * 1.3, t.r * 0.4);
@@ -561,22 +374,21 @@ export function buildStaticLevel(m: Materials): StaticLevel {
   decal.geo(sootMat, new THREE.PlaneGeometry(1.6, 2.0), -2.93, 2.7, -4.4, HALF_PI);  // 门房炉口上方（西内墙）
   decal.geo(sootMat, new THREE.PlaneGeometry(1.2, 1.4), -2.6, 3.4, -4.4, HALF_PI);   // 烟道熏黑
 
-  // 散落秋叶（圣经 4.2 橙红）：墙脚/藤下/井边/墙角成堆，开放地面少量。叶片放大到可见。
+  // 散落秋叶：藤下、墙角和井台背风侧积聚，主路只留少量散叶。
   const leafMat = new THREE.MeshStandardMaterial({ map: leafTexture(), roughness: 0.9, alphaTest: 0.4, side: THREE.DoubleSide });
   const lr = drng(307);
   const leafPos: [number, number][] = [];
-  for (let i = 0; i < 55; i++) leafPos.push([-8.5 + lr() * 7, 26.4 + lr() * 1.9]);   // 北墙藤下堆
-  for (let i = 0; i < 35; i++) leafPos.push([-9.6 + lr() * 1.7, 3.5 + lr() * 6]);    // 西墙脚
-  for (let i = 0; i < 30; i++) leafPos.push([-9.6 + lr() * 1.7, 17 + lr() * 6.5]);
-  for (let i = 0; i < 36; i++) {
-    const a = lr() * Math.PI * 2, rr = 1.5 + lr() * 1.7;
-    leafPos.push([WELL.x + Math.cos(a) * rr, WELL.z + Math.sin(a) * rr]);            // 井边堆
+  for (const [x, z, wx, wz, n] of YARD_LITTER_POCKETS) {
+    for (let i = 0; i < n; i++) leafPos.push([x + (lr() + lr() - 1) * wx, z + (lr() + lr() - 1) * wz]);
   }
-  for (const [cx, cz] of [[-9, 27.3], [-9, 1.6], [9, 1.6], [9, 27.3]] as [number, number][]) {
-    for (let i = 0; i < 14; i++) leafPos.push([cx + (lr() - 0.5) * 1.6, cz + (lr() - 0.5) * 1.6]); // 墙角堆
+  // Leaves and a few newly windblown pieces build up in the lee of the cart,
+  // scaffold foot and the threshold wall return, rather than carpet the main run.
+  for (const [x,z,dx,dz,n] of [[-4.01,9.69,1.33,.41,35],[-2.48,8.11,.61,.26,16],
+    [-6.48,18.42,.68,.53,30],[-2.68,1.33,.86,.50,20],[4.25,14.34,.76,.38,24]]) {
+    for (let i=0;i<n;i++) leafPos.push([x+(lr()+lr()-1)*dx,z+(lr()+lr()-1)*dz]);
   }
-  for (let i = 0; i < 26; i++) leafPos.push([-9 + lr() * 18, 1.5 + lr() * 26]);      // 开放地面少量
-  const groundedLeaves = leafPos.filter(([x, z]) => !inArea(S1_SHAFT, x, z));
+  for (let i = 0; i < 20; i++) leafPos.push([-8.8 + lr() * 17.6, 1.5 + lr() * 26]);
+  const groundedLeaves = leafPos.filter(([x, z]) => plantedGround(x, z));
   const leafGeo = new THREE.PlaneGeometry(1, 1, 3, 3);
   {
     const lp = leafGeo.attributes.position as THREE.BufferAttribute;
@@ -586,12 +398,14 @@ export function buildStaticLevel(m: Materials): StaticLevel {
   const leafMesh = new THREE.InstancedMesh(leafGeo, leafMat, groundedLeaves.length);
   {
     const mm = new THREE.Matrix4(), qq = new THREE.Quaternion(), ee = new THREE.Euler();
-    const lc = [0xa8642a, 0x7a2a1c, 0x5e1a1a, 0x8a4a20, 0x9a3a20].map((h) => new THREE.Color(h));
+    // The texture already contains autumn colour: multiply by faded tan and gray,
+    // not another saturated red (which previously made the litter disappear).
+    const lc = [0xcfb792, 0xa58b76, 0x9d9385, 0xd1a47b, 0xb1a495].map((h) => new THREE.Color(h));
     for (let i = 0; i < groundedLeaves.length; i++) {
-      const s = 0.16 + lr() * 0.17;
-      ee.set(-HALF_PI + (lr() - 0.5) * 0.35, 0, lr() * Math.PI * 2);
+      const s = 0.095 + lr() * 0.13;
+      ee.set(-HALF_PI + (lr() - 0.5) * 0.22, 0, lr() * Math.PI * 2);
       qq.setFromEuler(ee);
-      mm.compose(new THREE.Vector3(groundedLeaves[i][0], 0.02 + lr() * 0.03, -groundedLeaves[i][1]), qq, new THREE.Vector3(s, s, s));
+      mm.compose(new THREE.Vector3(groundedLeaves[i][0], 0.01 + lr() * 0.015, -groundedLeaves[i][1]), qq, new THREE.Vector3(s, s, s));
       leafMesh.setMatrixAt(i, mm);
       leafMesh.setColorAt(i, lc[Math.floor(lr() * lc.length)].clone().multiplyScalar(0.9 + lr() * 0.5));
     }
@@ -604,16 +418,5 @@ export function buildStaticLevel(m: Materials): StaticLevel {
 
   b.build(group, true);
   decal.build(group, false);
-  // 高窗昼夜驱动：读 scene.userData.night（view.ts 写入）。白天微弱冷天光，夜晚近黑（礼拜堂内无灯）。
-  group.traverse((o) => {
-    const me = o as THREE.Mesh;
-    if (me.isMesh && me.material === windowMat) {
-      me.onBeforeRender = (_r, scene) => {
-        const night = (scene.userData.night ?? 0) as number;
-        windowMat.emissive.setHex(night > 0.5 ? 0x0c1420 : 0x3a4a5c);
-        windowMat.emissiveIntensity = night > 0.5 ? 0.18 : 0.45;
-      };
-    }
-  });
   return { group, windowMat, hearthWindowMat };
 }

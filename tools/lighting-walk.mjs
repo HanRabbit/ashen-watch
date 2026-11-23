@@ -1,6 +1,7 @@
 // Walk a short 1F→2F lighting scout with real keyboard/mouse input. The dev
 // preset sets only the initial time/light state of each run, never the camera/pose.
 // Usage: AW_URL=http://localhost:4173/ AW_VIDEO=1 node tools/lighting-walk.mjs chromium --headless day|night
+// AW_ART_WALK=1 looks through both sides of the gatehouse window, then circles the cart, west wall and gutter.
 import fs from 'node:fs';
 import path from 'node:path';
 import { BASE, OUT, launch, shot, sleep, waitFor } from './lib.mjs';
@@ -10,9 +11,10 @@ const args = process.argv.slice(2);
 const [channel = 'chrome', phase = 'day'] = args.filter((s) => !s.startsWith('--'));
 if (!['day', 'night'].includes(phase)) throw new Error('照明阶段必须是 day 或 night');
 const quality = process.env.AW_ROUTE_QUALITY ?? 'cinematic';
+const artWalk = process.env.AW_ART_WALK === '1';
 const { browser, context, page, errors } = await launch({ channel, headless: args.includes('--headless') });
 const bot = new Bot(page);
-const report = { phase, quality, viewport: page.viewportSize(), frames: [], errors };
+const report = { phase, quality, artWalk, viewport: page.viewportSize(), frames: [], errors };
 const capture = async (name, yaw, pitch, floor) => {
   await bot.aim(yaw, 0.025, pitch);
   await sleep(450);
@@ -54,13 +56,34 @@ try {
     d.hud(false);
     window.__awProbe.resetPerf();
   }, phase);
-  await walk(-5.9, 15.8);
+  if (artWalk) {
+    await walk(-.93, -3.48);
+    await capture('w1-hearth-window-inside', -.28, -.05, '1F');
+    await walk(-.82, 2.98);
+    await capture('w2-hearth-window-outside', -Math.PI + .38, -.06, '1F');
+    await walk(-1.7, 5.8);
+    await capture('a-cart-approach', -0.36, 0.09, '1F');
+    await walk(-0.8, 12.2);
+    await capture('a2-split-flags', -2.62, 0.52, '1F');
+    await bot.walkTo(-5.9, 15.8, { floor: '1F', stop: 0.22, maxSecs: 35, sprint: true });
+  } else await walk(-5.9, 15.8);
   await capture('01-courtyard', Math.PI * 0.58, -0.11, '1F');
   await walk(-3, 19.1);
   await capture('02-courtyard-north', Math.PI * 0.43, -0.13, '1F');
+  if (artWalk) {
+    await capture('w3-chapel-from-yard', 1.48, -0.48, '1F');
+    await walk(-5.75, 18.85);
+    await capture('b-scaffold-and-wall', -1.97, 0.07, '1F');
+    await walk(-7.0, 25.5);
+    await capture('c-north-gutter', 0.02, 0.28, '1F');
+  }
   await walk(3.4, 1.4);
   await walk(9.2, 7.0, '2F');
   await capture('03-rampart-east', Math.PI * 0.64, -0.15, '2F');
+  if (artWalk) {
+    await walk(9.2, 12.55, '2F');
+    await capture('w4-chapel-from-rampart', 0.73, -0.71, '2F');
+  }
   await walk(9.2, 16.2, '2F');
   await capture('04-rampart-northwest', -Math.PI * 0.34, 0.03, '2F');
 } catch (e) {

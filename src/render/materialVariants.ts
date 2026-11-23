@@ -84,7 +84,8 @@ export function variants(m: Materials): Variants {
   const wallAshlar = stoneMat('medieval_blocks_03', { floor: 0, wet: 0.3, desat: 0.72, tint: [0.68, 0.72, 0.80], hs: 0.02, ns: 1.0, rough: 0.85, band: [2.2, 4.15] }, pending);
   // Worn cut stone rather than the granite scan's narrow, strongly ridged courses.
   const wallTrim = stoneMat('stone_pavers', { floor: 0, wet: 0.28, desat: 0.6, tint: [0.96, 0.99, 1.04], hs: 0.009, ns: 0.56, rough: 0.87, band: [2.2, 4.15] }, pending);
-  const wallRough = stoneMat('rustic_stone_wall_02', { floor: 0, wet: 0.35, desat: 0.55, tint: [0.70, 0.74, 0.82], hs: 0.03, ns: 1.2, rough: 0.9, band: [0.5, 3.0] }, pending);
+  // This local scan ships no height map. Keep real normal/AO but do not request a missing displacement file.
+  const wallRough = stoneMat('rustic_stone_wall_02', { floor: 0, wet: 0.35, desat: 0.55, tint: [0.70, 0.74, 0.82], hs: 0, ns: 1.2, rough: 0.9, band: [0.5, 3.0] }, pending);
   const wallPlaster = stoneMat('grey_plaster', { floor: 0, wet: 0.2, desat: 0.6, tint: [0.46, 0.49, 0.55], hs: 0, ns: 0.5, rough: 0.9, peel: 1 }, pending);
 
   // —— 地面族 ——
@@ -93,6 +94,21 @@ export function variants(m: Materials): Variants {
   const floorCobble = stoneMat('cobblestone_large_01', { floor: 1, wet: 0.42, desat: 0.72, tint: [0.78, 0.82, 0.88], hs: 0, ns: 0.8, rough: 0.9 }, pending);
   const floorDirt = stoneMat('brown_mud_leaves_01', { floor: 1, wet: 0.3, desat: 0.35, tint: [0.55, 0.50, 0.44], hs: 0, ns: 0.8, rough: 0.95 }, pending);
   const floorInterior = stoneMat('worn_tile_floor', { floor: 1, wet: 0.3, desat: 0.4, tint: [1.08, 1.12, 1.20], hs: 0, ns: 1.0, rough: 0.8 }, pending);
+
+  // Share the existing cellar earth scan/GPU texture. No new download, no second
+  // rendering/decal pass. Keep a neutral texel while the asynchronous scan is loading.
+  const unloadedDirtMap = floorDirt.map;
+  const soilReady = Promise.all(pending);
+  const bindHistory = (mat: THREE.MeshStandardMaterial, mode: 1 | 2) => {
+    mat.defines = { ...mat.defines, AW_FLOOR_HISTORY: mode };
+    const u = mat.userData.aw;
+    u.uAwHumus = { value: u.uAwHeightMap.value };
+    soilReady.then(() => {
+      if (floorDirt.map && floorDirt.map !== unloadedDirtMap) u.uAwHumus.value = floorDirt.map;
+    });
+  };
+  bindHistory(floorFlag, 1);
+  bindHistory(floorInterior, 2);
 
   // —— 木族 ——
   const woodBeam = woodMat('medieval_wood', 0x8a7258, 0.82, 0.7, pending);

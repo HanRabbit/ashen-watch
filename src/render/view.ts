@@ -298,8 +298,8 @@ export class SceneView {
       hiKneeCool: lerp(0.6, 2.6, nightAmt), hiKneeWarm: lerp(0.25, 0.4, nightAmt),
     });
     this.sun.shadow.radius = r.shadowRadius;
-    this.level.windowMat.emissiveIntensity = r.window;
-    this.level.hearthWindowMat.emissiveIntensity = w.hearth.lit ? 1.5 : 0.03;
+    this.level.windowMat.emissiveIntensity = .58 * r.window;
+    this.level.hearthWindowMat.emissiveIntensity = w.hearth.lit ? .87 : .015;
     const dayness = clamp01((r.hemi - 1.0) / 1.1) * (1 - r.stars);
     (this.dust.material as THREE.PointsMaterial).opacity = 0.08 + 0.12 * dayness;
   }
@@ -350,7 +350,7 @@ export class SceneView {
       const mesh = o as THREE.Mesh;
       if (!mesh.isMesh) return;
       const mat = mesh.material as THREE.MeshStandardMaterial;
-      if (mat === m.flag || mat === m.gravel || mat === m.woodFloor || (mat.isMeshStandardMaterial && mat.roughness < 0.15)) out.push(mesh);
+      if (mat === m.flag || mat === m.woodFloor || (mat.isMeshStandardMaterial && mat.roughness < 0.15)) out.push(mesh);
     });
     return out;
   }

@@ -393,6 +393,7 @@ async function routeScenario() {
     await bot.use('gate', null);
     await walk(29, 21.15);
     await capture('09-nave-from-gallery', '1F', Math.PI, 0.05);
+    if (process.env.AW_ART_WALK === '1') await capture('09b-west-window-from-nave', '1F', -1.88, -0.53);
     await walk(1.45, 1.65);
     await capture('10-return-to-gatehouse', '1F', Math.PI, 0.05);
     rep.check('走过四条楼梯并回到门房门前', (await liteOf(page)).world.repairs.gate);

@@ -56,3 +56,31 @@ AW_URL=http://127.0.0.1:4180/ AW_ANGLE=metal AW_W=1280 AW_H=720 \
 最终 `npm run build` 通过，`npm test` **148/148**。最终 1920×1080 高画质三层路线 **14/14**，无控制台错误，保留 10 个实机取样点及完整录像；Chromium / Metal / Apple M3 Max，6514 帧，约 59.8 FPS，分段最差 p95 16.8 ms，仍有 12 帧超过 20 ms。仅说明本机这趟昼景，不能推广到电影档、全夜高负载或其他设备。昼夜镜头专项 1600×900 电影档，开发预设只初始化阶段和灯状态；不是夜敌通关。
 
 本机录像、统计和接触表保存在 Git 忽略的 `.cache/cinematic-overhaul/`（`final-three-floor-route.webm`、`final-route/browser-route-chromium.json`、`lighting/`、`yard.webm`、`stairs.webm`、`hero-before-after.jpg`）。后续优先处理楼梯摆腿和近景镜头遮挡，再做远景和建筑大面的形体辨识、敌人与物件动画、全硬件性能；本记录不是电影级终验。
+
+## 次轮交付：从门房窗口走到礼拜堂
+
+这轮以「同一扇窗，走过它时能不能相信它；同一块地，能不能看出谁来过」为标准。对照基线是上面记录的首轮版本，不是概念图。
+
+- **门房**：穿透墙体和内饰层的两个尖窗。开口内有进深、分块拱石、向外找坡的窗台、独立铅条和横向支撑铁。玻璃是薄的半透明层，有轻微波面和边缘积垢；院侧的暖光受真实炉火开关控制，室内看出去不再是橙黄棋盘。
+- **礼拜堂**：拆去封死的黑窗板和没有支承的饰圈。五联尖窗和顶部四叶花由一整套有厚度的石窗花连接，侧窗也开洞。铅条和鞍铁不透明，旧玻璃允许透景；从院中、城墙斜角和中殿背面看见的不是同一种亮度。侧山墙的屋面做了交接，避免从里面反看有整坡瓦横穿玻璃。这里使用环境反射和薄玻璃混合，不是光线追踪折射。
+- **庭院地面**：主路保留磨亮的石面；载石车旁两道不连续的泥辙，脚手架旁旧料补铺，北墙下冲刷露泥和页岩，井沿及墙脚积湿叶。三处破损用实体石块做出高差，最高处都不超过原地面 4 cm，不改变角色支撑面。地面因地窖口分块后仍延续扫描纹理，不用整张泥贴片跨过洞口。
+- **沿路的其他修正**：三跨券廊原先是横着的半圆环，现按真实墩间距砌竖直拱券；步行线和上层桥板保持原位。幕墙、载石车、货箱、脚手架、依墙藤和墙外山脚也已调整；远处林冠和错台城堡是有视差的几何。本轮未改 `src/sim`，也未另做一套角色动画。
+
+[门房和礼拜堂实走截图局部，左旧右新](verification/cinematic-windows-comparison.jpg)。`AW_ART_WALK=1` 才会为日夜短路线增加窗两面、破损石板与城墙斜视的停靠点，并为三层路线增加从中殿回望西窗的取样：
+
+```sh
+# 另一个终端提供 dist，注意使用同一个 IPv4 预览地址
+npm run build && npm run preview -- --host 127.0.0.1 --port 4180 --strictPort
+# 在项目根目录运行：
+export AW_URL=http://127.0.0.1:4180/ AW_ANGLE=metal AW_ART_WALK=1 AW_VIDEO=1
+for phase in day night; do
+  AW_W=1600 AW_H=900 AW_OUT=.cache/grounded-art/release-$phase \
+    node tools/lighting-walk.mjs chromium --headless "$phase"
+done
+AW_W=1920 AW_H=1080 AW_ROUTE_QUALITY=high AW_OUT=.cache/grounded-art/release-route \
+  node tools/browser-verify.mjs chromium --headless route
+```
+
+**定版实测**（本机 Chromium / ANGLE Metal / Apple M3 Max）：生产构建通过，158/158 项测试通过。两个 1600×900 电影档昼夜专项各到达 12 个取样点，均在真实跟随镜头、鼠标捕获及预期楼层，浏览器错误列表为空。另一次 1920×1080 高画质全程键鼠实走通过 15/15 项：从 S1 进入 B1 取油、S2 出地窖、打开礼拜堂西门、经 S3 上城墙、开栅门走 S4 下到中殿、回到门房。回看了连续录像里的穿门、绕车转身、墙脚及城墙斜视，不以取样点代替移动检查。
+
+录制时电影档昼/夜平均约 38/40 FPS；1080p 高画质全路线记录到 4,207 帧、平均 37.0 FPS、最慢一段 p95 66.7 ms。该轮在有其他本地负载时录制，既不代表独占 GPU 的上限，也没有证明稳定 60 FPS。完整录像和逐站 JSON 在 `.cache/grounded-art/release-{day,night,route}/`；22 秒原速实走选段在 `.cache/grounded-art/presentation/windows-and-flags.mp4`。角色楼梯摆腿、影视级近景角色质量和其他硬件仍未终验。

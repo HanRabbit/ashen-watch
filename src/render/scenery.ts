@@ -45,6 +45,17 @@ const KEEP = { x: 143, z: 94, y: 49 };
 const GATE = { x: 94, z: -51 };
 const ROAD: [number, number][] = [[33, -37], [51, -40], [63, -50], [80, -51], [102, -51], [119, -48], [137, -56], [158, -64]];
 
+// The escarpment faces the manor across the valley. Its long axis runs away
+// from the courtyard; the oblique lower ledge is exposed on the walk as well.
+const keepRun = (dx: number, dz: number) => dx * .85 + dz * .53;
+const keepSide = (dx: number, dz: number) => -dx * .53 + dz * .85;
+function escarpment(x: number, z: number): number {
+  const dx = x - KEEP.x, dz = z - KEEP.z;
+  const run = keepRun(dx, dz), side = keepSide(dx, dz);
+  return (1 - smooth(46, 71, Math.abs(run)))
+    * (1 - smooth(27, 48, Math.abs(side))) * (1 - smooth(-14, 16, run));
+}
+
 function roadDistance(x: number, z: number): number {
   let best = Infinity;
   for (let i = 1; i < ROAD.length; i++) {
@@ -98,20 +109,26 @@ function geology(x: number, z: number, hills: Massif[]): number {
     major = Math.max(major, rise);
   }
   let y = -3.4 + (major * .72 + overlap) * (.86 + n * .27) + (n - .47) * mix(6, 30, smooth(120, 430, distance));
-  // A tilted spur with a solid summit and tapering ridges, not a separate pedestal.
-  const dx = x - KEEP.x, dz = z - KEEP.z;
-  const along = (dx * .85 + dz * .53) / 84, across = (-dx * .53 + dz * .85) / 49;
-  const crag = Math.pow(Math.abs(along) ** 2.5 + Math.abs(across) ** 2.5, .4) + (n - .5) * .35;
-  const west = 1 - smooth(-59, -27, dx);
-  const ribs = relief(dx * .045 + dz * .11, dz * .045, 87) - .5;
-  const flutes = Math.abs(noise(dx * .083 + dz * .18, dz * .046, 88) * 2 - 1);
-  // The steep face ends on a lower talus apron. The accent runs across the slope
-  // so the keep's elevation reads as a rocky escarpment, not a rounded plinth.
-  const bluff = (KEEP.y - 15) * (1 - smooth(.25 + west * .12, .73, crag))
-    + 17.3 * (1 - smooth(.47, 1.16, crag));
-  const spur = 30 * (1 - smooth(.15, 1.13, Math.hypot((dx + 41) / 53, (dz + 27) / 37)));
-  const incision = (ribs * 28 + flutes * 4.1) * smooth(.25, .62, crag);
-  y = Math.max(y, Math.max(bluff, spur * .85) + Math.min(bluff, spur) * .11 + (n - .5) * 8 + incision - 2);
+  const kx = x - KEEP.x, kz = z - KEEP.z;
+  if (Math.abs(kx) < 116 && Math.abs(kz) < 96) {
+    const run = keepRun(kx, kz), side = keepSide(kx, kz);
+    // The two breaks are staggered across the face: a steep headwall under the
+    // masonry, a lower shelf, then talus into the existing valley terrain.
+    const ribs = noise(side * .14, run * .036, 87);
+    const lip = run + side * .16 + (ribs - .5) * 9;
+    const summit = (1 - smooth(17, 32, -lip)) * (1 - smooth(29, 65, run))
+      * (1 - smooth(14, 32, Math.abs(side + run * .14)));
+    const bench = (1 - smooth(32, 45, -run + side * .27 + (ribs - .5) * 7))
+      * (1 - smooth(25, 53, Math.abs(side - 4))) * (1 - smooth(41, 75, run));
+    const apron = 18 * (1 - smooth(.22, 1.08, Math.hypot((run + 23) / 65, (side - 3) / 47)));
+    const shelves = 18 * bench + 15.5 * summit;
+    // Two oblique drainage clefts cut the lower shelf, not the summit deck.
+    // Their wider mouths meet the talus; the remaining ribs carry the walls.
+    const cleft = 7.5 * (1 - smooth(1, 7, Math.abs(side - 23 + run * .21)))
+      + 4.8 * (1 - smooth(1, 6, Math.abs(side + 18 - run * .12)));
+    const exposure = smooth(-56, -37, run) * (1 - smooth(-19, -7, run)) * (1 - smooth(29, 47, Math.abs(side)));
+    y = Math.max(y, apron + shelves - 2 - cleft * exposure + (ribs - .5) * 6 * Math.max(bench, summit));
+  }
   // A broad bench at the pass keeps the approach, gate and adjacent rooflines tied together.
   if (x > 31 && x < 163 && z < -29 && z > -78) {
     const trail = (1 - smooth(5, 22, roadDistance(x, z))) * smooth(32, 55, x) * (1 - smooth(139, 163, x));
@@ -120,11 +137,16 @@ function geology(x: number, z: number, hills: Massif[]): number {
   return mix(-.62, y, smooth(32, 54, distance));
 }
 
+function stand(x: number, z: number): number {
+  return relief((x + z * .25) * .056, (z - x * .23) * .048, 29);
+}
+
 function forestCover(x: number, z: number, y: number, slope: number): number {
-  const broad = relief(x * .044, z * .043, 29);
+  const broad = stand(x, z);
   const edge = noise(x * .13, z * .13, 18);
   const living = smooth(.31, .63, broad * .88 + edge * .12);
-  return living * (1 - smooth(.37, .75, slope)) * (1 - smooth(53, 92, y))
+  return living * (1 - smooth(.34, .70, slope)) * (1 - smooth(53, 92, y))
+    * (1 - .93 * escarpment(x, z) * smooth(29, 42, y))
     * smooth(36, 55, Math.hypot(x - 5, z + 9)) * smooth(3, 10, roadDistance(x, z));
 }
 
@@ -168,9 +190,15 @@ function terrain(): Terrain {
     const cover = forestCover(x, z, y, slope);
     const patch = relief(x * .058, z * .058, 187);
     const divide = smooth(0, .30, slope) * mix(.4, 1.0, smooth(.32, .67, patch));
-    const rock = Math.max(divide, smooth(42, 89, y) * .74);
+    const scarp = escarpment(x, z) * smooth(18, 35, y);
+    const rock = Math.max(divide, smooth(42, 89, y) * .74, scarp * .94);
     tint.copy(soil).lerp(grass, smooth(.27, .7, patch)).lerp(timber, cover * .98);
     tint.lerp(scree, rock * .69).lerp(stone, rock * smooth(.39, .72, patch) * .62);
+    // Exposed faces share the keep's cold stone family; benches retain darker
+    // scree and the same forest-floor tint as the surrounding stands.
+    tint.lerp(stone, scarp * mix(.35, .78, smooth(.18, .55, slope)));
+    const crossLight = norms.getX(k) * -.53 + norms.getZ(k) * .85;
+    tint.multiplyScalar(mix(1, mix(.62, 1.05, smooth(-.66, .42, crossLight)), scarp));
     tint.lerp(path, (1 - smooth(1.8, 4.2, roadDistance(x, z))) * .85);
     const face = norms.getX(k) * -.56 + norms.getZ(k) * -.48 + norms.getY(k) * .67;
     tint.multiplyScalar(mix(.64, 1.25, smooth(-.55, .88, face)) * mix(.8, 1.17, patch));
@@ -334,46 +362,52 @@ function palette(): { land: THREE.MeshBasicMaterial; trees: THREE.MeshBasicMater
 }
 const warmWindow = new THREE.Color(0xffb45f);
 
-// Opaque crowns give correct depth from every bearing, including the GTAO override pass.
-// The far tier has fewer rings and lobes, but still has volume; nothing faces the camera.
-function fir(seed: number, near: boolean): THREE.BufferGeometry {
-  const r = rng(seed);
-  const profile = near ? [
-    [.13, .095], [.22, .196], [.29, .114], [.41, .173], [.48, .082],
-    [.59, .128], [.66, .062], [.77, .091], [.83, .032], [1, .002],
-  ] : [[-.04, .019], [.17, .095], [.23, .196], [.34, .10], [.50, .151], [.58, .065], [.73, .092], [1, .002]];
-  const bark = new THREE.Color(0x5c5043), shade = new THREE.Color(0x26342f), lit = new THREE.Color(0x526351);
+// A narrow leader with overlapping branch fans, not a continuous zig-zag cone.
+// Upper sprays catch skylight; their folded undersides leave quiet dark pockets.
+// Both tiers are closed, opaque, and cheap enough for the existing depth pass.
+function fir(near: boolean): THREE.BufferGeometry {
   const p: number[] = [], c: number[] = [], index: number[] = [];
-  const tint = new THREE.Color();
-  const add = (x: number, y: number, z: number, strength: number, wood = false) => {
+  const shade = new THREE.Color(0x202e28), lit = new THREE.Color(0x566355), tint = new THREE.Color();
+  const add = (x: number, y: number, z: number, exposure: number) => {
     p.push(x, y, z);
-    tint.copy(wood ? bark : shade);
-    if (!wood) tint.lerp(lit, clamp01(strength));
+    tint.copy(shade).lerp(lit, exposure);
     c.push(tint.r, tint.g, tint.b);
+    return p.length / 3 - 1;
   };
-  // Small ochre trunk below the branches, never separate from their silhouette.
-  if (near) {
-    for (let i = 0; i < 4; i++) {
-      const a = i * TAU / 4;
-      add(.018 * Math.cos(a), -.045, .018 * Math.sin(a), 0, true);
-      add(.011 * Math.cos(a), .35, .011 * Math.sin(a), 0, true);
-      const k = i * 2, m = (k + 2) % 8;
-      index.push(k, k + 1, m, m, k + 1, m + 1);
+  const sides = near ? 4 : 3;
+  const rings = near ? [[.04, .025], [.18, .066], [.43, .092], [.71, .056]]
+    : [[.04, .027], [.22, .100], [.60, .069]];
+  rings.forEach(([h, radius], j) => {
+    for (let i = 0; i < sides; i++) {
+      const a = TAU * i / sides + j * .21;
+      const k = add(radius * Math.cos(a), h, radius * Math.sin(a), .12 + h * .48 + .11 * Math.cos(a));
+      const m = j * sides + (i + 1) % sides;
+      if (j + 1 < rings.length) index.push(k, k + sides, m, m, k + sides, m + sides);
     }
+  });
+  const foot = add(0, -.10, 0, .015), bud = add(.019, 1, -.013, .70);
+  for (let i = 0; i < sides; i++) {
+    const m = (i + 1) % sides, k = (rings.length - 1) * sides;
+    index.push(foot, i, m, k + i, bud, k + m);
   }
-  const branches = near ? 5 : 3, root = p.length / 3;
-  for (let j = 0; j < profile.length; j++) {
-    const [h, w] = profile[j];
-    for (let i = 0; i < branches; i++) {
-      const a = TAU * i / branches + (j % 2) * .21;
-      const t = w * mix(.74, 1.22, r()) * (near && i % 2 ? .70 : 1);
-      const sway = h * h * .051 * Math.sin(seed);
-      add(t * Math.cos(a) + sway, h + (r() - .5) * .08 * (1 - h), t * Math.sin(a),
-        .16 + .44 * (.5 - .5 * Math.cos(a)) + .19 * r() + (j % 2 ? 0 : .19));
-      if (j + 1 < profile.length) {
-        const k = root + j * branches + i, m = root + j * branches + ((i + 1) % branches);
-        index.push(k, k + branches, m, m, k + branches, m + branches);
-      }
+  // Angle, shoulder height, reach, and spread. Stagger individual sprays
+  // vertically and leave a slimmer leader above the last one.
+  const fans = near ? [
+    [.08, .24, .221, .080], [2.32, .19, .218, .088], [4.48, .32, .201, .080],
+    [1.00, .44, .179, .071], [3.18, .49, .176, .075], [5.61, .50, .153, .068],
+    [2.19, .66, .127, .058], [4.67, .73, .108, .043],
+  ] : [[.45, .24, .215, .116], [2.58, .30, .209, .105], [4.60, .40, .193, .114], [1.46, .62, .145, .084]];
+  for (const [a, h, reach, spread] of fans) {
+    const ux = Math.cos(a), uz = Math.sin(a);
+    const point = (r: number, y: number, t: number, light: number) => add(ux * r - uz * t, y, uz * r + ux * t, light);
+    const loop = [point(.018, h + .064, 0, .15), point(reach * .55, h + .020, spread, .46)];
+    loop.push(point(reach, h - .065 * (1 - h), spread * -.25, .57));
+    if (near) loop.push(point(reach * .63, h - .006, -spread * .78, .31));
+    const shoulder = point(reach * .39, h + .095, -spread * .14, .81);
+    const keel = point(reach * .37, h - .045, spread * .12, .01);
+    for (let i = 0; i < loop.length; i++) {
+      const k = loop[i], m = loop[(i + 1) % loop.length];
+      index.push(shoulder, k, m, keel, m, k);
     }
   }
   const tree = new THREE.BufferGeometry();
@@ -387,28 +421,38 @@ function fir(seed: number, near: boolean): THREE.BufferGeometry {
 type Tree = { x: number; z: number; y: number; h: number; yaw: number; tone: number; width: number };
 function plant(group: THREE.Group, ground: Terrain, mat: THREE.MeshBasicMaterial): void {
   const r = rng(443), p = new THREE.Object3D(), color = new THREE.Color();
-  const meshes = [fir(34, true), fir(71, false)];
+  const meshes = [fir(true), fir(false)];
   const sectors: Tree[][] = Array.from({ length: 12 * meshes.length }, () => []);
-  const plantAt = (x: number, z: number, step: number, near: boolean) => {
+  const plantAt = (bx: number, bz: number, near: boolean) => {
+    // Gather candidates toward the same coherent stand field that colors the
+    // ground. Overlap crowns in groves rather than filling the gaps with trees.
+    const pull = near ? 7.4 : 9.5;
+    const x = bx + pull * (stand(bx + 3, bz) - stand(bx - 3, bz));
+    const z = bz + pull * (stand(bx, bz + 3) - stand(bx, bz - 3));
     const y = ground.height(x, z);
     const dx = (ground.height(x + 2, z) - ground.height(x - 2, z)) / 4;
     const dz = (ground.height(x, z + 2) - ground.height(x, z - 2)) / 4;
     const slope = 1 - 1 / Math.hypot(1, dx, dz);
     const forest = forestCover(x, z, y, slope);
     const dist = Math.hypot(x, z);
-    if (Math.hypot(x - KEEP.x, z - KEEP.z) < 20 || Math.hypot(x - GATE.x, z - GATE.z) < 12
+    const kx = x - KEEP.x, kz = z - KEEP.z;
+    if ((Math.abs(keepSide(kx, kz)) < 21 && keepRun(kx, kz) > -33 && keepRun(kx, kz) < 24)
+      || Math.hypot(x - GATE.x, z - GATE.z) < 12
       || Math.hypot(x - 77, z + 62) < 13 || Math.hypot(x - 119, z + 39) < 11
-      || dist < 41 || r() > smooth(.23, .62, forest) * .98) return;
-    const h = mix(2.4, near ? 7.9 : 8.25, Math.pow(r(), 1.34)) * mix(.76, 1.28, forest);
+      || dist < 41 || r() > smooth(.27, .67, forest) * .89) return;
+    const age = r();
+    const h = mix(2.25, near ? 8.4 : 8.5, age ** 1.47) * mix(.80, 1.22, forest);
+    const width = mix(1.22, .85, age) * mix(.84, 1.34, r());
     const a = ((Math.atan2(z, x) + TAU) % TAU) / TAU;
     const cell = Math.floor(a * 12) * meshes.length + (near ? 0 : 1);
-    sectors[cell].push({ x, z, y: y - .10, h, yaw: r() * TAU, tone: mix(.59, 1.19, r()), width: mix(.79, 1.40, r()) * Math.min(1, step / 4) });
+    sectors[cell].push({ x, z, y: y - .06, h, yaw: r() * TAU,
+      tone: mix(.72, 1.03, r()) * mix(.96, 1.05, age), width });
   };
   for (const [min, max, step, near] of [[41, 100, 4.05, true], [100, 239, 6.0, false]] as const) {
     for (let z = -max; z < max; z += step) for (let x = -max; x < max; x += step) {
       const bx = x + r() * step, bz = z + r() * step, d = Math.hypot(bx, bz);
       if (d < min || d >= max) continue;
-      plantAt(bx, bz, step, near);
+      plantAt(bx, bz, near);
     }
   }
   // A few anchored stands silhouette the fortress spur and the sides of its scree gullies.
@@ -416,7 +460,7 @@ function plant(group: THREE.Group, ground: Terrain, mat: THREE.MeshBasicMaterial
     const a = r() * TAU, d = 23 + 45 * r();
     const x = KEEP.x + Math.sin(a) * d, z = KEEP.z + Math.cos(a) * d;
     const h = ground.height(x, z);
-    if (h > 11 && h < 44) plantAt(x, z, 6, false);
+    if (h > 11 && h < 44) plantAt(x, z, false);
   }
   sectors.forEach((trees, i) => {
     if (!trees.length) return;
@@ -425,7 +469,8 @@ function plant(group: THREE.Group, ground: Terrain, mat: THREE.MeshBasicMaterial
     mesh.name = lod ? 'distant fir stands' : 'near fir stands';
     trees.forEach((t, k) => {
       p.position.set(t.x, t.y, t.z);
-      p.rotation.set(0, t.yaw, 0);
+      // A few degrees of lean vary the leader without moving the buried foot.
+      p.rotation.set(Math.sin(t.yaw * 2) * .061, t.yaw, Math.cos(t.yaw * 3) * .065);
       p.scale.set(t.h * t.width, t.h, t.h * t.width);
       p.updateMatrix();
       mesh.setMatrixAt(k, p.matrix);
@@ -462,7 +507,9 @@ function architecture(group: THREE.Group, ground: Terrain, paints: ReturnType<ty
     add(new THREE.BoxGeometry(w, h, d).rotateY(angle).translate(x, y, z), tint, finish);
   const cylinder = (x: number, y: number, z: number, r1: number, r2: number, h: number, tint: number, finish: Material = 'stone') =>
     add(new THREE.CylinderGeometry(r1, r2, h, 10).translate(x, y, z), tint, finish);
-  const wallColor = 0x697480, edge = 0x747d87, roofColor = 0x36414c, rubble = 0x586064;
+  const common = { wall: 0x697480, trim: 0x747d87, roof: 0x36414c, footing: 0x586064 };
+  const keep = { wall: 0x515c65, trim: 0x61696f, roof: 0x2f3943, footing: 0x444e53 };
+  const { wall: wallColor, trim: edge, roof: roofColor, footing: rubble } = common;
   const base = (x: number, z: number, w: number, d: number, a = 0) => {
     let level = ground.height(x, z);
     for (const u of [-.5, 0, .5]) for (const v of [-.5, 0, .5]) {
@@ -482,33 +529,33 @@ function architecture(group: THREE.Group, ground: Terrain, paints: ReturnType<ty
   const slit = (x: number, y: number, z: number, w: number, h: number, a: number, strength: number) => {
     add(new THREE.ShapeGeometry(opening(w, h), 4).rotateY(a).translate(x, y, z), strength, 'apertures');
   };
-  const curtain = (ax: number, az: number, bx: number, bz: number, top: number, cren = true) => {
+  const curtain = (ax: number, az: number, bx: number, bz: number, top: number, cren = true, finish = common) => {
     const x = (ax + bx) / 2, z = (az + bz) / 2, span = Math.hypot(bx - ax, bz - az), a = Math.atan2(bx - ax, bz - az);
     const y = Math.min(top - .55, base(x, z, 2.2, span, a));
-    box(x, (y + top) / 2, z, 2.2, top - y, span + .4, wallColor, a);
-    box(x, top - .4, z, 2.65, .62, span + .5, edge, a);
+    box(x, (y + top) / 2, z, 2.2, top - y, span + .4, finish.wall, a);
+    box(x, top - .4, z, 2.65, .62, span + .5, finish.trim, a);
     const n = Math.floor(span / 2.35);
     if (cren) for (let i = 0; i <= n; i++) {
       const t = (i + .35) / (n + 1);
-      box(mix(ax, bx, t), top + .44, mix(az, bz, t), 2.25, 1, 1.11, edge, a);
+      box(mix(ax, bx, t), top + .44, mix(az, bz, t), 2.25, 1, 1.11, finish.trim, a);
     }
   };
-  const tower = (x: number, z: number, foot: number, r: number, top: number, spire: number, ragged = false) => {
+  const tower = (x: number, z: number, foot: number, r: number, top: number, spire: number, ragged = false, finish = common) => {
     const y = Math.min(top - 4, base(x, z, r * 2, r * 2));
     const skirt = Math.min(top - 1.5, Math.max(foot + 2.1, y + 2.1));
-    cylinder(x, (y + skirt) / 2, z, r, r * 1.22, skirt - y, rubble);
-    cylinder(x, (skirt + top) / 2, z, r * .88, r, top - skirt, wallColor);
-    cylinder(x, top - .2, z, r * 1.06, r * .91, .75, edge);
-    cylinder(x, top + .38, z, r * 1.06, r * 1.06, .58, wallColor);
+    cylinder(x, (y + skirt) / 2, z, r, r * 1.22, skirt - y, finish.footing);
+    cylinder(x, (skirt + top) / 2, z, r * .88, r, top - skirt, finish.wall);
+    cylinder(x, top - .2, z, r * 1.06, r * .91, .75, finish.trim);
+    cylinder(x, top + .38, z, r * 1.06, r * 1.06, .58, finish.wall);
     if (spire > 0) {
-      cylinder(x, top + spire * .15 + .65, z, r * .77, r * 1.22, spire * .30, roofColor, 'roof');
-      cylinder(x, top + spire * .65 + .65, z, .05, r * .77, spire * .70, roofColor, 'roof');
-      cylinder(x, top + spire + 1.02, z, .025, .08, .85, edge);
+      cylinder(x, top + spire * .15 + .65, z, r * .77, r * 1.22, spire * .30, finish.roof, 'roof');
+      cylinder(x, top + spire * .65 + .65, z, .05, r * .77, spire * .70, finish.roof, 'roof');
+      cylinder(x, top + spire + 1.02, z, .025, .08, .85, finish.trim);
     } else {
       for (let i = 0; i < 9; i++) {
         if (ragged && (i === 3 || i === 4 || i === 5 || i === 7)) continue;
         const a = i / 9 * TAU;
-        box(x + Math.sin(a) * r * .82, top + (ragged && i % 2 ? .9 : 1.32), z + Math.cos(a) * r * .82, .81, ragged && i % 2 ? .68 : 1.32, .65, edge, a);
+        box(x + Math.sin(a) * r * .82, top + (ragged && i % 2 ? .9 : 1.32), z + Math.cos(a) * r * .82, .81, ragged && i % 2 ? .68 : 1.32, .65, finish.trim, a);
       }
     }
     // Cardinal slits laid against the taper, above the retaining bank.
@@ -518,35 +565,48 @@ function architecture(group: THREE.Group, ground: Terrain, paints: ReturnType<ty
     }
   };
   const { x, y, z } = KEEP;
-  // Successive terraces and two offset spires; retain the near end of the curtain in the rock.
-  const keepBase = base(x + 2, z + 2, 21, 17);
-  box(x + 2, (keepBase + y + 25) / 2, z + 2, 21, y + 25 - keepBase, 17, wallColor);
-  box(x + 2, y + 24, z + 2, 22, 1.25, 18, edge);
-  for (const dz of [-6.5, 10.5]) for (let dx = -8; dx <= 12; dx += 2.5)
-    box(x + dx, y + 25.6, z + dz, 1.18, 1.3, .75, edge);
-  for (const dx of [-8.5, 12.5]) for (let dz = -4; dz <= 8; dz += 2.5)
-    box(x + dx, y + 25.6, z + dz, .75, 1.3, 1.18, edge);
-  const inner = base(x - 9, z + 2, 6, 15);
-  box(x - 9, (inner + y + 16) / 2, z + 2, 6, y + 16 - inner, 15, 0x6a747e);
-  for (const dz of [-3.8, 1, 5.8]) {
-    box(x - 11.9, y + 8.6, z + dz, .76, 13.6, .85, edge);
-    slit(x - 12.02, y + 10, z + dz + 1.3, .72, 3.4, -Math.PI / 2, dz > 0 ? 0x77715a : 0xaca18a);
-    slit(x - 8.53, y + 19, z + dz + 1.2, .63, 2.8, -Math.PI / 2, dz > 0 ? 0x967f66 : 0x50443b);
+  // A recessed upper hall, projecting lower wing, and a descending outer
+  // curtain share the same ledge. Feet are cut into the triangulated rock.
+  const hallX = x + 3, hallZ = z + 1.8, hallW = 16, hallD = 13.6;
+  const hallFoot = base(hallX, hallZ, hallW, hallD), hallTop = y + 24.5;
+  box(hallX, (hallFoot + hallTop) / 2, hallZ, hallW, hallTop - hallFoot, hallD, keep.wall);
+  box(hallX, hallTop - .9, hallZ, hallW + .56, .68, hallD + .56, keep.trim);
+  for (const side of [-1, 1]) {
+    for (const dx of [-6.7, -4.0, -1.3, 1.4, 4.1, 6.8])
+      box(hallX + dx, hallTop + .52, hallZ + side * hallD / 2, 1.13, 1.26, .82, keep.trim);
+    for (const dz of [-4.2, -1.4, 1.4, 4.2])
+      box(hallX + side * hallW / 2, hallTop + .52, hallZ + dz, .82, 1.26, 1.15, keep.trim);
   }
-  for (const [dx, dy] of [[-5.5, 15.3], [.3, 11.4], [4.0, 17.6], [10.1, 14.6]])
-    slit(x + dx, y + dy, z - 6.52, .65, 2.88, Math.PI, dx > 5 ? 0x565044 : 0xa88a6f);
-  tower(x - 6.8, z - 8.1, y - 1.8, 3.0, y + 27, 12.4);
-  tower(x + 2.3, z + 7.2, y - 1.8, 3.2, y + 31, 15.6);
-  tower(x + 10, z + 10, y - 1.8, 3.4, y + 25, 8.5);
-  tower(x - 25, z - 10.8, y - 10, 3.0, y + 6.5, 9.0);
-  tower(x - 15, z + 13, y - 8, 3.0, y + 7.8, 0, true);
-  tower(x + 4, z + 19, y - 8, 2.8, y + 11, 0);
-  curtain(x - 25, z - 10.8, x - 15, z + 13, y + .8);
-  curtain(x - 15, z + 13, x + 4, z + 19, y + 4.6);
-  curtain(x + 4, z + 19, x + 13, z + 11, y + 6.8);
-  curtain(x - 25, z - 10.8, x - 8, z - 10, y + 4.1);
-  for (const tx of [-20.7, -17.0, -13.3]) {
-    slit(x + tx, y + 1.5, z - 11.56 + (tx + 25) * .047, .64, 1.62, Math.PI, tx < -18 ? 0x67594d : 0xa9937b);
+  const wingX = x - 8.1, wingZ = z + 1.4, wingTop = y + 15.8;
+  const wingFoot = base(wingX, wingZ, 8.8, 16.4);
+  box(wingX, (wingFoot + wingTop) / 2, wingZ, 8.8, wingTop - wingFoot, 16.4, 0x465159);
+  box(wingX, wingTop - .38, wingZ, 9.1, .62, 16.7, keep.trim);
+  for (const dz of [-5.5, -.8, 4.0]) {
+    const bx = wingX - 4.5, bz = wingZ + dz;
+    const foot = base(bx, bz, 2.6, 1.4), shoulder = wingTop - 1.35;
+    box(bx, (foot + shoulder) / 2, bz, 2.35, shoulder - foot, 1.34, keep.footing);
+    slit(wingX - 4.43, y + 8.3, bz + 2.0, .88, 3.30, -Math.PI / 2, dz > 0 ? 0x77715a : 0xaca18a);
+  }
+  for (const dz of [-3.3, 1.3, 5.0])
+    slit(hallX - hallW / 2 - .028, y + 18.1, hallZ + dz, .79, 3.6, -Math.PI / 2, dz > 0 ? 0x967f66 : 0x50443b);
+  for (const [dx, dy] of [[-4.5, 17.3], [0, 14.4], [4.6, 17.3]])
+    slit(hallX + dx, y + dy, hallZ - hallD / 2 - .025, .80, 3.32, Math.PI, dx > 3 ? 0x565044 : 0xa88a6f);
+  tower(x - 6.8, z - 8.1, y - 1.8, 3, y + 27, 12.4, false, keep);
+  tower(x + 2.3, z + 9.4, y - 1.8, 3.2, y + 31, 15.6, false, keep);
+  tower(x + 9.4, z - 6.7, y - 1.8, 2.75, y + 22, 8.5, false, keep);
+  tower(x - 27, z - 12.2, y - 13, 3.15, y + 8.7, 8.3, false, keep);
+  tower(x - 19, z + 12, y - 10, 3, y + 6.6, 0, false, keep);
+  tower(x + 1.5, z + 18.5, y - 8, 2.8, y + 10, 0, false, keep);
+  curtain(x - 27, z - 12.2, x - 19, z + 12, y + 2.9, true, keep);
+  curtain(x - 19, z + 12, x + 1.5, z + 18.5, y + 4.6, true, keep);
+  curtain(x + 1.5, z + 18.5, x + 10.5, z + 7.6, y + 6.8, true, keep);
+  curtain(x - 27, z - 12.2, x - 6.8, z - 8.1, y + 5.45, true, keep);
+  // The downhill curtain ties the low tower into the base rather than leaving
+  // an isolated turret on the skyline. Its slits follow the wall plane.
+  const a = Math.atan2(20.2, 4.1);
+  for (const t of [.22, .43, .63]) {
+    const px = mix(x - 27, x - 6.8, t), pz = mix(z - 12.2, z - 8.1, t);
+    slit(px + Math.cos(a) * 1.12, y + 1.5, pz - Math.sin(a) * 1.12, .68, 1.77, a + Math.PI / 2, 0x87705d);
   }
 
   // Pass gate bridges the road with an actual open pointed arch, viewed from the west.

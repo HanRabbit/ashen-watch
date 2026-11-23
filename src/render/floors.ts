@@ -7,13 +7,14 @@ import { World } from '../sim/state';
 import { Batch } from './geom';
 import { Materials, scaleUV, tiledBox } from './materials';
 import { variants } from './materialVariants';
+import { addYardProp } from './yardProps';
+import { addYardArcade } from './yardArcade';
 
 export interface Floors {
   group: THREE.Group;
   update(w: World): void;
 }
 
-const HALF_PI = Math.PI / 2;
 
 function boxY(b: Batch, mat: THREE.Material, x0: number, z0: number, x1: number, z1: number, y0: number, y1: number, tile = 2): void {
   b.box(mat, x0, z0, x1, z1, y0, y1, tile);
@@ -67,7 +68,15 @@ export function buildFloors(m: Materials): Floors {
 
   for (const s of STAIR_BODIES) {
     const mat = s.id === 'S4' ? v.woodFloorOld : v.wallTrim;
-    for (const step of s.boxes) boxY(b, mat, step.x0, step.z0, step.x1, step.z1, step.y0!, step.h, 1.2);
+    for (const [i, step] of s.boxes.entries()) {
+      const g = tiledBox(step.x1 - step.x0, step.h - step.y0!, step.z1 - step.z0, 1.2);
+      const uv = g.getAttribute('uv');
+      // Each nosing was cut from a different length of stock. Previously every
+      // riser had the same nick and the same dark joint in a vertical line up S3.
+      const u = (i * 0.381966 + 0.19) % 1, v = (i % 5) * 0.173;
+      for (let j = 0; j < uv.count; j++) uv.setXY(j, uv.getX(j) + u, uv.getY(j) + v);
+      b.geo(mat, g, (step.x0 + step.x1) / 2, (step.y0! + step.h) / 2, (step.z0 + step.z1) / 2);
+    }
   }
   for (const r of STAIR_RAILS) {
     const dx = r.x1 - r.x0, dy = r.to - r.from;
@@ -116,30 +125,13 @@ export function buildFloors(m: Materials): Floors {
     const isGal = s.x0 >= 13.4 && s.z0 >= 20.0;
     boxY(b, isGal ? v.woodFloorOld : v.floorFlagWorn, s.x0, s.z0, s.x1, s.z1, s.y0!, s.h);
   }
-  // 券廊尖拱（视觉，墩间）
-  const pierZ = [11.6, 14.0, 14.6, 18.4, 19.0, 21.4];
-  for (let i = 0; i < pierZ.length - 1; i += 2) {
-    const z0 = pierZ[i], z1 = pierZ[i + 1];
-    const w = z1 - z0;
-    b.geo(v.wallTrim, scaleUV(new THREE.TorusGeometry(w / 2, 0.12, 6, 12, Math.PI), 1), 10.25, 3.4, (z0 + z1) / 2, 0, HALF_PI, 0);
-  }
+  addYardArcade(b, v.wallAshlar, v.wallTrim);
 
   // —— 庭院掩体 / 柱列 / 前景桶箱 ——
   for (const p of PROPS) {
     const y0 = p.y0 ?? 0;
-    if (p.tag === 'cart') {
-      boxY(b, v.woodPlank, p.x0, p.z0, p.x1, p.z1, y0 + 0.5, y0 + 1.2, 1.4);
-      b.geo(v.woodBeam, scaleUV(new THREE.CylinderGeometry(0.35, 0.35, 0.12, 10), 1), p.x0 + 0.5, y0 + 0.35, p.z0 + 0.2, 0, 0, HALF_PI);
-      b.geo(v.woodBeam, scaleUV(new THREE.CylinderGeometry(0.35, 0.35, 0.12, 10), 1), p.x1 - 0.5, y0 + 0.35, p.z0 + 0.2, 0, 0, HALF_PI);
-      boxY(b, v.woodBeam, p.x0, p.z1 - 0.1, p.x1, p.z1, y0 + 1.2, y0 + 1.6, 1);
-    } else if (p.tag === 'scaffold') {
-      for (const [dx, dz] of [[0, 0], [1.6, 0], [0, 1.0], [1.6, 1.0]]) boxY(b, v.woodBeam, p.x0 + dx, p.z0 + dz, p.x0 + dx + 0.12, p.z0 + dz + 0.12, y0, y0 + 2.2, 1);
-      boxY(b, v.woodPlank, p.x0, p.z0, p.x1, p.z0 + 0.1, y0 + 1.0, y0 + 1.1, 1);
-      b.geo(v.woodPlank, tiledBox(2.0, 0.08, 0.4, 1), (p.x0 + p.x1) / 2, y0 + 1.6, (p.z0 + p.z1) / 2, 0, 0, 0.5);
-    } else if (p.tag === 'crateStack') {
-      boxY(b, v.woodPlank, p.x0, p.z0, p.x0 + 0.8, p.z0 + 0.8, y0, y0 + 0.8, 1.2);
-      boxY(b, v.woodPlank, p.x0 + 0.7, p.z0 + 0.6, p.x1, p.z1, y0, y0 + 0.7, 1.2);
-      boxY(b, v.woodPlank, p.x0 + 0.2, p.z0 + 0.2, p.x0 + 1.0, p.z0 + 1.0, y0 + 0.8, y0 + 1.5, 1.2);
+    if (p.tag === 'cart' || p.tag === 'scaffold' || p.tag === 'crateStack') {
+      addYardProp(b, p, m, v);
     } else if (p.tag === 'wallStub') {
       // Low fallen wall: tapered courses, exposed core and a jagged break.
       const len = p.x1 - p.x0, depth = p.z1 - p.z0;
