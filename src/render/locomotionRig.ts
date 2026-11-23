@@ -43,3 +43,27 @@ export class LimbSolver {
     joint.quaternion.copy(this.parent.invert()).multiply(orientation);
   }
 }
+
+/** Highest reachable hip height for a fixed ankle, with a reserve for knee flex. */
+export function supportCeiling(ankleY: number, horizontal: number, length: number): number {
+  const reach = Math.max(0, length - 0.012);
+  return ankleY + Math.sqrt(Math.max(0, reach * reach - horizontal * horizontal));
+}
+
+/** Analytic damped oscillator. Subdividing a render tick does not change its
+ * response to a constant drive. The small overshoot reads as hanging mass. */
+export class HangingAngle {
+  value = 0;
+  private velocity = 0;
+
+  reset(): void { this.value = this.velocity = 0; }
+
+  update(target: number, dt: number, omega = 13, decay = 8): number {
+    const x = this.value - target, v = this.velocity;
+    const w = Math.sqrt(omega * omega - decay * decay);
+    const c = Math.cos(w * dt), s = Math.sin(w * dt), e = Math.exp(-decay * dt);
+    this.value = target + e * (x * c + (v + decay * x) / w * s);
+    this.velocity = e * (v * c - (omega * omega * x + decay * v) / w * s);
+    return this.value;
+  }
+}

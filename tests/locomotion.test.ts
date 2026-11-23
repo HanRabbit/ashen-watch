@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { Bone, Group, Quaternion, Vector3 } from 'three';
 import { type FloorHeight, type PacePoint, WatchmanPace } from '../src/render/locomotion';
-import { LimbSolver } from '../src/render/locomotionRig';
+import { HangingAngle, LimbSolver, supportCeiling } from '../src/render/locomotionRig';
 
 const ground = () => 0;
 const step = 1 / 60;
@@ -67,6 +67,57 @@ describe('displacement-driven watchman', () => {
     }
   });
 
+  it('loads a new stance at touchdown and never issues another plant while blocked', () => {
+    const { pace, at } = start();
+    let touchdowns = 0, doubleSupport = 0;
+    for (let i = 0; i < 100; i++) {
+      const prior = structuredClone(pace.feet);
+      drive(pace, at, 0, 1.8, step);
+      pace.feet.forEach((f, j) => {
+        const landed = !prior[j].planted && f.planted;
+        expect(f.plantId - prior[j].plantId).toBe(Number(landed));
+        if (landed) {
+          expect(f.pitch).toBe(0);
+          expect(pace.compression).toBeGreaterThan(0.35);
+          touchdowns++;
+        }
+      });
+      if (pace.feet.every((f) => f.planted)) doubleSupport++;
+    }
+    expect(touchdowns).toBeGreaterThan(5);
+    expect(doubleSupport).toBeGreaterThan(touchdowns);
+    drive(pace, at, 0, 0, 0.9);
+    const rest = structuredClone(pace.feet);
+    drive(pace, at, 0, 0, 0.5);
+    expect(pace.feet).toEqual(rest);
+    expect(Math.abs(pace.support)).toBeLessThan(0.02);
+  });
+
+  it('keeps a flat foot level and controls swing on treads in both directions', () => {
+    const { pace, at } = start();
+    const tread: FloorHeight = (_x, z) => Math.floor((z + 1e-8) / 0.19) * 0.17;
+    for (const direction of [1, -1]) {
+      let gained = 0, lastY = at.y;
+      for (let i = 0; i < 70; i++) {
+        const prior = structuredClone(pace.feet);
+        drive(pace, at, 0, direction * 1.8, step, tread);
+        pace.feet.forEach((f, j) => {
+          if (!f.planted) return;
+          expect(f.pitch).toBe(0);
+          expect(f.y).toBe(tread(f.x, f.z, at.y));
+          if (prior[j].planted) expect(f).toEqual(prior[j]);
+          else {
+            if (direction * (f.y - lastY) > 0) gained++;
+            lastY = f.y;
+            expect(tread(f.x, f.z + 0.134, at.y)).toBeLessThanOrEqual(f.y + 0.1);
+            expect(Math.abs(f.y - prior[j].y)).toBeLessThan(0.145);
+          }
+        });
+      }
+      expect(gained).toBeGreaterThan(2);
+    }
+  });
+
   it('keeps the supporting boot on individual treads and discards stale contacts on relocation', () => {
     const { pace, at } = start();
     const tread: FloorHeight = (_x, z) => Math.floor(Math.max(0, z) / 0.27) * 0.17;
@@ -91,4 +142,25 @@ it('solves an arbitrarily rotated, scaled limb rather than assuming a bone-local
   expect(tip.getWorldPosition(new Vector3()).distanceTo(target)).toBeLessThan(0.001);
   solver.orient(tip, new Quaternion());
   expect(tip.getWorldQuaternion(new Quaternion()).angleTo(new Quaternion())).toBeLessThan(0.001);
+});
+
+
+it('keeps a planted ankle reachable with a knee-flex margin', () => {
+  const limit = supportCeiling(0.12, 0.43, 0.91);
+  expect(Math.hypot(limit - 0.12, 0.43)).toBeCloseTo(0.898, 6);
+  expect(supportCeiling(-0.13, 0.43, 0.91)).toBeCloseTo(limit - 0.25, 6);
+});
+
+it('gives the hanging lantern a lagged, frame-rate-independent return', () => {
+  const a = new HangingAngle(), b = new HangingAngle();
+  const initial = a.update(0.12, step);
+  expect(initial).toBeGreaterThan(0);
+  expect(initial).toBeLessThan(0.03);
+  for (let i = 0; i < 29; i++) a.update(0.12, step);
+  for (let i = 0; i < 60; i++) b.update(0.12, step / 2);
+  expect(a.value).toBeCloseTo(b.value, 8);
+  for (let i = 0; i < 60; i++) a.update(0, step);
+  expect(Math.abs(a.value)).toBeLessThan(0.001);
+  a.reset();
+  expect(a.value).toBe(0);
 });

@@ -10,7 +10,7 @@ export interface HunterAsset {
   root: THREE.Group;
   mixer: THREE.AnimationMixer;
   idle: THREE.AnimationClip;
-  feet: { orientation: THREE.Quaternion; ankleHeight: number }[];
+  feet: { orientation: THREE.Quaternion; ankleHeight: number; soleLocal: THREE.Vector3 }[];
   /** World-space position of the light emitter, shared by body and outfit materials. */
   lampSource: { value: THREE.Vector3 };
   bones: Record<string, THREE.Bone>;
@@ -241,17 +241,44 @@ export function prepHunter(gltf: GLTF): HunterAsset {
   const chestAnchor = meterAnchor(bones.spine2 ?? bones.spine ?? scene, wrap);
   // In the normalized asset front is -Z; ankle→toe provides each boot's
   // real forward axis (the baked stance has feet turned in different directions).
+  wrap.updateMatrixWorld(true);
   const feet = ['L', 'R'].map((side) => {
     const ankle = bones[`foot${side}`], toe = bones[`toe${side}`];
     const orientation = new THREE.Quaternion();
     let ankleHeight = 0.125;
+    const soleLocal = new THREE.Vector3();
     if (ankle && toe) {
       const forward = toe.getWorldPosition(new THREE.Vector3()).sub(ankle.getWorldPosition(new THREE.Vector3()));
       const yaw = Math.atan2(forward.x, -forward.z);
       orientation.setFromAxisAngle(new THREE.Vector3(0, 1, 0), yaw).multiply(ankle.getWorldQuaternion(new THREE.Quaternion()));
       ankleHeight = Math.abs(forward.y) + 0.029;
+      const ankleW = ankle.getWorldPosition(new THREE.Vector3());
+      if (mesh) {
+        // Measure the loaded boot's actual bottom. Toe-bone height alone puts
+        // the leather sole at an arbitrary offset from the tread.
+        const position = mesh.geometry.attributes.position;
+        const skin = mesh.geometry.attributes.skinIndex;
+        const weight = mesh.geometry.attributes.skinWeight;
+        const joints = mesh.skeleton.bones;
+        const ankleIndex = joints.indexOf(ankle), toeIndex = joints.indexOf(toe);
+        const vertex = new THREE.Vector3();
+        let floor = Infinity;
+        for (let i = 0; i < position.count; i++) {
+          let total = 0;
+          for (let j = 0; j < 4; j++) {
+            const index = skin.getComponent(i, j);
+            if (index === ankleIndex || index === toeIndex) total += weight.getComponent(i, j);
+          }
+          if (total > 0.65) floor = Math.min(floor, mesh.localToWorld(mesh.getVertexPosition(i, vertex)).y);
+        }
+        if (Number.isFinite(floor)) ankleHeight = THREE.MathUtils.clamp(ankleW.y - floor, 0.04, 0.18);
+      }
+      const toeAxis = forward.setY(0).normalize();
+      soleLocal.copy(ankleW).addScaledVector(toeAxis, 0.035);
+      soleLocal.y -= ankleHeight;
+      ankle.worldToLocal(soleLocal);
     }
-    return { orientation, ankleHeight };
+    return { orientation, ankleHeight, soleLocal };
   });
 
   const mixer = new THREE.AnimationMixer(scene);
