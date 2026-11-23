@@ -4,7 +4,9 @@
 // AW_ART_WALK=1 looks through both sides of the gatehouse window, then circles the cart, west wall and gutter.
 // AW_RODIN_WALK=1 runs the ground-floor Rodin scout instead of the rampart route.
 // AW_RUBBLE_WALK=1 skips the outer loop to inspect collapsed masonry on foot, in both directions.
-// AW_GATE_ROOF=1 circles the gatehouse from the room to the wall walk (no teleport or fixed camera).
+// AW_GATE_ROOF=1 (or before) circles the gatehouse with the normal follow camera; old builds need no new roof.
+// AW_GATE_ROOF=after requires live coverage of the new roof. AW_ROOF_CHECK=off|optional|required
+// controls the independent probe on the ordinary roof route (defaults to optional).
 // AW_GROUND_WALK=1 watches scan relief and bedding from opposing traversals of the cart run.
 import fs from 'node:fs';
 import path from 'node:path';
@@ -16,7 +18,10 @@ const [channel = 'chrome', phase = 'day'] = args.filter((s) => !s.startsWith('--
 if (!['day', 'night'].includes(phase)) throw new Error('照明阶段必须是 day 或 night');
 const quality = process.env.AW_ROUTE_QUALITY ?? 'cinematic';
 const artWalk = process.env.AW_ART_WALK === '1';
-const roofWalk = process.env.AW_GATE_ROOF === '1';
+const roofMode = process.env.AW_GATE_ROOF;
+const roofWalk = ['1', 'before', 'after'].includes(roofMode);
+const roofCheck = roofMode === 'after' ? 'required' : process.env.AW_ROOF_CHECK ?? 'optional';
+if (roofWalk && !['off', 'optional', 'required'].includes(roofCheck)) throw new Error('AW_ROOF_CHECK must be off, optional or required');
 const westWalk = process.env.AW_WEST_WALK === '1';
 const northWalk = process.env.AW_NORTH_WALK === '1';
 const rubbleWalk = process.env.AW_RUBBLE_WALK === '1';
@@ -26,15 +31,29 @@ const runName = `${phase}-${roofWalk ? 'gatehouse' : rubbleWalk ? 'rubble' : gro
 const { browser, context, page, errors } = await launch({ channel, headless: args.includes('--headless') });
 const bot = new Bot(page);
 const report = { phase, quality, artWalk, roofWalk, westWalk, northWalk, rodinWalk, rubbleWalk, groundWalk, viewport: page.viewportSize(), frames: [], errors };
-const capture = async (name, yaw, pitch, floor) => {
+const capture = async (name, yaw, pitch, floor, roofShot = false) => {
   await bot.aim(yaw, 0.025, pitch);
   await sleep(450);
-  const frame = await page.evaluate(() => {
+  // A 180° keyboard/mouse turn can take longer than the fixed pause in CameraRig.
+  // Capture only once the lens (not just the input) is facing the planned subject.
+  if (roofShot) {
+    await waitFor(page, ({ yaw, pitch }) => {
+      const c = window.__awDev.view.camera;
+      const d = c.getWorldDirection(c.position.clone());
+      const lensYaw = Math.atan2(d.x, -d.z);
+      const az = Math.atan2(Math.sin(lensYaw - yaw), Math.cos(lensYaw - yaw));
+      const el = Math.atan2(-d.y, Math.hypot(d.x, d.z)) - pitch;
+      return Math.abs(az) <= .035 && Math.abs(el) <= .055;
+    }, 4000, { yaw, pitch });
+  }
+  const frame = await page.evaluate((roofShot) => {
     const { world, perf, locked } = window.__awProbe.state();
     const { input, view } = window.__awDev;
     const { x, y, z, floor } = world.player;
-    return { phase: world.phase, x, y, z, floor, volume: view.post.volume ? [view.post.volume.target.width, view.post.volume.target.height, view.post.glow.uniforms.uHasVolume.value] : null, fixed: !!view.fixedCam, locked: locked && !input.fakeLock, camera: view.camera.position.toArray(), perf };
-  });
+    const camera = view.camera;
+    const lens = roofShot ? { direction: camera.getWorldDirection(camera.position.clone()).toArray(), fov: camera.fov } : undefined;
+    return { phase: world.phase, x, y, z, floor, volume: view.post.volume ? [view.post.volume.target.width, view.post.volume.target.height, view.post.glow.uniforms.uHasVolume.value] : null, fixed: !!view.fixedCam, locked: locked && !input.fakeLock && (!roofShot || document.pointerLockElement === view.renderer.domElement), camera: camera.position.toArray(), lens, perf };
+  }, roofShot);
   if (frame.fixed || !frame.locked || frame.phase !== phase || frame.floor !== floor) {
     throw new Error(`${name} 未在预期的实走视角/楼层：${JSON.stringify(frame)}`);
   }
@@ -42,6 +61,7 @@ const capture = async (name, yaw, pitch, floor) => {
   report.frames.push({ name, ...frame });
   await shot(page, `${phase}-${name}.png`);
   console.log(phase, name, floor, [frame.x, frame.y, frame.z].map((n) => n.toFixed(2)), frame.perf.fps.toFixed(1), 'fps');
+  return report.frames.at(-1);
 };
 const walk = (x, z, floor = '1F') => bot.walkTo(x, z, { floor, stop: 0.22, maxSecs: 40 });
 
@@ -242,23 +262,171 @@ async function walkGround() {
   }
 }
 
+// staticLevel.ts -> gatehouseRoof.ts: the replacement and the named GLB meshes are
+// distinct from the old roof and the independent bell eave/room trusses.
+const gateRoof = {
+  root: 'rodin-gatehouse-roof', fallback: 'gatehouse-roof-fallback',
+  parts: ['GatehouseSlate', 'GatehouseOuterOak', 'GatehouseSoffit'],
+};
+let roofMath;
+
+function inspectGateRoof({ spec, math }) {
+  const { view } = window.__awDev;
+  const { scene, camera } = view;
+  const roots = scene.getObjectsByProperty('name', spec.root);
+  const root = roots[0];
+  const fallback = scene.getObjectByName(spec.fallback);
+  const visible = (o) => {
+    if (!o) return false;
+    for (; o; o = o.parent) if (!o.visible) return false;
+    return true;
+  };
+  const materials = (o) => Array.isArray(o.material) ? o.material : [o.material];
+  const opaque = (m) => m && m.visible !== false && m.depthWrite && (!m.transparent || m.opacity >= .95);
+  const isMesh = (o) => o.isMesh && o.geometry?.attributes.position?.count >= 3;
+  const allMeshes = [];
+  root?.traverse((o) => { if (isMesh(o)) allMeshes.push(o); });
+  const meshes = allMeshes.filter((o) => visible(o) && camera.layers.test(o.layers) && materials(o).some(opaque));
+  const parts = spec.parts.map((name) => {
+    const found = allMeshes.filter((o) => o.name === name);
+    const o = found[0];
+    return { name, count: found.length, visible: meshes.includes(o),
+      triangles: o ? (o.geometry.index?.count ?? o.geometry.attributes.position.count) / 3 : 0 };
+  });
+  const asset = { roots: roots.length, source: root?.userData.source ?? null, rootVisible: visible(root),
+    fallbackPresent: !!fallback, fallbackVisible: visible(fallback), parts };
+  const ready = roots.length === 1 && asset.source === 'hyper3d' && asset.rootVisible && !asset.fallbackVisible &&
+    allMeshes.length === parts.length && parts.every((p) => p.count === 1 && p.visible && p.triangles > 0);
+  if (!math || !ready) return { status: ready ? 'mounted' : root ? 'incomplete' : 'missing', ...asset };
+
+  // Sample at native follow-camera pixel coordinates. Roof-only first hits say
+  // where the roof projects; then opaque, depth-writing world geometry can block
+  // those hits. Bounds/coverage below are sample estimates, not GPU pixel masks.
+  const { Raycaster, Vector2 } = math;
+  const grid = { columns: 32, rows: 18 };
+  const { clientWidth: width, clientHeight: height } = view.renderer.domElement;
+  const ray = new Raycaster();
+  const xy = new Vector2();
+  ray.layers.mask = camera.layers.mask;
+  ray.near = camera.near;
+  const setRay = ({ x, y }, far) => {
+    ray.far = far;
+    ray.setFromCamera(xy.set(2 * x / width - 1, 1 - 2 * y / height), camera);
+  };
+  const onOpaque = ({ object, face }) => opaque(materials(object)[face?.materialIndex ?? 0]);
+  const blockers = [];
+  const roofMeshes = new Set(allMeshes);
+  scene.traverseVisible((o) => {
+    if (isMesh(o) && !roofMeshes.has(o) && camera.layers.test(o.layers) && materials(o).some(opaque)) blockers.push(o);
+  });
+  const hits = new Map(spec.parts.map((name) => [name, []]));
+  for (let y = 0; y < grid.rows; y++) for (let x = 0; x < grid.columns; x++) {
+    const sample = { x: width * (x + .5) / grid.columns, y: height * (y + .5) / grid.rows };
+    setRay(sample, camera.far);
+    const hit = ray.intersectObjects(meshes, false).find(onOpaque);
+    if (hit) hits.get(hit.object.name).push({ ...sample, depth: hit.distance });
+  }
+  const rect = (samples) => samples.length ? [
+    Math.min(...samples.map((s) => s.x)), Math.min(...samples.map((s) => s.y)),
+    Math.max(...samples.map((s) => s.x)), Math.max(...samples.map((s) => s.y)),
+  ].map(Math.round) : null;
+  const projection = parts.map(({ name }) => {
+    const projected = hits.get(name);
+    // Limit full-scene raycasts so the probe does not dominate the walk. The
+    // evenly spaced selection still covers the silhouette from top to bottom.
+    const n = Math.min(24, projected.length);
+    const exposed = [];
+    for (let i = 0; i < n; i++) {
+      const hit = projected[Math.floor((i + .5) * projected.length / n)];
+      setRay(hit, hit.depth - .002);
+      if (!ray.intersectObjects(blockers, false).some(onOpaque)) exposed.push(hit);
+    }
+    const projectedBoundsPx = rect(projected), visibleBoundsPx = rect(exposed);
+    return { name, projectedSamples: projected.length, projectedBoundsPx, testedSamples: n, visibleSamples: exposed.length,
+      occludedSamples: n - exposed.length, visibleBoundsPx,
+      status: !n ? 'not-projected' : !exposed.length ? 'occluded' : exposed.length < n ? 'partial' : 'visible' };
+  });
+  return { status: 'sampled', grid, viewport: [width, height], projection };
+}
+
+async function prepareGateRoofProbe() {
+  report.roof = { mode: roofCheck, spec: gateRoof };
+  if (roofCheck === 'off') return;
+  const asset = await page.evaluate(inspectGateRoof, { spec: gateRoof });
+  report.roof.asset = asset;
+  if (asset.status !== 'mounted') {
+    if (roofCheck === 'required') throw new Error(`Required roof not mounted: ${JSON.stringify(asset)}`);
+    console.log(`Gatehouse roof probe: ${asset.status}; the route will still capture the baseline.`);
+    return;
+  }
+  // Use local Three math for the read-only probe even on built packages that do
+  // not serve the library as a standalone module. Never alter the game camera.
+  const source = fs.readFileSync(new URL('./three.core.js', import.meta.resolve('three')), 'utf8');
+  roofMath = await page.evaluateHandle(async (source) => {
+    const url = URL.createObjectURL(new Blob([source], { type: 'text/javascript' }));
+    try {
+      const { Raycaster, Vector2 } = await import(url);
+      return { Raycaster, Vector2 };
+    } finally { URL.revokeObjectURL(url); }
+  }, source);
+}
+
+async function captureGateRoof(id, target, floor = '1F', probe = true) {
+  const { world: { player: p } } = await bot.lite();
+  const dx = target[0] - p.x, dz = target[2] - p.z;
+  const range = Math.hypot(dx, dz);
+  // Game +z is toward the yard, whereas Three.js uses -z there. Match the
+  // 0.78 m right shoulder and 1.62 m pivot instead of aiming from the feet.
+  const shoulder = Math.min(.78, range * .7);
+  const yaw = Math.atan2(dx, dz) - Math.asin(shoulder / range);
+  const pitch = Math.atan2(p.y + 1.62 - target[1], Math.sqrt(range ** 2 - shoulder ** 2));
+  const frame = await capture(id, yaw, pitch, floor, true);
+  frame.roofAim = { targetGameXYZ: target, yaw, pitch };
+  if (probe && roofMath) frame.roofProjection = await page.evaluate(inspectGateRoof, { spec: gateRoof, math: roofMath });
+}
+
 async function walkGateRoof() {
   await walk(-.93, -3.48);
-  await capture('r1-hearth-reveal', -.28, -.05, '1F');
+  await captureGateRoof('r1-hearth-reveal', [-.9, 2.65, .15]);
   await walk(.3, -4.9);
-  await capture('r2-rear-window', Math.PI - .12, -.20, '1F');
+  await captureGateRoof('r2-rear-window', [0, 3.05, -7.86]);
   await walk(-.82, 2.98);
-  await capture('r3-door-and-eave', -Math.PI + .38, -.24, '1F');
+  await captureGateRoof('r3-door-and-eave', [0, 3.25, .3]);
   await walk(-1.5, 6.2);
-  await capture('r4-timber-gable', Math.PI - .21, -.40, '1F');
-  await walk(2.0, 12.5);
-  await capture('r5-slate-shoulder', -2.96, -.24, '1F');
+  await captureGateRoof('r4-timber-gable', [0, 4.30, .12]);
+  // Yard side of the south curtain, not the unwalkable exterior flank at z < 0.
+  await walk(-3.75, 4.2);
+  await captureGateRoof('r4b-west-eave-close', [-.7, 4.25, .30]);
+  await walk(-1.5, 6.2);
+  // The old (2,12.5) target lies inside the well at (3,13), even before
+  // adding player radius. Stay on its south/west side and clear the S1 lip.
+  await walk(1.8, 10.2);
+  await captureGateRoof('r5-gatehouse-context', [0, 4.10, -.10]);
+  await walk(1.65, 6.2);
   await walk(3.4, 1.4);
-  await walk(9.2, 6.7, '2F');
-  await capture('r6-roof-from-wall', -2.40, .085, '2F');
+  await walk(9.2, 4.3, '2F');
+  await captureGateRoof('r6-roof-from-wall', [0, 4.75, -3.1], '2F');
   await walk(9.2, 12.55, '2F');
-  await capture('r7-chapel-tracery', .73, -.71, '2F');
-  await capture('r8-roof-and-valley', -2.62, .05, '2F');
+  await capture('r7-chapel-tracery', .73, -.71, '2F', true);
+  await captureGateRoof('r8-roof-and-valley', [0, 4.75, -3.1], '2F');
+
+  if (!roofMath) return;
+  const heroFrames = [
+    ['r2-rear-window', 'GatehouseSoffit'],
+    ['r4b-west-eave-close', 'GatehouseOuterOak'],
+    ['r6-roof-from-wall', 'GatehouseSlate'],
+  ];
+  report.roof.coverage = heroFrames.map(([id, part]) => {
+    const frame = report.frames.find((frame) => frame.name === id);
+    const sample = frame?.roofProjection?.projection?.find((p) => p.name === part);
+    return { frame: id, part, ok: (sample?.visibleSamples ?? 0) >= 2, sample: sample ?? null };
+  });
+  const missed = report.roof.coverage.filter((p) => !p.ok);
+  if (missed.length) {
+    const message = `Live roof coverage missed: ${JSON.stringify(missed)}`;
+    if (roofCheck === 'required') errors.push(message);
+    else console.warn(message);
+  }
 }
 
 async function walkLighting() {
@@ -339,7 +507,8 @@ try {
   await waitFor(page, () => window.__awProbe?.state().perf.calls > 0, 30000);
   report.gpu = await page.evaluate(() => window.__awProbe.gpu());
   await page.evaluate(() => window.__awTexReady);
-  if (rodinWalk || rubbleWalk) await verifyRodinAssets();
+  if (roofWalk) await prepareGateRoofProbe();
+  else if (rodinWalk || rubbleWalk) await verifyRodinAssets();
   await startNewGame(bot);
   await doTutorial(bot);
   await bot.use('ghDoor', STAND.doorIn);

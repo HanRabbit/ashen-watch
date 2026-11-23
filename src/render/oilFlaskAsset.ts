@@ -16,13 +16,15 @@ function loadOilFlask(): Promise<THREE.Mesh | null> {
       || !material.roughnessMap || !material.clearcoatMap || material.transparent || material.transmission > 0
       || material.metalness !== 0 || material.emissive.getHex() !== 0
       || !geometry.hasAttribute('position') || !geometry.hasAttribute('normal') || !geometry.hasAttribute('uv')
-      || !geometry.index || geometry.index.count === 0 || geometry.index.count > 18000) {
+      || !geometry.index || geometry.index.count === 0 || geometry.index.count % 3 !== 0
+      || geometry.index.count > 18000) {
       throw new Error('Missing oil flask geometry or PBR maps');
     }
     // The standalone pack already baked metres and the foot pivot into the vertex data.
     geometry.computeBoundingBox();
     const { min, max } = geometry.boundingBox!;
     if (min.y !== 0 || Math.abs(max.y - 0.26) > 0.001
+      || Math.abs(min.x + max.x) > 0.002 || Math.abs(min.z + max.z) > 0.002
       || ![max.x - min.x, max.z - min.z].every(size => size >= 0.18 && size <= 0.2)) {
       throw new Error('Oil flask is not fitted to its tabletop anchor');
     }

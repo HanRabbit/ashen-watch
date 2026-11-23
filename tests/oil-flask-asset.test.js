@@ -92,6 +92,19 @@ test('packed flask is one web-sized, table-fitted primitive with intact UVs and 
     const len = Math.hypot(normal[i], normal[i + 1], normal[i + 2]);
     if (Math.abs(len - 1) > 1e-4 || !Number.isFinite(len)) throw new Error(`Invalid normal ${i / 3}`);
   }
+  const pa = new THREE.Vector3(), pb = new THREE.Vector3(), pc = new THREE.Vector3();
+  const faceNormal = new THREE.Vector3();
+  for (let i = 0; i < indices.length; i += 3) {
+    const [a, b, c] = indices.subarray(i, i + 3);
+    pa.fromArray(pos, a * 3);
+    pb.fromArray(pos, b * 3).sub(pa);
+    pc.fromArray(pos, c * 3).sub(pa);
+    faceNormal.fromArray(normal, a * 3).add(pa.fromArray(normal, b * 3)).add(pa.fromArray(normal, c * 3));
+    if (pb.cross(pc).dot(faceNormal) <= 0) throw new Error(`Wrong winding at face ${i / 3}`);
+    const abU = uv[2 * b] - uv[2 * a], abV = uv[2 * b + 1] - uv[2 * a + 1];
+    const acU = uv[2 * c] - uv[2 * a], acV = uv[2 * c + 1] - uv[2 * a + 1];
+    if (Math.abs(abU * acV - abV * acU) < 1e-10) throw new Error(`Collapsed UV face ${i / 3}`);
+  }
   const bounds = new THREE.Box3().setFromBufferAttribute(new THREE.BufferAttribute(pos, 3));
   expect(bounds.min.toArray()).toEqual(doc.accessors[POSITION].min);
   expect(bounds.max.toArray()).toEqual(doc.accessors[POSITION].max);

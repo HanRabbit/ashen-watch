@@ -7,6 +7,7 @@ import { isNorthCourtFabric } from '../sim/northCourt';
 import { DOORS, inArea, PROPS, S1_SHAFT, WALLS, WELL } from '../sim/level';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { archHeader, archRib, Batch, gable } from './geom';
+import { mountGatehouseRoof } from './gatehouseRoof';
 import { buildGatehouseLights, windowWallPieces } from './gatehouseWindows';
 import { buildFurniture } from './furniture';
 import { buildDeadwood } from './deadwood';
@@ -191,11 +192,17 @@ export function buildStaticLevel(m: Materials): StaticLevel {
     b.geo(rugMat, new THREE.PlaneGeometry(2.6, 3.6), 0, 0.02, -4.4, 0, -HALF_PI, 0);
   }
   // 门房：木屋顶、山墙、粗壮横梁 + 斜撑托架（concept/02 厚重木构）
-  const ghAng = Math.atan2(2, 3.9);
-  b.geo(m.roof, tiledBox(4.55, 0.16, 10, 1.2), 1.95, 4.62, -4, 0, 0, -ghAng);
-  b.geo(m.roof, tiledBox(4.55, 0.16, 10, 1.2), -1.95, 4.62, -4, 0, 0, ghAng);
-  b.geo(v.woodBeam, gable(7.4, 2.0, 0.4), 0, 3.6, -8.25);
-  b.geo(v.woodBeam, gable(7.4, 1.7, 0.4), 0, 3.9, 0.25);
+  {
+    const legacy = new Batch();
+    const fallback = new THREE.Group();
+    const ghAng = Math.atan2(2, 3.9);
+    legacy.geo(m.roof, tiledBox(4.55, 0.16, 10, 1.2), 1.95, 4.62, -4, 0, 0, -ghAng);
+    legacy.geo(m.roof, tiledBox(4.55, 0.16, 10, 1.2), -1.95, 4.62, -4, 0, 0, ghAng);
+    legacy.geo(v.woodBeam, gable(7.4, 2.0, 0.4), 0, 3.6, -8.25);
+    legacy.geo(v.woodBeam, gable(7.4, 1.7, 0.4), 0, 3.9, 0.25);
+    legacy.build(fallback, true);
+    mountGatehouseRoof(group, fallback);
+  }
   for (const z of [-6.6, -4.1, -1.6]) {
     b.box(v.woodBeam, -3.2, z - 0.16, 3.2, z + 0.16, 3.22, 3.6, 1); // 粗壮方料横梁
     b.geo(v.woodBeam, archRib(6.0, 0.72, 0.22), 0, 2.5, z); // 方料木拱肋（concept/02）
