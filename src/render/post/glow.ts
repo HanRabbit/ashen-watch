@@ -12,6 +12,7 @@ export const LightGlowShader = {
     uHasDepth: { value: 0 },
     uLights: { value: Array.from({ length: MAX_GLOW_LIGHTS }, () => new THREE.Vector4(0, 0, 0, 0)) },
     uLightCols: { value: Array.from({ length: MAX_GLOW_LIGHTS }, () => new THREE.Color(0, 0, 0)) },
+    uLightRadius: { value: Array.from({ length: MAX_GLOW_LIGHTS }, () => 0) },
     uCount: { value: 0 },
     uNear: { value: 0.1 }, uFar: { value: 320 },
     uAspect: { value: 1 }, uStrength: { value: 0.5 },
@@ -19,7 +20,6 @@ export const LightGlowShader = {
     uScatter: { value: 0.4 }, uFog: { value: new THREE.Vector3(0.012, 0.1, 0) },
     uTanHalfFov: { value: new THREE.Vector2(1, 1) },
     uInvView: { value: new THREE.Matrix4() }, uCamPos: { value: new THREE.Vector3() },
-    uAmber: { value: new THREE.Color(0xffb25e) }, // 美术总纲灯火琥珀 2200–2700K
     // 高光压缩（色调映射前）：超过阈值的亮度按色相区分滚降——
     // 暖色（灯火/火）保留亮琥珀长条，冷色（月光镜面）压成弱而柔的蓝反射。
     // 天空像素（深度≈far）豁免，月盘/光晕本身可以亮。
@@ -31,55 +31,72 @@ export const LightGlowShader = {
   fragmentShader: /* glsl */`
     uniform sampler2D tDiffuse, tDepth;
     uniform float uHasDepth, uNear, uFar, uAspect, uStrength, uScatter, uHiThresh, uHiKneeCool, uHiKneeWarm;
-    uniform vec3 uFog, uCamPos, uAmber;
+    uniform vec3 uFog, uCamPos;
     uniform vec2 uTanHalfFov;
     uniform mat4 uInvView;
     uniform int uCount;
     uniform vec4 uLights[${MAX_GLOW_LIGHTS}];
     uniform vec3 uLightCols[${MAX_GLOW_LIGHTS}];
+    uniform float uLightRadius[${MAX_GLOW_LIGHTS}];
     varying vec2 vUv;
     float viewDepth(float d) {
       // 透视深度 [0,1] → 正的视空间距离
       return -( uNear * uFar ) / ( ( uFar - uNear ) * d - uFar );
     }
+    // Integrate a finite, softened inverse-square point light along the visible ray.
+    // A surface endpoint far past the emitter (including sky) still sees the lit air in front of it.
+    float pointScatter(vec3 ray, float rayEnd, vec3 lightPos, float radius, float worldRayY) {
+      float along = dot(ray, lightPos);
+      vec3 offset = lightPos - ray * along;
+      float perpendicular2 = dot(offset, offset);
+      float reach2 = radius * radius - perpendicular2;
+      if (reach2 <= 0.0) return 0.0;
+      float reach = sqrt(reach2);
+      float a = max(0.0, along - reach), b = min(rayEnd, along + reach);
+      if (b <= a) return 0.0;
+
+      const float core = 0.42; // metres; a finite emitter avoids a singularity on its centre ray
+      float invD = inversesqrt(perpendicular2 + core * core);
+      // Integral of 1 / (distance² + core²), minus the boundary value, so the volume fades out.
+      float integral = invD * (atan((b - along) * invD) - atan((a - along) * invD))
+                     - (b - a) / (radius * radius + core * core);
+      float center = clamp(along, a, b);
+      // Approximate phase at the midpoint of the *visible scattering contribution*.
+      float delta = along - mix(center, (a + b) * 0.5, 0.45);
+      float cosTheta = delta * inversesqrt(perpendicular2 + delta * delta + core * core);
+      const float g = 0.42;
+      float phase = (1.0 - g * g) / (12.566 * pow(1.0 + g * g - 2.0 * g * cosTheta, 1.5));
+      float y = uCamPos.y + worldRayY * center;
+      float density = uFog.x * exp(-uFog.y * max(y - uFog.z, 0.0));
+      return max(0.0, integral) * density * phase;
+    }
     void main() {
       vec3 c = texture2D(tDiffuse, vUv).rgb;
-      float here = uHasDepth > 0.5 ? viewDepth(texture2D(tDepth, vUv).x) : 1e4;
+      float here = uHasDepth > 0.5 ? viewDepth(texture2D(tDepth, vUv).x) : uFar;
+      vec3 viewRay = normalize(vec3((vUv * 2.0 - 1.0) * uTanHalfFov, -1.0));
+      float rayEnd = here / -viewRay.z;
+      float worldRayY = (uInvView * vec4(viewRay, 0.0)).y;
       for (int i = 0; i < ${MAX_GLOW_LIGHTS}; i++) {
         if (i >= uCount) break;
         vec4 L = uLights[i];
-        if (L.w <= 0.001) continue;
         vec2 dv = (vUv - L.xy) * vec2(uAspect, 1.0);
         float r2 = dot(dv, dv);
-        // 宽晕 + 亮核：雾中 in-scatter 的两段衰减
-        float halo = exp(-r2 * 40.0) * 0.4 + exp(-r2 * 240.0) * 0.8;
-        float att = clamp(7.0 / L.z, 0.12, 1.6);
         float occ = 1.0;
         if (uHasDepth > 0.5) {
           float atLight = viewDepth(texture2D(tDepth, L.xy).x);
-          // 灯本身被几何挡住 → 晕消失；fragment 在灯前面 → 晕不画在它上面
-          occ = smoothstep(L.z - 0.8, L.z + 0.3, atLight)
-              * mix(0.3, 1.0, smoothstep(L.z - 2.0, L.z + 0.5, here));
+          // A fixture may cover the precise light centre; a solid wall further in front hides it.
+          occ = smoothstep(L.z - 0.44, L.z - 0.06, atLight);
         }
-        c += uLightCols[i] * halo * att * occ * L.w * uStrength;
-        // 解析雾内 in-scatter：视线与「到灯方向」的相位函数 × 该处雾密度 × 距离衰减。
-        // 只在有雾且灯在视野内时贡献，夜晚湿空气里灯/火盆周围出现体积光柱感。
-        if (uScatter > 0.001) {
-          vec3 vp = vec3((vUv * 2.0 - 1.0) * uTanHalfFov * here, -here);
-          vec3 lp = vec3((L.xy * 2.0 - 1.0) * uTanHalfFov * L.z, -L.z);
-          vec3 toL = lp - vp;
-          float dist = length(toL);
-          toL /= max(dist, 1e-4);
-          float wy = (uInvView * vec4(vp, 1.0)).y;
-          float fogAmt = 1.0 - exp(-uFog.x * here * exp(-uFog.y * max(wy - uFog.z, 0.0)));
-          // Henyey-Greenstein 相位（g=0.55 前向散射）：视线朝灯方向时雾内散射最强
-          float g = 0.55;
-          float pc = clamp(dot(normalize(vp), toL), -1.0, 1.0);
-          float hg = (1.0 - g * g) / (12.566 * pow(1.0 + g * g - 2.0 * g * pc, 1.5));
-          float phase = clamp(hg * 2.2, 0.0, 1.4);
-          float att2 = 1.0 / (1.0 + dist * dist * 0.08);
-          vec3 fireCol = mix(uLightCols[i], uAmber, 0.6);
-          c += fireCol * (uScatter * L.w * phase * fogAmt * att2 * occ);
+        if (occ < 0.001) continue;
+        // Tight optical halo. Wider falloff comes from the world-space volume, not a screen decal.
+        float halo = exp(-r2 * 830.0) * 0.48 + exp(-r2 * 4500.0) * 0.7;
+        float att = clamp(4.0 / L.z, 0.14, 1.6);
+        float foreground = smoothstep(L.z - 0.56, L.z - 0.08, here);
+        c += uLightCols[i] * halo * att * occ * foreground * min(1.0, L.w / 22.0) * uStrength;
+        if (uScatter > 0.001 && uHasDepth > 0.5) {
+          vec3 lightPos = vec3((L.xy * 2.0 - 1.0) * uTanHalfFov * L.z, -L.z);
+          float haze = pointScatter(viewRay, rayEnd, lightPos, uLightRadius[i], worldRayY);
+          c += uLightCols[i] * (uScatter * L.w * haze * occ);
         }
       }
       // 高光滚降：保色相压缩超阈值亮度（能量守恒软钳制，随后才进 ACES）。
@@ -94,12 +111,10 @@ export const LightGlowShader = {
       }
       // NaN/Inf 防护：材质视差/法线在石缝陡梯度处可能产生 NaN，穿透一切 clamp 形成白线；
       // 这里钳制为 0（暗缝），保证画面无花屏（圣经验收：无 NaN 花屏）。ES1 兼容写法。
-      c = min(max(c, vec3(0.0)), vec3(60000.0));
-      vec3 ok = vec3(
-        (c.r >= 0.0 || c.r <= 0.0) ? 1.0 : 0.0,
-        (c.g >= 0.0 || c.g <= 0.0) ? 1.0 : 0.0,
-        (c.b >= 0.0 || c.b <= 0.0) ? 1.0 : 0.0);
-      c *= ok;
+      c = vec3(
+        c.r >= 0.0 ? min(c.r, 60000.0) : 0.0,
+        c.g >= 0.0 ? min(c.g, 60000.0) : 0.0,
+        c.b >= 0.0 ? min(c.b, 60000.0) : 0.0);
       gl_FragColor = vec4(c, 1.0);
     }`,
 };

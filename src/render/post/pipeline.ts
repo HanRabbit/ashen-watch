@@ -189,12 +189,15 @@ export class PostPipeline {
       if (depth < 0.2) continue;
       v.applyMatrix4(this.camera.projectionMatrix);
       const x = v.x * 0.5 + 0.5, y = v.y * 0.5 + 0.5;
-      if (x < -0.3 || x > 1.3 || y < -0.3 || y > 1.3) continue;
-      (u.uLights.value as THREE.Vector4[])[n].set(x, y, depth, Math.min(1, L.intensity / 45));
+      // Depth only verifies visibility for onscreen emitters. Fade gracefully at the screen edge.
+      const edge = Math.min(x, y, 1 - x, 1 - y);
+      if (edge <= 0) continue;
+      const flux = Math.min(L.intensity, 45) * THREE.MathUtils.smoothstep(edge, 0, 0.035);
+      (u.uLights.value as THREE.Vector4[])[n].set(x, y, depth, flux);
+      (u.uLightRadius.value as number[])[n] = L.distance > 0 ? Math.min(4.6, L.distance * 0.3) : 4.6;
       (u.uLightCols.value as THREE.Color[])[n].copy(L.color);
       n++;
     }
-    for (let i = n; i < MAX_GLOW_LIGHTS; i++) (u.uLights.value as THREE.Vector4[])[i].w = 0;
     u.uCount.value = n;
     u.uNear.value = this.camera.near; u.uFar.value = this.camera.far;
     u.uAspect.value = this.camera.aspect;

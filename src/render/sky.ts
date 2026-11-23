@@ -53,7 +53,7 @@ void main() {
   vec3 d = normalize(vDir);
   float h = d.y;
   vec3 col = mix(uHorizon, uZenith, pow(clamp(h, 0.0, 1.0), 0.55));
-  col = mix(col, uGround, smoothstep(0.0, -0.25, h));
+  col = mix(col, uGround, 1.0 - smoothstep(-0.25, 0.0, h));
 
   vec3 sunDir = normalize(uSunDir);
   float cosA = clamp(dot(d, sunDir), -1.0, 1.0);
@@ -62,7 +62,7 @@ void main() {
 
   // 云投影到水平面：抬高偏移减少地平线拉伸，团块保持圆润
   float hh = max(h, 0.02);
-  vec2 proj = d.xz / (hh + 0.35);
+  vec2 proj = d.xz / (hh + 0.39);
 
   // 第一层：极薄高幕云，仅垫纵深（夜晚几乎关闭，避免涂抹条带）
   vec2 uv1 = proj * 0.45 + uTime * vec2(0.003, 0.0013) + 2.3;
@@ -72,38 +72,46 @@ void main() {
   col = mix(col, veilCol, veil);
 
   // 第二层：成团积云/层积云，块状轮廓、软边
-  vec2 uv2 = proj * 0.8 + uTime * vec2(0.004, 0.0018);
+  vec2 uv2 = proj * 2.0 + vec2(2.1, 1.7) + uTime * vec2(0.004, 0.0018);
   float dens = cloudShape(uv2);
-  float lo = 0.62 - uCover * 0.20;
-  float hi = lo + 0.10;
-  float cover = smoothstep(lo, hi, dens);
-  cover *= smoothstep(-0.02, 0.08, h);
+  float lo = 0.60 - uCover * 0.23;
+  float hi = lo + 0.15;
+  float optical = max(0.0, dens - lo) * 19.0;
+  float cover = (1.0 - exp(-optical)) * smoothstep(-0.025, 0.08, h);
 
   // 密度梯度→外向伪法线：朝日/月一侧的团块侧翼亮、背侧暗（体积感）
-  float e = 0.10;
+  float e = 0.085;
   vec2 grad = vec2(
     cloudGradField(uv2 + vec2(e, 0.0)) - cloudGradField(uv2 - vec2(e, 0.0)),
     cloudGradField(uv2 + vec2(0.0, e)) - cloudGradField(uv2 - vec2(0.0, e)));
-  vec3 cn = normalize(vec3(-grad.x * 2.2, 0.55, -grad.y * 2.2));
+  vec3 cn = normalize(vec3(-grad.x * 4.0, 0.40, -grad.y * 4.0));
   float lambert = clamp(dot(cn, sunDir), 0.0, 1.0);
   // 团内上下明暗：高处（团顶）受光、低处沉入底色；厚云底更沉
-  float topLight = mix(0.30, 1.0, smoothstep(0.05, 0.85, h));
+  float topLight = mix(0.52, 1.0, smoothstep(0.0, 0.65, h));
   float thick = smoothstep(lo, hi + 0.10, dens);
-  float baseDark = mix(1.0, 0.45, thick);
-  float lit = clamp(0.12 + 0.88 * lambert, 0.0, 1.0) * topLight * baseDark;
+  float baseDark = mix(1.0, 0.54, thick);
+  float lit = (0.12 + 0.64 * lambert) * topLight * baseDark;
   vec3 cloudCol = mix(uCloudDark, uCloudLit, lit);
   // 银边：只勾靠近日/月一侧的团块薄缘，不整片提亮
   float edge = cover * (1.0 - cover) * 4.0;
-  float towards = pow(clamp(cosA, 0.0, 1.0), 6.0);
-  cloudCol += uSunColor * uRim * edge * towards;
+  float towards = pow(max(cosA, 0.0), 16.0);
+  cloudCol += uSunColor * uRim * edge * towards * (0.20 + 0.36 * lambert);
   col = mix(col, cloudCol, cover);
 
   // 日/月盘 + 光晕：厚云遮挡时减弱；晕宽而柔，不过曝
   float ang = acos(cosA);
-  float disc = smoothstep(uDiscSize, uDiscSize * 0.8, ang);
-  float mare = 0.82 + 0.18 * fbm3(d.xy * 34.0 + d.z * 17.0);
+  float disc = 0.0, mare = 1.0;
+  if (uDiscSize > 0.0 && ang < uDiscSize) {
+    disc = 1.0 - smoothstep(uDiscSize * 0.92, uDiscSize, ang);
+    // Resolve surface structure in disc-relative coordinates, regardless of position in the sky.
+    vec3 right = normalize(cross(vec3(0.0, 1.0, 0.0), sunDir));
+    vec2 moonUV = vec2(dot(d, right), dot(d, cross(sunDir, right))) / uDiscSize;
+    float patch = fbm3(moonUV * 3.3 + 11.2);
+    mare = mix(0.46, 1.0, smoothstep(0.24, 0.67, patch));
+    mare *= 0.72 + 0.28 * sqrt(max(0.0, 1.0 - dot(moonUV, moonUV)));
+  }
   float halo = pow(clamp(cosA, 0.0, 1.0), 320.0) * 0.9 + pow(clamp(cosA, 0.0, 1.0), 40.0) * 0.22;
-  float occ = (1.0 - cover * 0.85) * (1.0 - veil * 0.4);
+  float occ = (1.0 - cover) * (1.0 - veil * 0.4);
   col += uSunColor * (disc * uDiscI * mare + halo * uGlow) * occ;
 
   // 星星只在云隙出现
@@ -112,9 +120,9 @@ void main() {
     vec2 cell = floor(uv * 24.0);
     vec2 f = fract(uv * 24.0) - 0.5;
     float rnd = hash21(cell);
-    float star = step(0.965, rnd) * smoothstep(0.12, 0.0, length(f));
-    float tw = 0.6 + 0.4 * sin(uTime * 2.0 + rnd * 40.0);
-    col += vec3(0.8, 0.85, 1.0) * star * tw * uStars * (1.0 - cover) * (1.0 - veil) * smoothstep(0.0, 0.25, h);
+    float star = step(0.982, rnd) * (1.0 - smoothstep(0.025, 0.10, length(f)));
+    float clarity = (1.0 - cover) * (1.0 - cover) * (1.0 - veil);
+    col += vec3(0.50, 0.63, 0.88) * star * clarity * uStars * smoothstep(0.08, 0.36, h);
   }
   gl_FragColor = vec4(col, 1.0);
   #include <tonemapping_fragment>

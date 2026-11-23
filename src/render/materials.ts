@@ -380,88 +380,6 @@ export function bannerTexture(): THREE.CanvasTexture {
   return t;
 }
 
-/** 从扫描高度图分割石板：连通域标记 → 每块哈希/平均高度 + 到缝距离变换，烘成 RGBA 单元图。
- * R=每块石板哈希（明暗/冷暖差异），G=到缝距离（倒角积 dirt），B=每块平均高度（选低洼积水），A=石板遮罩。 */
-export function bakeStoneCells(dispImg: CanvasImageSource): THREE.CanvasTexture {
-  const S = 1024, N = S * S;
-  const { c, g } = canvas(S);
-  g.drawImage(dispImg, 0, 0, S, S);
-  const src = g.getImageData(0, 0, S, S).data;
-  const stone = new Uint8Array(N);
-  const height = new Float32Array(N);
-  for (let i = 0; i < N; i++) {
-    height[i] = src[i * 4] / 255;
-    stone[i] = height[i] > 0.72 ? 1 : 0;
-  }
-  // 连通域标记（4 邻域 BFS）
-  const label = new Int32Array(N).fill(-1);
-  const stack = new Int32Array(N);
-  const areas: number[] = [], sums: number[] = [];
-  let nStones = 0;
-  for (let seed = 0; seed < N; seed++) {
-    if (!stone[seed] || label[seed] >= 0) continue;
-    const id = nStones++;
-    let sp = 0, area = 0, sum = 0;
-    stack[sp++] = seed; label[seed] = id;
-    while (sp > 0) {
-      const p = stack[--sp];
-      area++; sum += height[p];
-      const x = p % S, y = (p / S) | 0;
-      if (x > 0 && stone[p - 1] && label[p - 1] < 0) { label[p - 1] = id; stack[sp++] = p - 1; }
-      if (x < S - 1 && stone[p + 1] && label[p + 1] < 0) { label[p + 1] = id; stack[sp++] = p + 1; }
-      if (y > 0 && stone[p - S] && label[p - S] < 0) { label[p - S] = id; stack[sp++] = p - S; }
-      if (y < S - 1 && stone[p + S] && label[p + S] < 0) { label[p + S] = id; stack[sp++] = p + S; }
-    }
-    areas.push(area); sums.push(sum);
-  }
-  // 碎砾（面积过小）并入缝
-  const valid = areas.map((a) => a >= 160);
-  for (let i = 0; i < N; i++) {
-    if (label[i] >= 0 && !valid[label[i]]) { stone[i] = 0; label[i] = -1; }
-  }
-  // 到缝距离（chamfer 两遍）
-  const dist = new Float32Array(N);
-  for (let i = 0; i < N; i++) dist[i] = stone[i] ? 1e9 : 0;
-  for (let y = 0; y < S; y++) {
-    for (let x = 0; x < S; x++) {
-      const i = y * S + x; if (!stone[i]) continue;
-      let d = dist[i];
-      if (x > 0) d = Math.min(d, dist[i - 1] + 1);
-      if (y > 0) d = Math.min(d, dist[i - S] + 1);
-      if (x > 0 && y > 0) d = Math.min(d, dist[i - S - 1] + 1.414);
-      if (x < S - 1 && y > 0) d = Math.min(d, dist[i - S + 1] + 1.414);
-      dist[i] = d;
-    }
-  }
-  for (let y = S - 1; y >= 0; y--) {
-    for (let x = S - 1; x >= 0; x--) {
-      const i = y * S + x; if (!stone[i]) continue;
-      let d = dist[i];
-      if (x < S - 1) d = Math.min(d, dist[i + 1] + 1);
-      if (y < S - 1) d = Math.min(d, dist[i + S] + 1);
-      if (x < S - 1 && y < S - 1) d = Math.min(d, dist[i + S + 1] + 1.414);
-      if (x > 0 && y < S - 1) d = Math.min(d, dist[i + S - 1] + 1.414);
-      dist[i] = d;
-    }
-  }
-  const out = g.createImageData(S, S);
-  for (let i = 0; i < N; i++) {
-    const o = i * 4;
-    if (stone[i] && label[i] >= 0) {
-      const id = label[i];
-      const hsh = ((Math.sin(id * 12.9898 + 78.233) * 43758.5453) % 1 + 1) % 1;
-      out.data[o] = hsh * 255;
-      out.data[o + 1] = Math.min(1, dist[i] / 16) * 255;
-      out.data[o + 2] = Math.min(1, Math.max(0, sums[id] / areas[id])) * 255;
-      out.data[o + 3] = 255;
-    } else {
-      out.data[o] = out.data[o + 1] = out.data[o + 2] = out.data[o + 3] = 0;
-    }
-  }
-  g.putImageData(out, 0, 0);
-  return toTex(c, false);
-}
-
 /** 铅条玻璃：暗玻璃底 + 铅条网格 + 污渍烟熏。返回 map（暗玻璃）与 panes（窗格遮罩，用作 emissiveMap）。 */
 export function leadedGlass(warm = false): { map: THREE.CanvasTexture; panes: THREE.CanvasTexture } {
   const W = 128, H = 256;
@@ -597,8 +515,8 @@ export function rugTexture(): { map: THREE.CanvasTexture; normalMap: THREE.Canva
 }
 
 // —— 共享石材着色器（石墙 / 石地 / 瓦 / 碎石共用，onBeforeCompile 注入）——
-// 庭院石板用扫描单元图做每块差异/倒角/泥缝，低洼石板 + 洼地中心生成不规则积水（镜面反射）；
-// 视差遮挡贴图（POM，8–24 步）用 disp 高度图，低画质经 setMaterialsQuality 关闭。
+// 扫描贴图保留真实的灰缝；庭院低洼处用同一高度图与世界坐标生成积水。
+// 视差遮挡贴图（POM）只在有独立高度图的材质上启用。
 
 /** 全局 POM 步数开关：high=16 步，low=0（关闭）。view.ts 以后可调用 setMaterialsQuality。 */
 const AW_STEPS = { value: 16 };
@@ -615,15 +533,11 @@ export interface AwUniforms {
   uAwHeightScale: { value: number };
   uAwHeightMap: { value: THREE.Texture };
   uAwHasDisp: { value: number };
-  uAwAlbedo: { value: THREE.Texture };
   uAwStreakBand: { value: THREE.Vector2 };
-  /** 石板单元图（R=每块哈希 G=到缝距离 B=每块平均高度 A=石板遮罩），仅庭院石板地启用。 */
-  uAwCellMap: { value: THREE.Texture };
-  uAwHasCells: { value: number };
-  /** 无单元图时是否叠加错缝网格灰缝（矩形石板/室内砖启用，卵石/泥土关闭）。 */
-  uAwGrid: { value: number };
-  /** 无单元图地面的积水强度（室外石板/卵石启用，室内/泥土关闭）。 */
-  uAwPuddleAmt: { value: number };
+  /** 庭院主石板上的积水（上表面、地面高度、指定洼地）。 */
+  uAwPool: { value: number };
+  /** 浅灰砂浆占比大的乱石扫描贴图需要单独做灰缝校正。 */
+  uAwRubble: { value: number };
   /** 积水洼地中心（世界 xz）+ 半径 + 强度，与 vfx.ts 的 PUDDLES 保持一致。 */
   uAwPuddles: { value: THREE.Vector4[] };
   /** 主路↔边缘混合过渡（5.1 反重复第 4 条）：第二套贴图 + 世界 x 噪声遮罩，仅庭院地面启用。 */
@@ -643,9 +557,9 @@ export const PUDDLE_CENTERS: [number, number, number][] = [[-4, 8, 1.1], [3.5, 1
 
 /** 被磨亮的区域（井沿、台阶中央）：xz 中心 + 半径 + 强度，石材着色器共用。 */
 const AW_WEAR = { value: [
-  new THREE.Vector4(0, 14, 1.45, 0.8),   // 井沿
-  new THREE.Vector4(9.3, 27, 1.1, 0.7),  // 外廊台阶
-  new THREE.Vector4(12.5, 16, 0.8, 0.7), // 礼拜堂侧门台阶
+  new THREE.Vector4(0, -14, 1.45, 0.8),   // 井沿
+  new THREE.Vector4(9.3, -27, 1.1, 0.7),  // 外廊台阶
+  new THREE.Vector4(12.5, -16, 0.8, 0.7), // 礼拜堂侧门台阶
 ] };
 
 const AW_FALLBACK_HEIGHT = (() => {
@@ -664,12 +578,9 @@ export function awUniforms(floor: number, wet: number, desat: number, tint: [num
     uAwHeightScale: { value: hs },
     uAwHeightMap: { value: AW_FALLBACK_HEIGHT },
     uAwHasDisp: { value: 0 },
-    uAwAlbedo: { value: AW_FALLBACK_HEIGHT },
     uAwStreakBand: { value: new THREE.Vector2(band[0], band[1]) },
-    uAwCellMap: { value: AW_FALLBACK_HEIGHT },
-    uAwHasCells: { value: 0 },
-    uAwGrid: { value: 0 },
-    uAwPuddleAmt: { value: 0 },
+    uAwPool: { value: 0 },
+    uAwRubble: { value: 0 },
     uAwPuddles: { value: PUDDLE_CENTERS.map(([x, z, r]) => new THREE.Vector4(x, -z, r, 0.9)) },
     uAwBlendAlbedo: { value: AW_FALLBACK_HEIGHT },
     uAwBlendNormal: { value: AW_FALLBACK_HEIGHT },
@@ -705,19 +616,17 @@ const AW_VERT_POS = /* glsl */`
 const AW_FRAG_PREFIX = /* glsl */`
 varying vec3 vAwWorldPos;
 varying vec3 vAwWorldNormal;
-uniform float uAwSteps, uAwFloor, uAwWet, uAwDesat, uAwHeightScale, uAwHasDisp, uAwHasCells, uAwGrid, uAwPuddleAmt;
+uniform float uAwSteps, uAwFloor, uAwWet, uAwDesat, uAwHeightScale, uAwHasDisp, uAwPool, uAwRubble;
 uniform float uAwHasBlend, uAwBlendHalf, uAwBlendBand, uAwPeel;
 uniform vec2 uAwStreakBand;
 uniform vec4 uAwWear[3];
 uniform vec4 uAwPuddles[4];
 float awPolish;
 uniform vec3 uAwTint;
-uniform sampler2D uAwHeightMap, uAwAlbedo, uAwCellMap;
+uniform sampler2D uAwHeightMap;
 uniform sampler2D uAwBlendAlbedo, uAwBlendNormal, uAwBlendRough, uAwBlendDisp;
 vec2 awUv;
-float awWet, awMoss, awBase, awMacro, awMacro2, awUp, awJGeo, awSlabHash, awPuddle, awStoneA, awEdge, awBlend;
-vec2 awW;
-mat3 awTBNg;
+float awWet, awMoss, awPuddle, awBlend;
 float awHash(vec2 p) { p = fract(p * vec2(123.34, 456.21)); p += dot(p, p + 45.32); return fract(p.x * p.y); }
 float awNoise(vec2 p) {
   vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
@@ -726,12 +635,12 @@ float awNoise(vec2 p) {
 }
 float awFbm(vec2 p) { return 0.6 * awNoise(p) + 0.3 * awNoise(p * 2.13 + 7.7) + 0.1 * awNoise(p * 4.7 + 3.1); }
 float awHeight(vec2 uv) {
-  float h = uAwHasDisp > 0.5 ? texture2D(uAwHeightMap, uv).r : dot(texture2D(uAwAlbedo, uv).rgb, vec3(0.3333));
+  float h = texture2D(uAwHeightMap, uv).r;
   if (uAwHasBlend > 0.5) h = mix(h, texture2D(uAwBlendDisp, uv).r, awBlend);
   return h;
 }
 vec2 awPom(vec2 uv, vec3 vTs) {
-  if (uAwSteps < 1.0) return uv;
+  if (uAwSteps < 1.0 || uAwHasDisp < 0.5) return uv;
   // 掠射钳制（圣经 7）：视线与面夹角极小时衰减步长与偏移，退化为普通法线贴图，杜绝整面发黑/撕裂
   float graze = smoothstep(0.10, 0.35, abs(vTs.z));
   if (graze < 0.02) return uv;
@@ -759,13 +668,15 @@ const AW_MAP_BLOCK = /* glsl */`
 {
   vec3 awN = normalize(vAwWorldNormal);
   vec3 awV = normalize(cameraPosition - vAwWorldPos);
-  awW = vAwWorldPos.xz;
+  vec2 awW = vAwWorldPos.xz;
+  float awUp = clamp(awN.y, 0.0, 1.0);
+  float awCourtY = 1.0 - smoothstep(0.03, 0.16, abs(vAwWorldPos.y));
   // 主路↔边缘混合遮罩（5.1 第 4 条）：世界 x + 低频噪声不规则边界，仅庭院地面（y≈0、|x|<11）
   awBlend = 0.0;
   if (uAwHasBlend > 0.5) {
     float awBN = (awFbm(awW * 0.8 + 5.0) - 0.5) * 1.7;
     awBlend = smoothstep(uAwBlendHalf - uAwBlendBand, uAwBlendHalf + uAwBlendBand, abs(vAwWorldPos.x) + awBN);
-    awBlend *= (1.0 - smoothstep(0.05, 0.2, vAwWorldPos.y)) * (1.0 - smoothstep(10.5, 11.5, abs(vAwWorldPos.x)));
+    awBlend *= awUp * awCourtY * (1.0 - smoothstep(10.5, 11.5, abs(vAwWorldPos.x)));
   }
   vec3 dp1 = dFdx(vAwWorldPos), dp2 = dFdy(vAwWorldPos);
   vec2 duv1 = dFdx(vMapUv), duv2 = dFdy(vMapUv);
@@ -774,168 +685,91 @@ const AW_MAP_BLOCK = /* glsl */`
   vec3 B = dp2p * duv1.y + dp1p * duv2.y;
   float invmax = inversesqrt(max(dot(T, T), dot(B, B)) + 1e-8);
   mat3 awTBN = mat3(T * invmax, B * invmax, awN);
-  awTBNg = awTBN;
   awUv = awPom(vMapUv, awV * awTBN);
-  if (uAwFloor < 0.5) {
-    // 打破等距砌缝"灯芯绒"节奏（5.1 反重复）：按墙面横向低频噪声扰动层高
-    awUv.y += (awFbm(vec2((vAwWorldPos.x + vAwWorldPos.z) * 0.6, 3.0)) - 0.5) * 0.05;
-  }
-  awMacro = awFbm(awW * 0.16 + 3.7);
-  awMacro2 = awFbm(awW * 0.45 + 11.3);
+  // State all surface layers in the same UV space; world-space weathering is independent of repeats.
   vec2 awWallUv = vec2(vAwWorldPos.x + vAwWorldPos.z, vAwWorldPos.y);
-  awUp = clamp(awN.y, 0.0, 1.0);
-  float awVert = 1.0 - awUp; awVert *= awVert;
-  awBase = (1.0 - smoothstep(0.0, 0.85, vAwWorldPos.y)) * (0.55 + 0.45 * awFbm(awWallUv * 1.7)) * awVert;
-  float awTopMoss = awUp * smoothstep(0.45, 0.75, awFbm(awW * 0.9 + 5.0)) * (1.0 - uAwFloor);
-  float awStreak = smoothstep(0.52, 0.78, awFbm(vec2(awWallUv.x * 7.0, awWallUv.y * 0.22)))
-                 * smoothstep(uAwStreakBand.x, uAwStreakBand.y, vAwWorldPos.y) * awVert;
+  vec2 awWeather = mix(awWallUv, awW, abs(awN.y));
+  float awMacro = awFbm(awWeather * 0.29 + 3.7);
+  float awMacro2 = awFbm(awWeather * 1.08 + 11.3);
+  float awVert = 1.0 - abs(awN.y);
+  float awBase = (1.0 - smoothstep(0.0, 0.85, abs(vAwWorldPos.y))) * (0.5 + 0.5 * awMacro2) * awVert;
+  float awTopMoss = awUp * smoothstep(0.48, 0.75, awMacro2) * (1.0 - uAwFloor);
+  float awStreak = 0.0;
+  if (uAwStreakBand.y > uAwStreakBand.x) {
+    awStreak = smoothstep(0.52, 0.78, awFbm(vec2(awWallUv.x * 5.0, awWallUv.y * 0.35)))
+               * smoothstep(uAwStreakBand.x, uAwStreakBand.y, vAwWorldPos.y) * awVert;
+  }
+  awMoss = clamp(awBase * 0.75 + awTopMoss * 0.85 + awStreak * 0.4, 0.0, 1.0);
   awPolish = 0.0;
   for (int i = 0; i < 3; i++) {
     vec4 z = uAwWear[i];
-    awPolish = max(awPolish, smoothstep(z.z, z.z * 0.35, distance(vAwWorldPos.xz, z.xy)) * z.w);
+    awPolish = max(awPolish, (1.0 - smoothstep(z.z * 0.35, z.z, distance(awW, z.xy))) * z.w);
   }
-  awPolish *= awUp * (0.6 + 0.4 * awMacro2);
-  // 动线磨亮（5.2）：庭院主路中线 + 门房门槛前后 1 m（只降 roughness，不改色相）
-  float awPath = (1.0 - smoothstep(0.6, 1.7, abs(vAwWorldPos.x))) * (1.0 - smoothstep(0.05, 0.2, vAwWorldPos.y));
-  float awThreshold = smoothstep(1.3, 0.3, distance(vAwWorldPos.xz, vec2(0.0, -0.5)));
-  awPolish = max(awPolish, max(awPath * 0.5, awThreshold * 0.6) * uAwFloor * awUp);
-  awMoss = clamp(awBase * 0.8 + awTopMoss * 0.9 + awStreak * 0.35, 0.0, 1.0);
-  awPuddle = 0.0; awStoneA = 1.0; awEdge = 1.0;
-  float awH = awHeight(awUv);
-  if (uAwFloor > 0.5 && uAwHasCells > 0.5) {
-    // 真实扫描石板：单元图给出每块石板的哈希/到缝距离/平均高度/遮罩
-    vec4 awCell = texture2D(uAwCellMap, vMapUv);
-    awStoneA = awCell.a;
-    awEdge = awCell.g;
-    awSlabHash = awCell.r;
-    float awCrumble = (awFbm(vMapUv * 55.0 + 2.0) - 0.5) * 0.16;
-    awJGeo = 1.0 - smoothstep(0.0, 0.16, awEdge + awCrumble);
-    // 低洼石板 + 世界噪声 → 不规则积水（克制覆盖，避免成片像雪）；再叠加与溅水判定一致的洼地中心
-    float awLowStone = smoothstep(0.80, 0.74, awCell.b);
-    awPuddle = awStoneA * awLowStone * smoothstep(0.66, 0.78, awFbm(awW * 0.55 + 4.0));
+  float awPath = (1.0 - smoothstep(0.6, 1.7, abs(vAwWorldPos.x))) * awCourtY * uAwFloor;
+  awPolish = max(awPolish, awPath * 0.4) * awUp * (0.6 + 0.4 * awMacro2);
+
+  // Diffuse/normal/AO already carry the scanned joints. A thresholded height mask
+  // cannot distinguish a low slab from mortar and paints away its surface detail.
+  vec4 awSample = texture2D(map, awUv);
+  if (awBlend > 0.001) awSample = mix(awSample, texture2D(uAwBlendAlbedo, awUv), awBlend);
+  float awLum = dot(awSample.rgb, vec3(0.2126, 0.7152, 0.0722));
+  if (uAwRubble > 0.0) {
+    // Toned lime mortar, not white hand-painted outlines. Keep grain and spatial variation.
+    float awMortar = smoothstep(0.18, 0.46, awLum) * uAwRubble;
+    awSample.rgb *= 1.0 - awMortar * mix(0.46, 0.66, awMacro2);
+    awLum = dot(awSample.rgb, vec3(0.2126, 0.7152, 0.0722));
+  }
+  awSample.rgb = mix(awSample.rgb, vec3(awLum), uAwDesat) * uAwTint;
+  diffuseColor *= awSample;
+  diffuseColor.rgb *= mix(0.79, 1.19, awMacro) * mix(0.90, 1.08, awMacro2);
+  if (uAwPeel > 0.5) {
+    float awPeel = smoothstep(0.56, 0.74, awFbm(awWallUv * 1.4 + 2.0));
+    diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.10, 0.11, 0.12) * (0.7 + 0.6 * awMacro), awPeel * 0.85);
+  }
+  diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.063, 0.069, 0.033) * (0.6 + 0.8 * awMacro2), awMoss * 0.42);
+  diffuseColor.rgb *= 1.0 - 0.28 * awBase - 0.17 * awStreak;
+
+  // Damp mineral keeps a broad lobe; only pooled water flattens and sharpens it.
+  awWet = uAwWet * mix(awBase, smoothstep(0.16, 0.8, awMacro2), uAwFloor);
+  awPuddle = 0.0;
+  if (uAwPool > 0.0 && uAwHasDisp > 0.5 && awCourtY * awUp > 0.0) {
+    float ruffle = (awFbm(awW * 4.5) - 0.5) * 0.23;
     for (int i = 0; i < 4; i++) {
       vec4 p = uAwPuddles[i];
-      awPuddle = max(awPuddle, smoothstep(p.z, p.z * 0.35, distance(awW, p.xy)) * p.w * awStoneA);
+      float rim = distance(awW, p.xy) / p.z + ruffle;
+      awPuddle = max(awPuddle, (1.0 - smoothstep(0.61, 0.97, rim)) * p.w);
     }
-    awPuddle *= 1.0 - smoothstep(0.05, 0.2, vAwWorldPos.y); // 只在庭院地面，不上抬高的礼拜堂/外廊
-    awPuddle = clamp(awPuddle, 0.0, 1.0);
-    awWet = clamp(uAwWet * 0.45 + awPuddle, 0.0, 1.0);
-    // 过渡带内 monastery 单元特征渐隐，让位给边缘旧石板（避免两套缝叠加）
-    awJGeo *= 1.0 - awBlend * 0.5;
-    awSlabHash = mix(awSlabHash, 0.5, awBlend);
-    awPuddle *= 1.0 - awBlend * 0.7;
-    awStoneA = mix(awStoneA, 1.0, awBlend);
-  } else if (uAwFloor > 0.5) {
-    // 离线兜底：错缝网格石板
-    vec2 awCellUv = vMapUv * 4.0;
-    awCellUv += vec2(awFbm(vMapUv * 2.6 + 4.4), awFbm(vMapUv * 2.6 + 9.8)) * 0.55 - 0.27;
-    float awRow = floor(awCellUv.y);
-    awCellUv.x += mod(awRow, 2.0) * 0.5;
-    vec2 awCell = floor(awCellUv);
-    vec2 awF = fract(awCellUv);
-    float awEdgeF = min(min(awF.x, 1.0 - awF.x), min(awF.y, 1.0 - awF.y));
-    awEdgeF += (awFbm(vMapUv * 40.0) - 0.5) * 0.10;
-    awJGeo = (1.0 - smoothstep(0.02, 0.07, awEdgeF)) * uAwGrid;
-    awSlabHash = awHash(awCell + 17.0);
-    float awLow = 1.0 - smoothstep(0.3, 0.6, awH);
-    awPuddle = smoothstep(0.5, 0.66, awFbm(awW * 0.3 + 9.1)) * (0.5 + 0.5 * awLow) * uAwPuddleAmt;
-    awWet = clamp(uAwWet * 0.5 + awPuddle, 0.0, 1.0);
-  } else {
-    awJGeo = 0.0;
-    awSlabHash = 0.5;
-    awWet = awBase * 0.5;
+    // Higher stone crests break the meniscus; the depression retains water in the joints.
+    awPuddle *= awUp * awCourtY * uAwPool * (1.0 - 0.75 * smoothstep(0.75, 0.93, awHeight(awUv)));
   }
-}
-vec4 sampledDiffuseColor = texture2D(map, awUv);
-// 主路↔边缘 albedo 混合（不规则噪声边界，消除直缝）
-if (uAwHasBlend > 0.5 && awBlend > 0.001) {
-  sampledDiffuseColor = mix(sampledDiffuseColor, texture2D(uAwBlendAlbedo, vMapUv), awBlend);
-}
-// 墙石：把过亮的白色灰缝压暗到石色系（高亮度 + 低饱和 = 灰缝）
-if (uAwFloor < 0.5) {
-  float awLum0 = dot(sampledDiffuseColor.rgb, vec3(0.3333));
-  float awMx = max(sampledDiffuseColor.r, max(sampledDiffuseColor.g, sampledDiffuseColor.b));
-  float awMn = min(sampledDiffuseColor.r, min(sampledDiffuseColor.g, sampledDiffuseColor.b));
-  float awSat0 = (awMx - awMn) / max(awMx, 0.001);
-  float awMortar = smoothstep(0.30, 0.50, awLum0) * (1.0 - smoothstep(0.10, 0.30, awSat0));
-  // 随机让部分砌缝变淡/消失，打破等厚横层节奏
-  awMortar *= 0.4 + 0.6 * smoothstep(0.3, 0.7, awFbm(vec2((vAwWorldPos.x + vAwWorldPos.z) * 0.9, vAwWorldPos.y * 0.5) + 7.0));
-  sampledDiffuseColor.rgb = mix(sampledDiffuseColor.rgb, vec3(0.05, 0.055, 0.062) * (0.7 + 0.6 * awMacro), awMortar * 0.95);
-  if (uAwPeel > 0.5) {
-    float awPeel = smoothstep(0.56, 0.74, awFbm(vec2(vAwWorldPos.x + vAwWorldPos.z, vAwWorldPos.y) * 1.4 + 2.0));
-    sampledDiffuseColor.rgb = mix(sampledDiffuseColor.rgb, vec3(0.10, 0.11, 0.12) * (0.7 + 0.6 * awMacro), awPeel * 0.85);
-  }
-}
-diffuseColor *= sampledDiffuseColor;
-diffuseColor.rgb *= 1.0 - 0.62 * awJGeo;
-{
-  float awLum = dot(diffuseColor.rgb, vec3(0.299, 0.587, 0.114));
-  diffuseColor.rgb = mix(diffuseColor.rgb, vec3(awLum), uAwDesat) * uAwTint;
-  float awM = awMacro * 0.7 + awMacro2 * 0.3;
-  diffuseColor.rgb *= 0.80 + 0.40 * awM;
-  diffuseColor.rgb *= 0.74 + 0.52 * awFbm(awW * 1.3 + 2.2);
-  // 每块石板的明暗与冷暖差异
-  diffuseColor.rgb *= 0.78 + 0.44 * awSlabHash;
-  diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * vec3(1.05, 1.0, 0.94), (awSlabHash - 0.5) * 0.5);
-  diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * vec3(0.94, 0.98, 1.06), (0.5 - awSlabHash) * 0.5);
-  diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * vec3(1.06, 1.0, 0.92), smoothstep(0.55, 0.8, awM));
-  diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * vec3(0.92, 0.98, 1.08), smoothstep(0.45, 0.2, awM));
-  // 苔藓（墙脚/墙顶/缝）
-  diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.075, 0.10, 0.05) * (0.6 + 0.8 * awMacro2), awMoss * 0.5);
-  // 缝里深色泥 + 枯草
-  diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.043, 0.038, 0.030) * (0.7 + 0.6 * awMacro2), awJGeo * 0.85);
-  float awGress = awJGeo * smoothstep(0.62, 0.82, awFbm(vMapUv * 90.0 + 7.0)) * uAwFloor;
-  diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.15, 0.15, 0.085), awGress * 0.5);
-  // 过渡带混入泥土点缀（"被人踩出来的路"而非施工缝），边缘渐脏
-  float awBand = awBlend * (1.0 - awBlend) * 4.0;
-  float awDirt = awBand * smoothstep(0.52, 0.74, awFbm(awW * 1.6 + 8.0));
-  diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.05, 0.045, 0.037) * (0.7 + 0.6 * awMacro2), awDirt * 0.7);
-  diffuseColor.rgb *= 1.0 - 0.12 * awBlend * uAwFloor;
-  // 石板边缘倒角积 dirt
-  diffuseColor.rgb *= 1.0 - 0.22 * (1.0 - smoothstep(0.0, 0.5, awEdge)) * awStoneA * uAwFloor;
-  diffuseColor.rgb *= 1.0 - 0.5 * awBase;
-  diffuseColor.rgb *= 1.0 - 0.4 * awWet * uAwFloor * (1.0 - awPuddle);
-  // 行走路径磨亮
-  diffuseColor.rgb = mix(diffuseColor.rgb, vec3(dot(diffuseColor.rgb, vec3(0.3333))) * 1.22, awPolish * 0.5);
-  // 积水：深色冷水 + 微弱冷天光
-  diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.018, 0.026, 0.040), awPuddle * 0.82);
-  // 末端泥缝压暗：缝明显暗于石板顶面（泥 #2b2620），混合带外同样生效
-  diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.030, 0.026, 0.020) * (0.7 + 0.5 * awMacro2), awJGeo * 0.9);
-  if (uAwHasBlend > 0.5 && awBlend > 0.01) {
-    float awBJ = smoothstep(0.30, 0.5, dot(texture2D(uAwBlendAlbedo, vMapUv).rgb, vec3(0.3333)));
-    diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.035, 0.032, 0.026), awBlend * awBJ * 0.7);
-  }
+  diffuseColor.rgb *= 1.0 - 0.24 * awWet;
+  diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * vec3(0.30, 0.35, 0.38), awPuddle);
 }
 `;
 
 const AW_ROUGH_BLOCK = /* glsl */`
-roughnessFactor = clamp(roughnessFactor, 0.0, 1.0);
-if (uAwHasBlend > 0.5 && awBlend > 0.001) {
-  roughnessFactor = mix(roughnessFactor, texture2D(uAwBlendRough, vMapUv).r * 0.82, awBlend);
-}
-roughnessFactor *= 1.0 - 0.22 * awWet * uAwFloor * (1.0 - awPuddle);
-roughnessFactor = mix(roughnessFactor, 0.34, awPolish);
-roughnessFactor = mix(roughnessFactor, 0.92, awJGeo * 0.55);
-roughnessFactor = mix(roughnessFactor, 0.85, awMoss * 0.4);
-roughnessFactor = clamp(roughnessFactor + (awSlabHash - 0.5) * 0.12, 0.0, 1.0); // 每块石板 roughness ±0.06
-roughnessFactor = mix(roughnessFactor, 0.05, awPuddle);
-roughnessFactor = max(roughnessFactor, awJGeo * 0.55); // 石缝/灰浆不得镜面
+// Compress the raw scan range for dielectric stone; polished traffic is not a mirror.
+if (awBlend > 0.001) roughnessFactor = mix(roughnessFactor, texture2D(uAwBlendRough, awUv).g, awBlend);
+roughnessFactor = mix(0.58, 1.0, roughnessFactor);
+roughnessFactor -= 0.12 * awWet + 0.10 * awPolish;
+roughnessFactor = mix(roughnessFactor, 0.94, awMoss * 0.35);
+roughnessFactor = mix(roughnessFactor, 0.14, awPuddle);
 `;
 
 const AW_NORMAL_BLOCK = /* glsl */`
-if (uAwHasBlend > 0.5 && awBlend > 0.001) {
-  vec3 awBN = texture2D(uAwBlendNormal, vMapUv).xyz * 2.0 - 1.0;
+#ifdef USE_NORMALMAP_TANGENTSPACE
+if (awBlend > 0.001) {
+  vec3 awBN = texture2D(uAwBlendNormal, awUv).xyz * 2.0 - 1.0;
   awBN.xy *= normalScale;
-  vec3 awBlendN = normalize(mat3(viewMatrix) * normalize(awTBNg * awBN)); // 世界→视图空间再混
-  normal = normalize(mix(normal, awBlendN, awBlend));
+  normal = normalize(mix(normal, normalize(tbn * awBN), awBlend));
 }
-normal = normalize(mix(normal, nonPerturbedNormal, clamp(awPuddle * 0.9 + awMoss * 0.2 + awPolish * 0.3, 0.0, 1.0)));
+#endif
+normal = normalize(mix(normal, nonPerturbedNormal, awPuddle * 0.9 + awMoss * 0.09));
 `;
 
 /** 给石材类材质挂上共享着色器扩展。uniforms 存 userData 供 enhance 写入 disp 高度图。 */
 export function stoneShader(mat: THREE.MeshStandardMaterial, u: AwUniforms): void {
   mat.userData.aw = u;
-  if (mat.map) u.uAwAlbedo.value = mat.map;
   mat.onBeforeCompile = (shader) => {
     Object.assign(shader.uniforms, u, { uAwWear: AW_WEAR });
     shader.vertexShader = AW_VERT_PREFIX + shader.vertexShader
@@ -983,11 +817,7 @@ export function enhance(mat: THREE.MeshStandardMaterial, name: string, normalSca
       }, undefined, () => resolve());
     }));
   };
-  grab('diff', true, (t) => {
-    mat.map = t;
-    const u = mat.userData.aw as AwUniforms | undefined;
-    if (u) u.uAwAlbedo.value = t;
-  });
+  grab('diff', true, (t) => { mat.map = t; });
   grab('nor', false, (t) => { mat.normalMap = t; mat.normalScale.set(normalScale, normalScale); });
   grab('rough', false, (t) => { mat.roughnessMap = t; });
   grab('ao', false, (t) => { mat.aoMap = t; mat.aoMapIntensity = 1.0; });
@@ -1000,51 +830,26 @@ export function enhance(mat: THREE.MeshStandardMaterial, name: string, normalSca
 /** 所有外部贴图加载完成（含失败回退）后兑现。供截图工具等待，避免拍到未加载的兜底贴图。 */
 export let texturesReady: Promise<void> = Promise.resolve();
 
-/** 庭院石板：加载 monastery_stone_floor 扫描贴图，并从高度图分割石板单元（每块差异/倒角/积水）。 */
+/** 庭院石板：主路扫描贴图 + 边缘旧石板；四张混合贴图齐备才启用。 */
 function loadFlagstone(mat: THREE.MeshStandardMaterial, normalScale: number, pending: Promise<void>[]): void {
-  const loader = new THREE.TextureLoader();
   const u = mat.userData.aw as AwUniforms;
-  const grab = (slot: string, srgb: boolean, apply: (t: THREE.Texture) => void): void => {
-    pending.push(new Promise<void>((resolve) => {
-      loader.load(`textures/monastery_stone_floor_${slot}.jpg`, (t) => {
-        t.wrapS = t.wrapT = THREE.RepeatWrapping;
-        t.colorSpace = srgb ? THREE.SRGBColorSpace : THREE.NoColorSpace;
-        t.anisotropy = 8;
-        apply(t);
-        mat.needsUpdate = true;
-        resolve();
-      }, undefined, () => resolve());
-    }));
-  };
-  grab('diff', true, (t) => { mat.map = t; u.uAwAlbedo.value = t; });
-  grab('nor', false, (t) => { mat.normalMap = t; mat.normalScale.set(normalScale, normalScale); });
-  grab('rough', false, (t) => { mat.roughnessMap = t; });
-  grab('ao', false, (t) => { mat.aoMap = t; mat.aoMapIntensity = 1.0; });
-  grab('disp', false, (t) => {
-    u.uAwHeightMap.value = t; u.uAwHasDisp.value = 1;
-    // 分割石板单元（一次性，~100ms）；失败则保留兜底网格
-    try {
-      const cells = bakeStoneCells(t.image as CanvasImageSource);
-      u.uAwCellMap.value = cells;
-      u.uAwHasCells.value = 1;
-    } catch { /* 保留兜底 */ }
-  });
-  // 边缘旧石板 stone_pavers 作为混合目标：主路↔边缘世界 x 噪声过渡（5.1 第 4 条）
-  const grabB = (slot: string, srgb: boolean, apply: (t: THREE.Texture) => void): void => {
-    pending.push(new Promise<void>((resolve) => {
-      loader.load(`textures/stone_pavers_${slot}.jpg`, (t) => {
-        t.wrapS = t.wrapT = THREE.RepeatWrapping;
-        t.colorSpace = srgb ? THREE.SRGBColorSpace : THREE.NoColorSpace;
-        t.anisotropy = 8;
-        apply(t);
-        resolve();
-      }, undefined, () => resolve());
-    }));
-  };
-  grabB('diff', true, (t) => { u.uAwBlendAlbedo.value = t; });
-  grabB('nor', false, (t) => { u.uAwBlendNormal.value = t; });
-  grabB('rough', false, (t) => { u.uAwBlendRough.value = t; });
-  grabB('disp', false, (t) => { u.uAwBlendDisp.value = t; u.uAwHasBlend.value = 1; });
+  enhance(mat, 'monastery_stone_floor', normalScale, pending);
+  const loader = new THREE.TextureLoader();
+  const blend = (slot: string, srgb: boolean): Promise<THREE.Texture> =>
+    loader.loadAsync(`textures/stone_pavers_${slot}.jpg`).then((t) => {
+      t.wrapS = t.wrapT = THREE.RepeatWrapping;
+      t.colorSpace = srgb ? THREE.SRGBColorSpace : THREE.NoColorSpace;
+      t.anisotropy = 8;
+      return t;
+    });
+  pending.push(Promise.all([blend('diff', true), blend('nor', false), blend('rough', false), blend('disp', false)])
+    .then(([albedo, normal, rough, disp]) => {
+      u.uAwBlendAlbedo.value = albedo;
+      u.uAwBlendNormal.value = normal;
+      u.uAwBlendRough.value = rough;
+      u.uAwBlendDisp.value = disp;
+      u.uAwHasBlend.value = 1;
+    }, () => { /* 主路扫描贴图保留。 */ }));
 }
 
 /** 把额外的异步资源（如 glTF 模型）并入 texturesReady 的等待链。 */
@@ -1073,7 +878,7 @@ export function makeMaterials(): Materials {
   const m: Materials = {
     stone: std(stoneS, { color: 0xffffff, roughness: 0.96, normalScale: new THREE.Vector2(1, 1) }),
     stoneDark: std(stoneDarkS, { color: 0xffffff, roughness: 0.97, normalScale: new THREE.Vector2(1, 1) }),
-    flag: std(flagS, { color: 0xffffff, roughness: 0.82, normalScale: new THREE.Vector2(1.5, 1.5) }),
+    flag: std(flagS, { color: 0xffffff, roughness: 0.82, normalScale: new THREE.Vector2(0.95, 0.95) }),
     wood: std(woodS, { color: 0x9a8262, roughness: 0.82, normalScale: new THREE.Vector2(0.7, 0.7) }),
     woodFloor: std(woodFloorS, { color: 0x6b5a48, roughness: 0.8, normalScale: new THREE.Vector2(0.6, 0.6) }),
     iron: std(ironS, { color: 0x2a2b2e, roughness: 0.62, metalness: 1.0, normalScale: new THREE.Vector2(0.8, 0.8) }),
@@ -1109,9 +914,14 @@ export function makeMaterials(): Materials {
   m.iron.customProgramCacheKey = () => 'aw-iron';
 
   // 共享石材着色器：墙（floor=0）与地（floor=1）。冷灰调、去饱和、宏观噪声、潮湿与 POM。
-  stoneShader(m.stone, awUniforms(0, 0.3, 0.5, [0.88, 0.92, 1.0], 0.025, [2.2, 4.15]));
-  stoneShader(m.stoneDark, awUniforms(0, 0.3, 0.55, [0.74, 0.78, 0.86], 0.025, [4.4, 6.85]));
-  stoneShader(m.flag, awUniforms(1, 0.85, 0.6, [1.08, 1.12, 1.20], 0.045));
+  const rubble = awUniforms(0, 0.5, 0.64, [0.88, 0.92, 0.98], 0.013, [2.2, 4.15]);
+  const darkRubble = awUniforms(0, 0.5, 0.63, [0.74, 0.78, 0.85], 0.013, [4.4, 6.85]);
+  rubble.uAwRubble.value = darkRubble.uAwRubble.value = 1;
+  stoneShader(m.stone, rubble);
+  stoneShader(m.stoneDark, darkRubble);
+  const flag = awUniforms(1, 0.52, 0.65, [1.08, 1.12, 1.20], 0.018);
+  flag.uAwPool.value = 1;
+  stoneShader(m.flag, flag);
   stoneShader(m.roof, awUniforms(0, 0.25, 0.2, [0.3, 0.32, 0.34], 0.02));
   stoneShader(m.gravel, awUniforms(1, 0.4, 0.15, [0.82, 0.82, 0.82], 0.03));
 
@@ -1134,9 +944,9 @@ export function makeMaterials(): Materials {
   m.woodFloor.customProgramCacheKey = () => 'aw-woodfloor';
 
   // 外部 CC0 贴图增强（石、木、瓦、碎石），2K：颜色/法线/粗糙度/AO/高度。
-  enhance(m.stone, 'castle_wall_varriation', 1.0, pending);
-  enhance(m.stoneDark, 'castle_wall_varriation', 1.0, pending);
-  loadFlagstone(m.flag, 1.5, pending);
+  enhance(m.stone, 'castle_wall_varriation', 0.73, pending);
+  enhance(m.stoneDark, 'castle_wall_varriation', 0.73, pending);
+  loadFlagstone(m.flag, 0.95, pending);
   enhance(m.wood, 'medieval_wood', 0.8, pending);
   enhance(m.woodFloor, 'brown_planks_05', 0.7, pending);
   enhance(m.roof, 'roof_slates_02', 0.9, pending);

@@ -45,7 +45,7 @@ const cache = new WeakMap<Materials, Variants>();
 
 interface StoneOpts {
   floor: number; wet: number; desat: number; tint: [number, number, number];
-  hs: number; ns: number; rough: number; band?: [number, number]; grid?: number; puddle?: number; peel?: number;
+  hs: number; ns: number; rough: number; band?: [number, number]; peel?: number;
 }
 
 /** 石材族：挂共享石材着色器 + 加载扫描贴图（去饱和/冷灰由 desat+tint 控制）。 */
@@ -57,8 +57,6 @@ function stoneMat(name: string, o: StoneOpts, pending: Promise<void>[]): THREE.M
     normalScale: new THREE.Vector2(o.ns, o.ns),
   });
   const u = awUniforms(o.floor, o.wet, o.desat, o.tint, o.hs, o.band);
-  if (o.grid) u.uAwGrid.value = o.grid;
-  if (o.puddle) u.uAwPuddleAmt.value = o.puddle;
   if (o.peel) u.uAwPeel.value = o.peel;
   stoneShader(mat, u);
   enhance(mat, name, o.ns, pending);
@@ -83,16 +81,17 @@ export function variants(m: Materials): Variants {
   // —— 石墙族（冷灰，亮度互相 ±12% 内）——
   const wallRubble = m.stone; // 乱石幕墙：复用 castle_wall_varriation（已去饱和冷灰）
   const wallAshlar = stoneMat('medieval_blocks_03', { floor: 0, wet: 0.3, desat: 0.72, tint: [0.68, 0.72, 0.80], hs: 0.02, ns: 1.0, rough: 0.85, band: [2.2, 4.15] }, pending);
-  const wallTrim = stoneMat('granite_wall', { floor: 0, wet: 0.28, desat: 0.6, tint: [0.82, 0.86, 0.94], hs: 0.02, ns: 1.1, rough: 0.8, band: [2.2, 4.15] }, pending);
+  // Worn cut stone rather than the granite scan's narrow, strongly ridged courses.
+  const wallTrim = stoneMat('stone_pavers', { floor: 0, wet: 0.28, desat: 0.6, tint: [0.96, 0.99, 1.04], hs: 0.009, ns: 0.56, rough: 0.87, band: [2.2, 4.15] }, pending);
   const wallRough = stoneMat('rustic_stone_wall_02', { floor: 0, wet: 0.35, desat: 0.55, tint: [0.70, 0.74, 0.82], hs: 0.03, ns: 1.2, rough: 0.9, band: [0.5, 3.0] }, pending);
   const wallPlaster = stoneMat('grey_plaster', { floor: 0, wet: 0.2, desat: 0.6, tint: [0.46, 0.49, 0.55], hs: 0.01, ns: 0.5, rough: 0.9, peel: 1 }, pending);
 
   // —— 地面族 ——
-  const floorFlag = m.flag; // 主路：monastery_stone_floor 不规则大石板（含单元图积水）
-  const floorFlagWorn = stoneMat('stone_pavers', { floor: 1, wet: 0.8, desat: 0.6, tint: [1.06, 1.10, 1.18], hs: 0.02, ns: 1.1, rough: 0.82, grid: 1, puddle: 0.5 }, pending);
-  const floorCobble = stoneMat('cobblestone_large_01', { floor: 1, wet: 0.7, desat: 0.62, tint: [1.06, 1.10, 1.18], hs: 0.025, ns: 1.2, rough: 0.85, puddle: 0.45 }, pending);
+  const floorFlag = m.flag; // 主路：monastery_stone_floor 不规则大石板 + 洼地积水
+  const floorFlagWorn = stoneMat('stone_pavers', { floor: 1, wet: 0.48, desat: 0.6, tint: [1.06, 1.10, 1.18], hs: 0.012, ns: 0.8, rough: 0.88 }, pending);
+  const floorCobble = stoneMat('cobblestone_large_01', { floor: 1, wet: 0.42, desat: 0.72, tint: [0.78, 0.82, 0.88], hs: 0, ns: 0.8, rough: 0.9 }, pending);
   const floorDirt = stoneMat('brown_mud_leaves_01', { floor: 1, wet: 0.3, desat: 0.35, tint: [0.55, 0.50, 0.44], hs: 0.02, ns: 0.8, rough: 0.95 }, pending);
-  const floorInterior = stoneMat('worn_tile_floor', { floor: 1, wet: 0.3, desat: 0.4, tint: [1.08, 1.12, 1.20], hs: 0.015, ns: 1.0, rough: 0.8, grid: 1 }, pending);
+  const floorInterior = stoneMat('worn_tile_floor', { floor: 1, wet: 0.3, desat: 0.4, tint: [1.08, 1.12, 1.20], hs: 0.015, ns: 1.0, rough: 0.8 }, pending);
 
   // —— 木族 ——
   const woodBeam = woodMat('medieval_wood', 0x8a7258, 0.82, 0.7, pending);
