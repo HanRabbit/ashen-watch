@@ -187,6 +187,21 @@ export function findPath(
   const pts: PathPoint[] = ids.map((id) => { const n = NODE_BY_ID.get(id)!; return { x: n.x, z: n.z, y: n.y, floor: n.floor }; });
   while (pts.length > 1 && pts[0].floor === ff && pts[1].floor === ff && walkClear(from.x, from.z, pts[1].x, pts[1].z, boxesF, 0.3, cylsF)
     && !segHitsLit(ctx.lit, from.x, from.z, pts[1].x, pts[1].z, ff)) pts.shift();
+  // Refreshing a route in the small gap between an entrance node and its
+  // actual ramp must not send an already aligned walker back to the node.
+  const entry = NODE_BY_ID.get(ids[0])!;
+  const exit = NODE_BY_ID.get(ids[1]);
+  const stair = exit && STAIRS.find((s) => (s.a === entry.id && s.b === exit.id) || (s.a === exit.id && s.b === entry.id));
+  if (stair && exit && pts[0].x === entry.x && pts[0].z === entry.z && ff === entry.floor) {
+    const r = stair.runs[0];
+    const along = r.axis === 'x' ? from.x : from.z;
+    const start = r.axis === 'x' ? entry.x : entry.z;
+    const end = r.axis === 'x' ? exit.x : exit.z;
+    const side = r.axis === 'x' ? from.z : from.x;
+    const min = r.axis === 'x' ? r.z0 : r.x0, max = r.axis === 'x' ? r.z1 : r.x1;
+    if ((along - start) * (end - start) >= 0 && (along - end) * (end - start) < 0
+      && side >= min + 0.42 && side <= max - 0.42) pts.shift();
+  }
   const last = pts[pts.length - 1];
   const goalLit = inAnyZone(ctx.lit, to.x, to.z, 0, tf);
   if (exactGoal && !goalLit && last.floor === tf && walkClear(last.x, last.z, to.x, to.z, boxesT, 0.3, cylsT)) {

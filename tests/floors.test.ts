@@ -19,6 +19,13 @@ it('connects the open gatehouse to the S1 entrance and routes directly through S
   expect(path?.at(-1)).toEqual({ x: 10.2, z: 9.9, y: -3, floor: 'B1' });
 });
 
+it('does not reverse across the S1 entrance waypoint when the route refreshes', () => {
+  const ctx = { doors: { ...SHUT, gatehouse: true }, lit: [] };
+  const from = { x: 4.365, z: 9.90, y: 0, floor: '1F' as const };
+  const to = { x: 10.15, z: 9.9, y: -3, floor: 'B1' as const };
+  expect(findPath(from, to, ctx)?.[0]).toMatchObject({ x: 10.2, floor: 'B1' });
+});
+
 describe('跨层导航', () => {
   it('门房可达 B1 储藏室与 2F 上廊（门全开）', () => {
     const toB1 = findPath({ x: 0, z: -5.5, y: 0, floor: '1F' }, { x: 15.5, z: 13, y: -3, floor: 'B1' }, { doors: OPEN, lit: [] });
