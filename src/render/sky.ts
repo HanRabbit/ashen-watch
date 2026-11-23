@@ -104,10 +104,11 @@ void main() {
   if (uDiscSize > 0.0 && ang < uDiscSize) {
     disc = 1.0 - smoothstep(uDiscSize * 0.92, uDiscSize, ang);
     // Resolve surface structure in disc-relative coordinates, regardless of position in the sky.
-    vec3 right = normalize(cross(vec3(0.0, 1.0, 0.0), sunDir));
+    vec3 up = abs(sunDir.y) < 0.98 ? vec3(0.0, 1.0, 0.0) : vec3(0.0, 0.0, 1.0);
+    vec3 right = normalize(cross(up, sunDir));
     vec2 moonUV = vec2(dot(d, right), dot(d, cross(sunDir, right))) / uDiscSize;
-    float patch = fbm3(moonUV * 3.3 + 11.2);
-    mare = mix(0.46, 1.0, smoothstep(0.24, 0.67, patch));
+    float lunarDetail = fbm3(moonUV * 3.3 + 11.2);
+    mare = mix(0.46, 1.0, smoothstep(0.24, 0.67, lunarDetail));
     mare *= 0.72 + 0.28 * sqrt(max(0.0, 1.0 - dot(moonUV, moonUV)));
   }
   float halo = pow(clamp(cosA, 0.0, 1.0), 320.0) * 0.9 + pow(clamp(cosA, 0.0, 1.0), 40.0) * 0.22;
