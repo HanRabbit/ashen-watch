@@ -10,7 +10,9 @@ const ADJ = new Map<string, { to: string; door?: string; cost: number }[]>();
 for (const n of NODES) ADJ.set(n.id, []);
 for (const e of EDGES) {
   const a = NODE_BY_ID.get(e.a)!, b = NODE_BY_ID.get(e.b)!;
-  const cost = Math.hypot(a.x - b.x, a.z - b.z, (a.y ?? 0) - (b.y ?? 0));
+  // S1's short cellar landing costs extra maneuvering; don't send marginal
+  // courtyard shortcuts down and back up through the basement.
+  const cost = Math.hypot(a.x - b.x, a.z - b.z, a.y - b.y) + (e.a === 'c_s1top' && e.b === 'b_land' ? 12 : 0);
   ADJ.get(e.a)!.push({ to: e.b, door: e.door, cost });
   ADJ.get(e.b)!.push({ to: e.a, door: e.door, cost });
 }

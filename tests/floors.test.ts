@@ -9,6 +9,16 @@ import { Driver, STAND } from './driver';
 const OPEN: Record<DoorId, boolean> = { gatehouse: true, gate: true, chapelFront: true };
 const SHUT: Record<DoorId, boolean> = { gatehouse: false, gate: false, chapelFront: false };
 
+it('connects the open gatehouse to the S1 entrance and routes directly through S1 into B1', () => {
+  const ctx = { doors: { ...SHUT, gatehouse: true }, lit: [] };
+  const from = { x: 0, z: -1.1, y: 0, floor: '1F' as const };
+  const top = { x: 4, z: 9.9, y: 0, floor: '1F' as const };
+  expect(findPath(from, top, ctx)?.at(-1)).toEqual(top);
+  const path = findPath(from, { x: 10.2, z: 9.9, y: -3, floor: 'B1' }, ctx);
+  expect(path).toContainEqual(top);
+  expect(path?.at(-1)).toEqual({ x: 10.2, z: 9.9, y: -3, floor: 'B1' });
+});
+
 describe('跨层导航', () => {
   it('门房可达 B1 储藏室与 2F 上廊（门全开）', () => {
     const toB1 = findPath({ x: 0, z: -5.5, y: 0, floor: '1F' }, { x: 15.5, z: 13, y: -3, floor: 'B1' }, { doors: OPEN, lit: [] });

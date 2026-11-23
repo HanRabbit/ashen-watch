@@ -40,7 +40,7 @@ export function buildFloors(m: Materials): Floors {
   const group = new THREE.Group();
   group.name = 'floors';
   const b = new Batch();
-  const b1 = new Batch(); // map: B1 单独合批，玩家不在 B1 时整组隐藏省预算
+  const b1 = new Batch(); // Keep B1 visible through both stair openings.
   const g1 = new THREE.Group(); g1.name = 'floors-B1';
 
   // —— 带 y0 的墙 / 护栏 / 垛墙 / 梯体护墙（staticLevel 跳过这些）——
@@ -186,55 +186,9 @@ export function buildFloors(m: Materials): Floors {
 
   return {
     group,
-    update(w: World): void {
-      g1.visible = w.player.floor === 'B1';
-    },
+    update(): void {},
   };
 }
 
-/** 按三角形重心 AABB 剔除 staticLevel 地面：S1 洞 + 旧礼拜堂/外廊地面（礼拜堂已转 90°）。 */
-export function hideGroundHoles(levelGroup: THREE.Group): void {
-  const boxes: [number, number, number, number, number, number][] = [
-    [4.6, 10.0, -0.35, 0.05, 9.0, 10.8],   // S1 洞口
-    [12.9, 25.1, -0.35, 0.5, 7.4, 25.6],   // 旧礼拜堂地面
-    [9.9, 25.1, -0.35, 0.5, 25.4, 29.1],   // 旧外廊地面
-  ];
-  cull(levelGroup, boxes);
-}
-
-function cull(group: THREE.Group, boxes: [number, number, number, number, number, number][]): void {
-  const inBox = (x: number, y: number, z: number): boolean => {
-    for (const [x0, x1, y0, y1, z0, z1] of boxes) if (x >= x0 && x <= x1 && y >= y0 && y <= y1 && z >= z0 && z <= z1) return true;
-    return false;
-  };
-  group.traverse((o) => {
-    const me = o as THREE.Mesh;
-    if (!me.isMesh) return;
-    const geo = me.geometry as THREE.BufferGeometry;
-    const pos = geo.getAttribute('position') as THREE.BufferAttribute | undefined;
-    if (!pos || geo.index) return;
-    const names = Object.keys(geo.attributes);
-    const keep: Record<string, number[]> = {};
-    for (const nm of names) keep[nm] = [];
-    let removed = 0;
-    for (let i = 0; i < pos.count; i += 3) {
-      const cx = (pos.getX(i) + pos.getX(i + 1) + pos.getX(i + 2)) / 3;
-      const cy = (pos.getY(i) + pos.getY(i + 1) + pos.getY(i + 2)) / 3;
-      const cz = -(pos.getZ(i) + pos.getZ(i + 1) + pos.getZ(i + 2)) / 3;
-      if (inBox(cx, cy, cz)) { removed++; continue; }
-      for (const nm of names) {
-        const at = geo.getAttribute(nm) as THREE.BufferAttribute;
-        for (let k = 0; k < 3; k++) for (let c = 0; c < at.itemSize; c++) keep[nm].push(at.getComponent(i + k, c));
-      }
-    }
-    if (!removed) return;
-    if (!keep[names[0]].length) { me.visible = false; return; }
-    const ng = new THREE.BufferGeometry();
-    for (const nm of names) {
-      const at = geo.getAttribute(nm) as THREE.BufferAttribute;
-      ng.setAttribute(nm, new THREE.Float32BufferAttribute(keep[nm], at.itemSize));
-    }
-    me.geometry = ng;
-    geo.dispose();
-  });
-}
+/** @deprecated The slabs and ground dressing now have cutouts at creation. */
+export function hideGroundHoles(_levelGroup: THREE.Group): void {}

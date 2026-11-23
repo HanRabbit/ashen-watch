@@ -1,14 +1,13 @@
 // 静态建筑：墙、地面、屋顶、地标与不随状态变化的陈设。按材质合并为少量网格。
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-import { PROPS, RAISED_Y, WALLS, WELL } from '../sim/level';
+import { cutRect, DOORS, inArea, PROPS, Rect, S1_SHAFT, S2_SHAFT, WALLS, WELL } from '../sim/level';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { archHeader, archLeaf, archRib, Batch, gable } from './geom';
 import { buildFurniture } from './furniture';
 import { variants } from './materialVariants';
 import { grassTexture, ivyLeafTexture, leadedGlass, leafTexture, Materials, mossTexture, rugTexture, rustTexture, scaleUV, smokeTexture, tiledBox, trackPending } from './materials';
 
-const R = RAISED_Y;
 const HALF_PI = Math.PI / 2;
 
 /** 确定性随机（装饰分布用，保证每次构建一致）。 */
@@ -188,8 +187,8 @@ export function buildStaticLevel(m: Materials): StaticLevel {
       b.box(v.wallTrim, x0 - 0.04, z0 - 0.04, x1 + 0.04, z1 + 0.04, h - 0.1, h + 0.08, 2.2); // 柱帽
     };
     for (const z of [7, 14, 21]) pil(-10, z, 1, 0, 4.2);   // 西墙内面
-    for (const z of [10, 17, 24]) pil(10, z, -1, 0, 5);    // 东墙内面
-    for (const x of [-7, 7]) pil(x, 0.5, 0, 1, 4.2);       // 南墙内面
+    for (const z of [10, 24]) pil(10, z, -1, 0, 5);    // 东墙内面
+    for (const x of [-7]) pil(x, 0.5, 0, 1, 4.2);       // 南墙内面
     // 粗石补砌段（风化修补，材质变化打断重复）
     b.box(v.wallRough, -10.02, 9.5, -9.9, 12.5, 0.35, 3.2, 2.6);
     b.box(v.wallRough, 9.9, 19, 10.02, 22, 0.35, 3.6, 2.6);
@@ -204,7 +203,7 @@ export function buildStaticLevel(m: Materials): StaticLevel {
   {
     const r = drng(401);
     const faces: [number, number, number, number, number][] = [
-      [-10, 14.5, 1, 0, 28], [10, 13, -1, 0, 25], [0, 0.5, 0, 1, 20], [13, 13, -1, 0, 23],
+      [-10, 14.5, 1, 0, 28], [10, 5.5, -1, 0, 10.4], [0, 0.5, 0, 1, 20],
     ];
     for (const [fx, fz, nx, nz, len] of faces) {
       for (let i = 0; i < 9; i++) {
@@ -235,31 +234,30 @@ export function buildStaticLevel(m: Materials): StaticLevel {
     gh(-3.0, -8.0, 3.0, -7.94);   // 北内墙（后墙）
   }
 
-  // 门洞上方的尖拱过梁 / 券石框（wallTrim 细凿大石）
-  b.geo(v.wallTrim, archHeader(1.6, 1.9, 2.6, 4.2, 0.5), 0, 0, 0.25);
-  b.geo(v.wallTrim, archHeader(1.8, 2.0, 2.8, 5, 0.5), 10.25, 0, 6, HALF_PI);
-  b.geo(v.wallTrim, archHeader(2, 2.3, 3.5, 5 - R, 0.5), 10.25, R, 27, HALF_PI);
-  b.geo(v.wallTrim, archHeader(1.8, 2.2, 3.2, 7 - R, 0.5), 19, R, 25.25);
-  b.geo(v.wallTrim, archHeader(1.6, 1.9, 2.6, 7 - R, 0.5), 13.25, R, 16, HALF_PI);
-  b.geo(v.wallTrim, archHeader(2, 2.2, 3.0, 4.5 - R, 0.4), 15.2, R, 20.8);
-  archFrame(b, v.wallTrim, 0, 0.25, 1.6, 1.9, 2.6, 0);
-  archFrame(b, v.wallTrim, 10.25, 6, 1.8, 2.0, 2.8, -HALF_PI);
-  archFrame(b, v.wallTrim, 10.25, 27, 2, 2.3, 3.5, -HALF_PI, R);
-  archFrame(b, v.wallTrim, 19, 25.25, 1.8, 2.2, 3.2, Math.PI, R);
-  archFrame(b, v.wallTrim, 13.25, 16, 1.6, 1.9, 2.6, -HALF_PI, R);
+  // The gatehouse is unchanged. Chapel portals are authored with the current
+  // chapel in landmarks.ts, not layered over the abandoned pre-rotation openings.
+  const ghDoor = DOORS.gatehouse;
+  const ghWidth = ghDoor.box.x1 - ghDoor.box.x0;
+  b.geo(v.wallTrim, archHeader(ghWidth, 1.9, ghDoor.box.h, 4.2, 0.5), 0, 0, ghDoor.hinge.z);
+  archFrame(b, v.wallTrim, 0, ghDoor.hinge.z, ghWidth, 1.9, ghDoor.box.h, 0);
 
-  // 地面分区（5.1）：主路 floorFlag 大石板，边缘 floorFlagWorn，井台/侧廊 floorCobble，墙脚 floorDirt 过渡带。
-  b.box(m.gravel, -90, -70, 90, 110, -0.6, -0.04, 3);
-  // 庭院地面单块 floorFlag：着色器内按世界 x + 噪声遮罩混合主路（monastery 不规则大石板）↔边缘（stone_pavers 旧石板），
-  // 过渡带 0.8–1.5 m 不规则边界 + 泥土点缀，消除直缝（5.1 第 4 条）。
-  b.box(v.floorFlag, -10.5, 0, 10.5, 29, -0.3, 0, 3.6);
-  b.box(v.floorCobble, WELL.x - 2.3, WELL.z - 2.3, WELL.x + 2.3, WELL.z + 2.3, -0.3, 0.004, 1.6); // 井台一圈卵石
-  b.box(v.floorCobble, 10.5, 1.5, 13, 17.5, -0.3, 0.004, 1.6); // 侧廊卵石
-  // 墙脚泥土落叶过渡带（0.7 m，微微抬高避免 z-fight，落叶/草覆盖接缝）
-  b.box(v.floorDirt, -10, 0.5, -9.3, 28.5, -0.3, 0.006, 2);
-  b.box(v.floorDirt, 9.3, 0.5, 10, 28.5, -0.3, 0.006, 2);
-  b.box(v.floorDirt, -10, 0.5, 10, 1.2, -0.3, 0.006, 2);
-  b.box(v.floorDirt, -10, 27.8, 10, 28.5, -0.3, 0.006, 2);
+  // Cut every ground layer before batching. In particular the huge exterior
+  // gravel box used to cap both stairways even after the visible floor was cut.
+  const ground = (mat: THREE.Material, rect: Rect, y0: number, h: number, tile: number): void => {
+    const pieces = cutRect(rect, S1_SHAFT).flatMap((r) => cutRect(r, S2_SHAFT));
+    // Preserve UV scale and phase across the split, instead of visibly retiling each piece.
+    for (const p of pieces) boxOff(mat, p.x0, p.z0, p.x1, p.z1, y0, h, tile,
+      ((p.x0 + p.x1) - (rect.x0 + rect.x1)) / (2 * tile),
+      ((rect.z0 + rect.z1) - (p.z0 + p.z1)) / (2 * tile));
+  };
+  ground(m.gravel, { x0: -90, z0: -70, x1: 90, z1: 110 }, -0.6, -0.04, 3);
+  ground(v.floorFlag, { x0: -10.5, z0: 0, x1: 10.5, z1: 29 }, -0.3, 0, 3.6);
+  ground(v.floorCobble, { x0: WELL.x - 2.3, z0: WELL.z - 2.3, x1: WELL.x + 2.3, z1: WELL.z + 2.3 }, -0.3, 0.004, 1.6);
+  ground(v.floorCobble, { x0: 10.5, z0: 1.5, x1: 13, z1: 17.5 }, -0.3, 0.004, 1.6);
+  ground(v.floorDirt, { x0: -10, z0: 0.5, x1: -9.3, z1: 28.5 }, -0.3, 0.006, 2);
+  ground(v.floorDirt, { x0: 9.3, z0: 0.5, x1: 10, z1: 28.5 }, -0.3, 0.006, 2);
+  ground(v.floorDirt, { x0: -10, z0: 0.5, x1: 10, z1: 1.2 }, -0.3, 0.006, 2);
+  ground(v.floorDirt, { x0: -10, z0: 27.8, x1: 10, z1: 28.5 }, -0.3, 0.006, 2);
   // 门房室内石板（concept/02）+ 中央织纹地毯（单幅图案 + 流苏破边 + 磨损污渍）
   b.box(v.floorInterior, -3.5, -8.5, 3.5, 0, -0.3, 0.005, 2);
   {
@@ -272,14 +270,6 @@ export function buildStaticLevel(m: Materials): StaticLevel {
     });
     b.geo(rugMat, new THREE.PlaneGeometry(2.6, 3.6), 0, 0.02, -4.4, 0, -HALF_PI, 0);
   }
-  b.box(v.floorFlag, 13, 7.5, 25, 25.5, -0.3, R, 3.6);
-  b.box(v.floorFlag, 10, 25.5, 25, 29, -0.3, R, 3.6);
-  // 矮台阶（三级，每级 0.15 m）：外廊尖拱前、礼拜堂侧门前（wallTrim）
-  for (let i = 0; i < 3; i++) {
-    b.box(v.wallTrim, 8.6 + (i * 1.4) / 3, 25.5, 10, 28.5, 0, (R * (i + 1)) / 3);
-    b.box(v.wallTrim, 12 + i / 3, 15.2, 13, 16.8, 0, (R * (i + 1)) / 3);
-  }
-
   // 门房：木屋顶、山墙、粗壮横梁 + 斜撑托架（concept/02 厚重木构）
   const ghAng = Math.atan2(2, 3.9);
   b.geo(m.roof, tiledBox(4.55, 0.16, 10, 1.2), 1.95, 4.62, -4, 0, 0, -ghAng);
@@ -305,94 +295,10 @@ export function buildStaticLevel(m: Materials): StaticLevel {
   b.box(v.woodBeam, 1.4, 1.02, 3.0, 1.18, 3.11, 3.27, 1);
   b.geo(m.roof, tiledBox(1.9, 0.08, 1.5, 1.2), 2.2, 3.5, 1.2, 0, 0.3, 0);
 
-  // 北墙木构挑檐 / 托架（concept/03 左上角前景框）：粗壮方料挑檐 + 斜撑，沿北墙顶伸出 ~1 m
-  {
-    const zWall = 28.5, yTop = 4.6;
-    b.box(v.woodBeam, -10.3, zWall - 0.1, 10.3, zWall + 0.1, yTop, yTop + 0.22, 1); // 沿墙顶梁
-    b.box(v.woodBeam, -10.3, zWall - 1.05, 10.3, zWall - 0.85, yTop + 0.1, yTop + 0.3, 1); // 挑檐外缘檩
-    b.box(v.woodBeam, -10.3, zWall - 1.0, 10.3, zWall, yTop + 0.28, yTop + 0.34, 1.2); // 檐口木板
-    for (let x = -9.5; x <= 9.5; x += 1.6) {
-      b.box(v.woodBeam, x - 0.1, zWall - 1.0, x + 0.1, zWall, yTop + 0.05, yTop + 0.2, 1); // 挑椽
-      const geo = tiledBox(0.14, 1.15, 0.14, 1);
-      b.geo(v.woodBeam, geo, x, yTop - 0.5, zWall - 0.5, 0.78, 0, 0); // 斜撑托架（绕 x 轴斜向墙面）
-    }
-  }
-
-  // 礼拜堂：石拱顶（西坡中段残缺）、山墙
-  const chAng = Math.atan2(3.5, 6.3);
-  b.geo(m.roof, tiledBox(7.3, 0.2, 18.6, 1.4), 22.15, 8.75, 16.5, 0, 0, -chAng);
-  b.geo(m.roof, tiledBox(7.3, 0.2, 5.0, 1.4), 15.85, 8.75, 9.7, 0, 0, chAng);
-  b.geo(m.roof, tiledBox(7.3, 0.2, 8.6, 1.4), 15.85, 8.75, 21.5, 0, 0, chAng);
-  b.geo(m.roof, tiledBox(3.2, 0.2, 5.0, 1.4), 17.7, 9.78, 14.7, 0, 0, chAng);
-  b.geo(m.stoneDark, gable(12.6, 3.5, 0.5), 19, 7, 7.75);
-  b.geo(m.stoneDark, gable(12.6, 3.5, 0.5), 19, 7, 25.25);
-  for (const z of [10.5, 13.5, 16.5, 19.5, 22.5]) b.box(m.wood, 13.5, z - 0.14, 24.5, z + 0.14, 6.7, 6.98, 1);
-  // 朝庭院的山墙与空钟架：从门房出口即可辨认的地标
-  b.geo(m.stoneDark, gable(6.5, 3.4, 0.5), 13.25, 7, 21, HALF_PI);
-  b.box(m.stoneDark, 13, 20.45, 13.5, 20.7, 10.2, 11.7);
-  b.box(m.stoneDark, 13, 21.3, 13.5, 21.55, 10.2, 11.7);
-  b.geo(m.stoneDark, gable(1.5, 0.7, 0.5), 13.25, 11.7, 21, HALF_PI);
-  // 扶壁与压顶
-  for (const z of [9, 12, 18.5, 23.5]) {
-    b.box(m.stoneDark, 12.75, z - 0.35, 13, z + 0.35, 5, 6.6);
-    b.geo(m.stoneDark, new THREE.ConeGeometry(0.42, 0.55, 4), 12.875, 6.85, z, Math.PI / 4);
-  }
-  // 高窗窗花：中梃 + 横棂，把整片玻璃分成尖拱小格
-  for (const z of [9.6, 12.4, 18.6, 23]) {
-    b.box(m.stoneDark, 12.95, z - 0.03, 13.55, z + 0.03, 3.3, 5.7);
-    b.box(m.stoneDark, 12.95, z - 0.45, 13.55, z + 0.45, 4.4, 4.47);
-  }
-  for (const z of [10, 13, 16, 19, 22.8]) {
-    b.box(m.stoneDark, 24.4, z - 0.03, 24.55, z + 0.03, 3.0, 5.4);
-    b.box(m.stoneDark, 24.4, z - 0.45, 24.55, z + 0.45, 4.1, 4.17);
-  }
-  // 正门罩拱（向外挑出的线脚）与侧门罩拱
-  b.geo(m.stoneDark, archHeader(2.2, 2.3, 3.5, 4.2, 0.18), 19, R, 25.62);
-  b.geo(m.stoneDark, archHeader(2.0, 2.3, 3.2, 4.0, 0.16), 13.1, R, 16, HALF_PI);
-  // 钟架山墙的小尖塔与十字顶饰
-  for (const z of [20.45, 21.55]) b.geo(m.stoneDark, new THREE.ConeGeometry(0.16, 0.8, 4), 13.25, 12.1, z, Math.PI / 4);
-  b.box(m.stoneDark, 13.18, 20.95, 13.32, 21.05, 12.4, 13.1);
-  b.box(m.stoneDark, 13.18, 20.78, 13.32, 21.22, 12.85, 12.95);
-
-  // 高窗（朝庭院与室内两面）
-  const lancet = (): THREE.BufferGeometry => scaleUV(archLeaf(0.9, 2.2, 3.0, 0.05), 0.2);
-  for (const z of [9.6, 12.4, 18.6, 23]) {
-    b.geo(windowMat, lancet(), 12.97, 3.3, z, HALF_PI);
-    b.geo(windowMat, lancet(), 13.53, 3.3, z, HALF_PI);
-  }
-  for (const z of [10, 13, 16, 19, 22.8]) b.geo(windowMat, lancet(), 24.47, 3.0, z, HALF_PI);
-  b.geo(windowMat, archLeaf(1.7, 3.0, 4.5, 0.05), 19, 2.0, 8.03);
-  b.geo(windowMat, archLeaf(1.5, 1.6, 2.6, 0.05), 13.2, 7.3, 21, HALF_PI);
   // 门房窗：后墙一扇冷光窗，朝庭院一扇透出炉火
   b.geo(windowMat, archLeaf(0.7, 1.0, 1.5, 0.05), 0.6, 1.5, -7.97);
   b.geo(hearthWindowMat, archLeaf(0.7, 0.9, 1.3, 0.05), -2.0, 1.5, 0.53);
   b.geo(hearthWindowMat, archLeaf(0.7, 0.9, 1.3, 0.05), -2.0, 1.5, -0.03);
-
-  // 外廊披檐
-  b.geo(m.roof, tiledBox(14.6, 0.14, 3.7, 1.2), 17.7, 3.75, 27.2, 0, -0.16, 0);
-  for (const x of [13, 16.5, 20, 23.5]) b.box(m.wood, x - 0.1, 25.5, x + 0.1, 28.5, 3.2, 3.42, 1);
-
-  // 地下封门：砌死的石拱，只作预告
-  b.geo(m.stoneDark, archLeaf(1.7, 1.5, 2.3, 0.12), 11.75, 0, 2.04);
-  b.geo(m.iron, tiledBox(1.9, 0.1, 0.06, 1), 11.75, 1.1, 2.12);
-  b.geo(m.iron, tiledBox(0.1, 2.0, 0.06, 1), 11.75, 1.0, 2.12);
-
-  // 远景：带尖顶的城堡轮廓与山崖，没有可玩入口
-  const far = new Batch();
-  // 西北城堡：主塔 + 尖顶 + 副塔 + 连墙
-  far.box(m.far, -49, 65, -37, 77, -5, 34);
-  far.geo(m.far, new THREE.ConeGeometry(6.2, 13, 6), -43, 40.5, 71);
-  far.box(m.far, -55, 62, -49, 68, -5, 26);
-  far.geo(m.far, new THREE.ConeGeometry(3.4, 8, 6), -52, 30, 65);
-  far.box(m.far, -55, 68, -37, 70, -5, 18);
-  // 东北塔楼
-  far.box(m.far, 38, 70, 48, 80, -5, 26);
-  far.geo(m.far, new THREE.ConeGeometry(5.2, 11, 6), 43, 31.5, 75);
-  far.box(m.far, 48, 72, 54, 78, -5, 16);
-  // 山崖
-  far.box(m.far, -90, 48, -58, 100, -5, 12);
-  far.box(m.far, 55, 40, 95, 105, -5, 9);
-  far.box(m.far, -30, 84, 34, 100, -5, 16);
 
   // —— 地表细节：爬藤（实例化叶片）、苔痕、草丛（实例化）、落叶（实例化）、枯木、瓦砾 ——
   const decal = new Batch();
@@ -490,6 +396,7 @@ export function buildStaticLevel(m: Materials): StaticLevel {
   const grassH: number[] = [];
   const grassEdge: boolean[] = [];
   const pushGrass = (x: number, z: number, edge = false): void => {
+    if (inArea(S1_SHAFT, x, z)) return;
     grassPos.push([x, 0, z]);
     grassH.push(edge ? 0.26 + gr() * 0.22 : 0.16 + gr() * 0.16);
     grassEdge.push(edge);
@@ -666,21 +573,22 @@ export function buildStaticLevel(m: Materials): StaticLevel {
     for (let i = 0; i < 14; i++) leafPos.push([cx + (lr() - 0.5) * 1.6, cz + (lr() - 0.5) * 1.6]); // 墙角堆
   }
   for (let i = 0; i < 26; i++) leafPos.push([-9 + lr() * 18, 1.5 + lr() * 26]);      // 开放地面少量
+  const groundedLeaves = leafPos.filter(([x, z]) => !inArea(S1_SHAFT, x, z));
   const leafGeo = new THREE.PlaneGeometry(1, 1, 3, 3);
   {
     const lp = leafGeo.attributes.position as THREE.BufferAttribute;
     for (let i = 0; i < lp.count; i++) lp.setZ(i, 0.12 * lp.getX(i) * lp.getX(i) + 0.08 * lp.getY(i) * lp.getY(i));
     leafGeo.computeVertexNormals();
   }
-  const leafMesh = new THREE.InstancedMesh(leafGeo, leafMat, leafPos.length);
+  const leafMesh = new THREE.InstancedMesh(leafGeo, leafMat, groundedLeaves.length);
   {
     const mm = new THREE.Matrix4(), qq = new THREE.Quaternion(), ee = new THREE.Euler();
     const lc = [0xa8642a, 0x7a2a1c, 0x5e1a1a, 0x8a4a20, 0x9a3a20].map((h) => new THREE.Color(h));
-    for (let i = 0; i < leafPos.length; i++) {
+    for (let i = 0; i < groundedLeaves.length; i++) {
       const s = 0.16 + lr() * 0.17;
       ee.set(-HALF_PI + (lr() - 0.5) * 0.35, 0, lr() * Math.PI * 2);
       qq.setFromEuler(ee);
-      mm.compose(new THREE.Vector3(leafPos[i][0], 0.02 + lr() * 0.03, -leafPos[i][1]), qq, new THREE.Vector3(s, s, s));
+      mm.compose(new THREE.Vector3(groundedLeaves[i][0], 0.02 + lr() * 0.03, -groundedLeaves[i][1]), qq, new THREE.Vector3(s, s, s));
       leafMesh.setMatrixAt(i, mm);
       leafMesh.setColorAt(i, lc[Math.floor(lr() * lc.length)].clone().multiplyScalar(0.9 + lr() * 0.5));
     }
@@ -692,7 +600,6 @@ export function buildStaticLevel(m: Materials): StaticLevel {
   group.add(buildFurniture(m));
 
   b.build(group, true);
-  far.build(group, false);
   decal.build(group, false);
   // 高窗昼夜驱动：读 scene.userData.night（view.ts 写入）。白天微弱冷天光，夜晚近黑（礼拜堂内无灯）。
   group.traverse((o) => {

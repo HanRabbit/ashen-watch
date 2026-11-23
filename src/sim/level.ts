@@ -9,8 +9,9 @@ export type Region =
   | 'cellar' | 'passage' | 'store'
   | 'walk' | 'bridge' | 'gallery';
 
-export interface Box {
-  x0: number; z0: number; x1: number; z1: number;
+export interface Rect { x0: number; z0: number; x1: number; z1: number }
+
+export interface Box extends Rect {
   /** 顶部高度。 */
   h: number;
   /** 底部高度（缺省 0）。碰撞/视线按实体竖向范围过滤。 */
@@ -199,6 +200,20 @@ export const STAIRS: StairDef[] = [
   },
 ];
 
+// Descending shafts are open all the way through the slab and any ground dressing.
+export const [S1_SHAFT, S2_SHAFT] = [STAIRS[0].runs[0], STAIRS[1].runs[0]];
+
+/** Return the pieces of a rectangle outside a cutout, without degenerate edges. */
+export function cutRect(r: Rect, cut: Rect): Rect[] {
+  const { x0, z0, x1, z1 } = r;
+  const a = Math.max(x0, cut.x0), b = Math.min(x1, cut.x1);
+  const c = Math.max(z0, cut.z0), d = Math.min(z1, cut.z1);
+  if (a >= b || c >= d) return [r];
+  return [{ x0, z0, x1: a, z1 }, { x0: b, z0, x1, z1 },
+    { x0: a, z0, x1: b, z1: c }, { x0: a, z0: d, x1: b, z1 }]
+    .filter((p) => p.x0 < p.x1 && p.z0 < p.z1);
+}
+
 /** 梯体（坡面下方的实体，分级盒近似），阻止从下方走入梯段。 */
 export const STAIR_MASS: Box[] = [];
 for (const s of STAIRS) {
@@ -247,6 +262,7 @@ export const NODES: NavNode[] = [
   N('c_e', 7, 16.5, 0, '1F', 'courtyard'), N('c_arc', 8.6, 16.5, 0, '1F', 'courtyard'),
   N('c_nw', -6, 23, 0, '1F', 'courtyard'), N('c_n', 0, 23, 0, '1F', 'courtyard'),
   N('c_ne', 6.5, 23, 0, '1F', 'courtyard'), N('c_s1top', 4.0, 9.9, 0, '1F', 'courtyard'),
+  N('c_s1south', 3.9, 8, 0, '1F', 'courtyard'),
   N('c_s3bot', 3.4, 1.4, 0, '1F', 'courtyard'),
   N('p_m', 12, 16.5, RAISED_Y, '1F', 'platform'), N('p_d', 12.6, 16.5, RAISED_Y, '1F', 'platform'),
   N('v_d', 14.4, 16.5, RAISED_Y, '1F', 'chapel'), N('v_o', 15.8, 16.5, RAISED_Y, '1F', 'chapel'),
@@ -276,6 +292,7 @@ export const EDGES: NavEdge[] = [
   { a: 'gh_mid', b: 'gh_in' }, { a: 'gh_in', b: 'c_s', door: 'gatehouse' },
   { a: 'c_s', b: 'c_sw' }, { a: 'c_s', b: 'c_se' }, { a: 'c_s', b: 'c_s3bot' },
   { a: 'c_sw', b: 'c_w' },
+  { a: 'c_s1top', b: 'c_s1south' }, { a: 'c_s1south', b: 'c_se' },
 
   { a: 'c_w', b: 'c_wellw' }, { a: 'c_w', b: 'c_nw' },
   { a: 'c_wellw', b: 'c_nw' }, { a: 'c_welle', b: 'c_e' },
