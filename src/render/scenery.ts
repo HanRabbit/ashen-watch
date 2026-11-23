@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import type { Materials } from './materials';
+import { SUBGRADE_GROUND_CUTOUTS } from '../sim/level';
 
 export interface Scenery {
   group: THREE.Group;
@@ -141,10 +141,14 @@ function terrain(): Terrain {
     axis.unshift(-x);
     axis.push(x);
   }
-  const n = axis.length, hills = makeMassifs();
+  // Insert exact shaft and basement edges before triangulating. The visible ground
+  // can't cap the actual floor openings or put a second ceiling in the storeroom.
+  for (const cut of SUBGRADE_GROUND_CUTOUTS) axis.push(cut.x0, cut.x1, -cut.z0, -cut.z1);
+  const grid = [...new Set(axis)].sort((a, b) => a - b);
+  const n = grid.length, hills = makeMassifs();
   const vertices = new Float32Array(n * n * 3), indices: number[] = [];
   for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) {
-    const x = axis[i], z = axis[j], k = j * n + i;
+    const x = grid[i], z = grid[j], k = j * n + i;
     vertices.set([x, geology(x, z, hills), z], 3 * k);
     if (i + 1 < n && j + 1 < n) indices.push(k, k + n, k + 1, k + 1, k + n, k + n + 1);
   }
@@ -178,13 +182,13 @@ function terrain(): Terrain {
   g.setAttribute('aBiome', new THREE.BufferAttribute(biomes, 2));
   const cell = (v: number) => {
     let a = 0, b = n - 1;
-    while (b - a > 1) { const m = (a + b) >> 1; if (axis[m] > v) b = m; else a = m; }
+    while (b - a > 1) { const m = (a + b) >> 1; if (grid[m] > v) b = m; else a = m; }
     return a;
   };
   const height = (x: number, z: number) => {
     const i = cell(x), j = cell(z), k = (j * n + i) * 3 + 1;
-    const u = clamp01((x - axis[i]) / (axis[i + 1] - axis[i]));
-    const v = clamp01((z - axis[j]) / (axis[j + 1] - axis[j]));
+    const u = clamp01((x - grid[i]) / (grid[i + 1] - grid[i]));
+    const v = clamp01((z - grid[j]) / (grid[j + 1] - grid[j]));
     const a = vertices[k], b = vertices[k + 3], c = vertices[k + n * 3], d = vertices[k + (n + 1) * 3];
     // Same diagonal as the render mesh, including where grid spacing changes.
     return u + v < 1 ? a * (1 - u - v) + b * u + c * v : d * (u + v - 1) + b * (1 - v) + c * (1 - u);
@@ -206,6 +210,9 @@ function terrain(): Terrain {
     }
     const tris: number[] = [];
     for (let row = 0; row < depth - 1; row++) for (let col = 0; col < width - 1; col++) {
+      const xi = minX + col, zi = minZ + row;
+      const x = (grid[xi] + grid[xi + 1]) * 0.5, z = -(grid[zi] + grid[zi + 1]) * 0.5;
+      if (SUBGRADE_GROUND_CUTOUTS.some((cut) => x > cut.x0 && x < cut.x1 && z > cut.z0 && z < cut.z1)) continue;
       const k = row * width + col;
       tris.push(k, k + width, k + 1, k + 1, k + width, k + width + 1);
     }
@@ -594,7 +601,7 @@ function architecture(group: THREE.Group, ground: Terrain, paints: ReturnType<ty
   }
 }
 
-export function buildScenery(_materials: Materials): Scenery {
+export function buildScenery(): Scenery {
   const group = new THREE.Group();
   group.name = 'scenery';
   const ground = terrain(), paints = palette();

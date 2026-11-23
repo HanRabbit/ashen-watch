@@ -27,3 +27,14 @@ describe('over-shoulder camera', () => {
     }
   });
 });
+
+describe('2F rampart camera', () => {
+  it('retracts inside the parapet instead of shooting over the merlons at the player', () => {
+    const camera = new PerspectiveCamera(55, 16 / 9, 0.08, 610);
+    const rig = new CameraRig(camera);
+    const w = newWorld();
+    Object.assign(w.player, { x: 9.2, y: 4, z: 11.83, floor: '2F' });
+    for (let i = 0; i < 60; i++) rig.update(w, w.player, -Math.PI / 3, 0.05, 1 / 60);
+    expect(camera.position.x).toBeLessThan(10);
+  });
+});

@@ -17,12 +17,15 @@ process.env.TEMP = process.env.TMP = process.env.TMPDIR = TMP;
 export async function launch({ channel = 'chrome', headless = false, width = Number(process.env.AW_W) || 1920, height = Number(process.env.AW_H) || 1080 } = {}) {
   // channel 写 chromium 时用 Playwright 自带的浏览器（没有装 Chrome / Edge 的环境，如 CI 容器），并用软件渲染提供 WebGL
   const bundled = channel === 'chromium';
+  const angle = process.env.AW_ANGLE ?? (bundled ? 'swiftshader' : '');
   const browser = await chromium.launch({
-    channel: bundled ? undefined : channel, headless,
+    channel: bundled && angle === 'swiftshader' ? undefined : channel, headless,
     args: [`--window-size=${width},${height + 90}`, '--autoplay-policy=no-user-gesture-required', '--disable-features=CalculateNativeWinOcclusion',
-      ...(bundled ? ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'] : [])],
+      ...(angle ? ['--use-gl=angle', `--use-angle=${angle}`, '--ignore-gpu-blocklist'] : []),
+      ...(angle === 'swiftshader' ? ['--enable-unsafe-swiftshader'] : [])],
   });
-  const context = await browser.newContext({ viewport: { width, height }, deviceScaleFactor: 1 });
+  const recordVideo = process.env.AW_VIDEO === '1' ? { dir: OUT, size: { width, height } } : undefined;
+  const context = await browser.newContext({ viewport: { width, height }, deviceScaleFactor: 1, recordVideo });
   // 游戏捕获鼠标时会请求原始输入（unadjustedMovement）。自动化浏览器一旦拿到原始输入，
   // 就会收到这台电脑上真实鼠标的移动，把机器人的转向搅乱。这里去掉该选项，只留脚本发出的事件。
   await context.addInitScript(() => {

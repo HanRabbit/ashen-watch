@@ -508,7 +508,10 @@ export function buildStaticLevel(m: Materials): StaticLevel {
   const branch = (x: number, y: number, z: number, len: number, ang: number, tilt: number, depth: number): void => {
     const geo = new THREE.CylinderGeometry(0.03 * depth + 0.02, 0.05 * depth + 0.03, len, 5);
     const dx = Math.sin(ang) * Math.sin(tilt), dy = Math.cos(tilt), dz = Math.cos(ang) * Math.sin(tilt);
-    decal.geo(bark, geo, x + dx * len / 2, y + dy * len / 2, z + dz * len / 2, ang, tilt, 0);
+    // Local +Y follows precisely the same axis as the recursive tip, in render space.
+    // Passing simulation yaw/tilt to Batch.geo mirrors the tip and leaves branches floating.
+    geo.applyQuaternion(new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), new THREE.Vector3(dx, dy, -dz)));
+    decal.geo(bark, geo, x + dx * len / 2, y + dy * len / 2, z + dz * len / 2);
     if (depth <= 0) return;
     const ex = x + dx * len, ey = y + dy * len, ez = z + dz * len;
     branch(ex, ey, ez, len * 0.68, ang + 0.5, tilt + 0.35, depth - 1);

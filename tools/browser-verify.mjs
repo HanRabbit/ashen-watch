@@ -331,7 +331,7 @@ async function setInitialQuality(page, quality) {
 /** Play the whole height loop with mouse/key input. No stage changes or fixed cameras. */
 async function routeScenario() {
   const rep = new Report('route');
-  const { browser, page, errors } = await launch({ channel, headless });
+  const { browser, context, page, errors } = await launch({ channel, headless });
   const viewport = page.viewportSize();
   const quality = process.env.AW_ROUTE_QUALITY ?? (headless ? 'high' : 'cinematic');
   rep.data.viewport = viewport;
@@ -351,8 +351,10 @@ async function routeScenario() {
   };
   try {
     await setInitialQuality(page, quality);
-    await page.goto(`${BASE}?preset=dev&dayscale=1`);
+    await page.goto(`${BASE}?preset=dev&dayscale=1`, { waitUntil: 'domcontentloaded' });
     await ready(page);
+    await page.evaluate(() => window.__awTexReady);
+    rep.data.gpu = await page.evaluate(() => window.__awProbe.gpu());
     await page.evaluate(() => { document.getElementById('debug').hidden = true; });
     await startNewGame(bot);
     await doTutorial(bot);
@@ -392,6 +394,10 @@ async function routeScenario() {
     rep.data.stateAtError = await liteOf(page).then(({world, yaw, screen}) => ({ player: world.player, doors: world.doors, yaw, screen })).catch(() => null);
     await shot(page, 'route-error.png').catch(() => {});
   } finally {
+    if (process.env.AW_VIDEO === '1') {
+      await context.close().catch(() => {});
+      rep.data.video = await page.video()?.path().catch(() => null);
+    }
     rep.save(errors);
     await browser.close();
   }

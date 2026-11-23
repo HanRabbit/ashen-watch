@@ -5,6 +5,9 @@ import { Box, COLUMNS, Cylinder, DOORS, DoorId, PROPS, SLABS, STAIR_MASS, WALLS,
 export type DoorOpen = Record<DoorId, boolean>;
 
 const DOOR_IDS = Object.keys(DOORS) as DoorId[];
+// Camera clearance includes decorative merlons (0.5 m) and a margin for the
+// foreground silhouette. Keep this separate from the walk and sight blockers.
+const CAMERA_WALLS = WALLS.map((b) => b.tag === 'parapet' ? { ...b, h: b.h + 0.85 } : b);
 
 /** 实体竖向占用范围 [y+0.1, y+1.7] 与盒 [y0, h] 是否重叠。 */
 function overlapsY(b: Box, y: number): boolean {
@@ -205,7 +208,7 @@ export function cameraClearT(
     if (t === Infinity || t >= best) return;
     best = t;
   };
-  for (const b of WALLS) test(b);
+  for (const b of CAMERA_WALLS) test(b);
   for (const b of PROPS) if (b.h > 1.2) test(b);
   for (const b of STAIR_MASS) test(b);
   for (const b of SLABS) test(b);
