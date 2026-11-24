@@ -2,11 +2,15 @@ import * as THREE from 'three';
 import { AREAS } from '../sim/level';
 import { GATEHOUSE_LIGHTS } from './gatehouseWindows';
 import { GATEHOUSE_APERTURES } from './probeLighting';
+import { retainKeyVSMDepth } from './keyShadowDepth';
 
 const PANE_NAMES = ['Hearth window quarries', 'Gatehouse rear quarries'] as const;
 const REACH = 4.35;
 const SEAT_HALF_DEPTH = 0.027;
 const MIN_INCIDENCE = 0.24;
+// One-sided edge coverage in pane-space metres, never beyond the pierced geometry.
+const FLAT_REVEAL_FEATHER = 0.018;
+const FLAT_TRACERY_FEATHER = 0.006;
 const room = AREAS.gatehouse;
 
 interface Arch {
@@ -107,56 +111,77 @@ float awGlassShadowVisibility(vec4 coord, float bias) {
 
 struct AwGlassArch { vec2 origin; vec3 shape; };
 
-bool awGlassInArch(vec2 xy, AwGlassArch arch, float segments) {
+float awGlassArchClearance(vec2 xy, AwGlassArch arch, float segments, float guard) {
   vec2 p = xy - arch.origin;
   float side = abs(p.x) / arch.shape.x;
-  if (side >= 1.0 || p.y <= 0.0 || p.y >= arch.shape.z) return false;
-  if (p.y < arch.shape.y) return true;
+  float edge = min(arch.shape.x - abs(p.x), p.y);
+  if (edge <= 0.0 || p.y >= arch.shape.z) return 0.0;
+  if (p.y < arch.shape.y - guard) return edge;
   // Invert x(t) of archPath and interpolate the same polygon edges as ShapeGeometry.
   float t = floor(sqrt(1.0 - side) * segments) / segments;
   float next = t + 1.0 / segments;
   float along = (1.0-side - t*t) / (next*next - t*t);
   float chord = mix(t*(1.44 - 0.44*t), next*(1.44 - 0.44*next), along);
-  return p.y < mix(arch.shape.y, arch.shape.z, chord);
+  return min(edge, mix(arch.shape.y, arch.shape.z, chord) - p.y);
 }
 
-bool awGlassClearCames(vec2 xy, vec2 slope, AwGlassArch seat, vec4 quarry) {
+bool awGlassInArch(vec2 xy, AwGlassArch arch, float segments) {
+  return awGlassArchClearance(xy, arch, segments, 0.0) > 0.0;
+}
+
+float awGlassCameClearance(vec2 xy, vec2 slope, AwGlassArch seat, vec4 quarry) {
   vec2 scale = vec2(0.5 / seat.shape.x, 1.0 / seat.shape.z);
   vec2 uv = (xy - seat.origin) * scale + vec2(0.5, 0.0);
   vec2 divider = vec2(uv.x - uv.y*quarry.y, uv.x + uv.y*quarry.y);
   vec2 distanceToCame = abs(fract(divider*quarry.x - quarry.zw + 0.5) - 0.5) / quarry.x;
-  float radius = 0.0035 * length(scale * vec2(1.0, quarry.y));
+  float gradient = length(scale * vec2(1.0, quarry.y));
   vec2 uvSlope = slope * scale;
-  return all(greaterThan(distanceToCame,
-    radius + 0.006*abs(vec2(uvSlope.x - uvSlope.y*quarry.y, uvSlope.x + uvSlope.y*quarry.y))));
+  vec2 gap = distanceToCame - 0.006*abs(vec2(uvSlope.x - uvSlope.y*quarry.y, uvSlope.x + uvSlope.y*quarry.y));
+  return min(gap.x, gap.y) / gradient - 0.0035;
+}
+
+bool awGlassClearCames(vec2 xy, vec2 slope, AwGlassArch seat, vec4 quarry) {
+  return awGlassCameClearance(xy, slope, seat, quarry) > 0.0;
+}
+
+float awGlassBarClearance(vec2 xy, vec2 slope, AwGlassArch seat, vec2 bars) {
+  float height = xy.y + slope.y * 0.021 - seat.origin.y;
+  vec2 gap = abs(vec2(height) - bars);
+  return min(gap.x, gap.y) - (0.008 + 0.006*abs(slope.y));
 }
 
 bool awGlassClearBars(vec2 xy, vec2 slope, AwGlassArch seat, vec2 bars) {
-  float height = xy.y + slope.y * 0.021 - seat.origin.y;
-  return all(greaterThan(abs(vec2(height) - bars), vec2(0.008 + 0.006*abs(slope.y))));
+  return awGlassBarClearance(xy, slope, seat, bars) > 0.0;
 }
 
-bool awGlassOpenReveal(vec2 xy, vec2 slope, AwGlassArch seat, AwGlassArch outside,
-    AwGlassArch inside, vec4 planes, float segments) {
-  return awGlassInArch(xy, seat, segments) &&
-    awGlassInArch(xy + planes.z*slope, outside, segments) &&
-    awGlassInArch(xy + planes.w*slope, inside, segments) &&
-    awGlassInArch(xy - ${glFloat(SEAT_HALF_DEPTH)}*slope, seat, segments) &&
-    awGlassInArch(xy + ${glFloat(SEAT_HALF_DEPTH)}*slope, seat, segments);
+float awGlassRevealClearance(vec2 xy, vec2 slope, AwGlassArch seat, AwGlassArch outside,
+    AwGlassArch inside, vec4 planes, float segments, float guard) {
+  float edge = awGlassArchClearance(xy, seat, segments, guard);
+  if (edge <= 0.0) return 0.0;
+  edge = min(edge, awGlassArchClearance(xy + planes.z*slope, outside, segments, guard));
+  if (edge <= 0.0) return 0.0;
+  edge = min(edge, awGlassArchClearance(xy + planes.w*slope, inside, segments, guard));
+  if (edge <= 0.0) return 0.0;
+  edge = min(edge, awGlassArchClearance(xy - ${glFloat(SEAT_HALF_DEPTH)}*slope, seat, segments, guard));
+  if (edge <= 0.0) return 0.0;
+  return min(edge, awGlassArchClearance(xy + ${glFloat(SEAT_HALF_DEPTH)}*slope, seat, segments, guard));
 }
 
 // Exact straight-through transport for the existing key. The coarse sky
 // aperture extrudes the narrow seat all the way to both mouths, so it can
 // extinguish an oblique ray that actually fits through the splayed reveals.
-bool awGlassFlatPath(vec3 point, vec3 towardKey, AwGlassArch seat, AwGlassArch outside,
+float awGlassFlatPath(vec3 point, vec3 towardKey, AwGlassArch seat, AwGlassArch outside,
     AwGlassArch inside, vec4 planes, vec4 quarry, vec2 bars, float segments) {
   float depth = (point.z-planes.x)*planes.y;
   float incidence = -towardKey.z*planes.y;
-  if (depth < planes.w + 0.002 || incidence < ${glFloat(MIN_INCIDENCE)}) return false;
+  if (depth < planes.w + 0.002 || incidence < ${glFloat(MIN_INCIDENCE)}) return 0.0;
   vec2 slope = -towardKey.xy / incidence;
   vec2 xy = point.xy - depth*slope;
-  return awGlassOpenReveal(xy, slope, seat, outside, inside, planes, segments) &&
-    awGlassClearCames(xy, slope, seat, quarry) && awGlassClearBars(xy, slope, seat, bars);
+  const float revealFeather = ${glFloat(FLAT_REVEAL_FEATHER)};
+  float reveal = awGlassRevealClearance(xy, slope, seat, outside, inside, planes, segments, revealFeather);
+  if (reveal <= 0.0) return 0.0;
+  float tracery = min(awGlassCameClearance(xy, slope, seat, quarry), awGlassBarClearance(xy, slope, seat, bars));
+  return smoothstep(0.0, revealFeather, reveal) * smoothstep(0.0, ${glFloat(FLAT_TRACERY_FEATHER)}, tracery);
 }
 
 vec2 awGlassSlope(sampler2D waves, vec2 uv, vec2 normalScale, float ior, vec3 inGlass) {
@@ -174,7 +199,7 @@ float awGlassGather(vec3 point, vec3 towardKey, AwGlassArch seat, AwGlassArch ou
   vec3 incoming = vec3(-towardKey.xy, incidence);
   vec2 flatSlope = incoming.xy / incidence;
   vec2 centre = point.xy - depth*flatSlope;
-  if (!awGlassOpenReveal(centre, flatSlope, seat, outside, inside, planes, segments)) return 0.0;
+  if (awGlassRevealClearance(centre, flatSlope, seat, outside, inside, planes, segments, 0.0) <= 0.0) return 0.0;
 
   // A plane entry face and a locally tilted exit face model a weak prism.
   // Work in the actual quarry UVs. A local Jacobian predicts how a source
@@ -234,7 +259,7 @@ bool awGlassInRoom(vec3 point) {
          point.z >= ${glFloat(-room.z1)} && point.z <= ${glFloat(-room.z0-0.06)} && point.y >= 0.0 && point.y <= 3.5;
 }
 float awGlassFlatTransmission(vec3 point, vec3 towardKey) {
-  ${cases((args, p) => `return awGlassFlatPath(${args}, ${glFloat(p.segments)}) ? ${glFloat(p.transmission)} : 0.0;`)}
+  ${cases((args, p) => `return ${glFloat(p.transmission)} * awGlassFlatPath(${args}, ${glFloat(p.segments)});`)}
   return 0.0;
 }
 float awGlassReceiver(vec3 point, vec3 towardKey, float shadowBias) {
@@ -312,58 +337,6 @@ function excludeKeyShadow(pane: THREE.Mesh, key: THREE.DirectionalLight): () => 
   };
 }
 
-/** Three r187 writes horizontal VSM moments back into the depth-bearing
- * source target. Preserve the geometric depth attachment during that one
- * clear and fullscreen draw; the RG moments and other shadows are unchanged. */
-function preserveKeyVSMDepth(renderer: THREE.WebGLRenderer, key: THREE.DirectionalLight) {
-  const shadowMap = renderer.shadowMap;
-  const render = shadowMap.render;
-  let preserved: THREE.DepthTexture | null = null;
-  const wrapped: typeof render = function (this: typeof shadowMap, ...args) {
-    if (this.type !== THREE.VSMShadowMap) return render.apply(this, args);
-    const clear = renderer.clear, draw = renderer.renderBufferDirect;
-    let verticalDone = false;
-    renderer.clear = function (color = true, depth = true, stencil = true) {
-      const isKeyTarget = key.shadow.map !== null && renderer.getRenderTarget() === key.shadow.map;
-      if (isKeyTarget && !verticalDone) preserved = null;
-      clear.call(this, color, depth && !(isKeyTarget && verticalDone), stencil);
-    };
-    renderer.renderBufferDirect = function (...drawArgs) {
-      const material = drawArgs[3] as THREE.ShaderMaterial;
-      const { map, mapPass } = key.shadow;
-      const target = renderer.getRenderTarget();
-      if (!material.isShaderMaterial || material.defines.VSM_SAMPLES === undefined ||
-          !map?.depthTexture || !mapPass) return draw.apply(this, drawArgs);
-      const input = material.uniforms.shadow_pass?.value;
-      if (target === mapPass && input === map.depthTexture && !material.defines.HORIZONTAL_PASS) {
-        draw.apply(this, drawArgs);
-        verticalDone = true;
-      } else if (verticalDone && target === map && input === mapPass.texture && material.defines.HORIZONTAL_PASS) {
-        const { depthTest, depthWrite } = material;
-        material.depthTest = material.depthWrite = false;
-        try {
-          draw.apply(this, drawArgs);
-          preserved = map.depthTexture;
-        } finally {
-          material.depthTest = depthTest;
-          material.depthWrite = depthWrite;
-          verticalDone = false;
-        }
-      } else draw.apply(this, drawArgs);
-    };
-    try { render.apply(this, args); }
-    finally {
-      renderer.clear = clear;
-      renderer.renderBufferDirect = draw;
-    }
-  };
-  shadowMap.render = wrapped;
-  return {
-    hasDepth: (depth: THREE.DepthTexture) => depth === preserved,
-    dispose() { if (shadowMap.render === wrapped) shadowMap.render = render; },
-  };
-}
-
 export interface GlassCaustics {
   enabled: boolean;
   /** Fraction of the live directional key still in a coherent beam (0–1). */
@@ -397,7 +370,7 @@ export function installGlassCaustics(scene: THREE.Scene, level: THREE.Object3D, 
   const receiver = receiverGLSL(portals);
   const portalKey = portals.map(({ z, seat }) => [z, seat.x, seat.y, seat.peak]).flat().join(',');
   const patched = new Map<THREE.Material, THREE.Material>();
-  const depthHooks = new Map<THREE.WebGLRenderer, ReturnType<typeof preserveKeyVSMDepth>>();
+  const depthHooks = new Map<THREE.WebGLRenderer, ReturnType<typeof retainKeyVSMDepth>>();
   const bindings: { mesh: THREE.Mesh; original: THREE.Material | THREE.Material[]; bound: THREE.Material | THREE.Material[] }[] = [];
   function bind(original: THREE.Material): THREE.Material {
     if (!(original instanceof THREE.MeshStandardMaterial) || original.transparent) return original;
@@ -420,7 +393,7 @@ export function installGlassCaustics(scene: THREE.Scene, level: THREE.Object3D, 
       const depth = key.shadow.map?.depthTexture;
       const vsm = renderer.shadowMap.type === THREE.VSMShadowMap;
       uniforms.uAwGlassShadowReady.value = !!depth && (vsm
-        ? depth.compareFunction === null && depthHooks.get(renderer)?.hasDepth(depth) === true
+        ? depth.compareFunction === null && depthHooks.get(renderer)?.getDepth() === depth
         : depth.compareFunction !== null);
       uniforms.uAwGlassDepth.value = uniforms.uAwGlassShadowReady.value ? depth : null;
     };
@@ -467,7 +440,7 @@ export function installGlassCaustics(scene: THREE.Scene, level: THREE.Object3D, 
     beforeRender.apply(this, args);
     const [renderer, , camera] = args;
     if (renderer.shadowMap.type === THREE.VSMShadowMap && typeof renderer.shadowMap.render === 'function' && !depthHooks.has(renderer)) {
-      depthHooks.set(renderer, preserveKeyVSMDepth(renderer, key));
+      depthHooks.set(renderer, retainKeyVSMDepth(renderer, key));
     }
     uniforms.uAwGlassKey.value = -1;
     uniforms.uAwGlassBeam.value = 0;

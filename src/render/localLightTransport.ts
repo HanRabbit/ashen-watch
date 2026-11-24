@@ -1,5 +1,6 @@
 import * as THREE from 'three';
-import { B1_FOUNDATION_BACKING, DOORS, PROPS, SLABS, WALLS, type Box } from '../sim/level';
+import { B1_FOUNDATION_BACKING, cutRect, DOORS, PROPS, S1_SHAFT, SLABS, WALLS, type Box, type Rect } from '../sim/level';
+import { MAIN_COURT } from '../sim/courtPlan';
 import { GATEHOUSE_LIGHTS, windowWallPieces } from './gatehouseWindows';
 
 const rayBias = 0.035; // metres, both ends, so a receiving surface does not shadow itself
@@ -31,7 +32,27 @@ function buildBlockers(): Bounds[] {
     if (!wall.los || wall.tag === 'rail' || wall.tag === 'northIron') continue;
     for (const piece of windowWallPieces({ ...wall, y0: wall.y0 ?? 0 })) boxes.push(worldBounds(piece));
   }
-  boxes.push(...SLABS.map(worldBounds));
+  // Gameplay uses a level walking plane; the rendered main court has exposed
+  // clay, wheel ruts and stone shoulders up to ~4.3 cm BELOW that plane.
+  // A proxy capped at zero put their receivers inside a solid: a moving lamp
+  // lit each crown and cut to black along its polygon. Model the opaque core,
+  // not the collision surface. All other floors retain their surveyed heights.
+  const coreTop = -0.048;
+  for (const slab of SLABS) {
+    const main = slab.y0 === -0.3 && slab.h === 0 && slab.x0 >= MAIN_COURT.x0 && slab.x1 <= MAIN_COURT.x1
+      && slab.z0 >= MAIN_COURT.z0 && slab.z1 <= MAIN_COURT.z1;
+    boxes.push(worldBounds(main ? { ...slab, h: coreTop } : slab));
+  }
+  // Keep the actual vertical faces reaching grade on both the outer slab
+  // edge and the S1 cutout. No ring intrudes into the aperture, no general
+  // ray bias is increased, and the continuous 25 cm core still seals B1.
+  function inset(r: Rect, d: number): Rect {
+    return { x0: r.x0 + d, x1: r.x1 - d, z0: r.z0 + d, z1: r.z1 - d };
+  }
+  const edge = 0.008;
+  for (const band of [...cutRect(MAIN_COURT, inset(MAIN_COURT, edge)), ...cutRect(inset(S1_SHAFT, -edge), S1_SHAFT)]) {
+    boxes.push(worldBounds({ ...band, y0: coreTop, h: 0 }));
+  }
   add(-3.5, 3.5, -8.5, 0, -0.30, 0.005); // gatehouse floor
 
   // Aperture heads match the section of the rendered pointed arches. Inscribed

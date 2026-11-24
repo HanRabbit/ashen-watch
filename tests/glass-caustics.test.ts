@@ -153,7 +153,26 @@ it('composes with live sky exposure before the stock key shadow, without tying t
     expect(keyPath).toContain('awRoom == AW_GATEHOUSE');
     expect(keyPath).toContain('awGlassShadowVisibility(vDirectionalShadowCoord[ i ], uAwGlassShadowBias) > 0.0');
     expect(keyPath).not.toContain('uAwGlassBeam');
-    expect(src).toContain(`? ${GATEHOUSE_APERTURES[1].transmission.toFixed(6)} : 0.0`);
+    expect(src).toContain(`return ${GATEHOUSE_APERTURES[1].transmission.toFixed(6)} * awGlassFlatPath(`);
+  } finally {
+    controller.dispose();
+  }
+});
+
+it('feathers only the admitted side of the restored straight-through beam', () => {
+  const { scene, level, key, receiver } = fixture();
+  const controller = installGlassCaustics(scene, level, key);
+  try {
+    const { fragmentShader: src } = compile(receiver.material as THREE.Material);
+    const reveal = src.split('float awGlassRevealClearance(')[1].split('// Exact straight-through')[0];
+    const flat = src.split('float awGlassFlatPath(')[1].split('vec2 awGlassSlope')[0];
+    const refracted = src.split('float awGlassGather(')[1].split('#endif')[0];
+    expect(reveal.match(/awGlassArchClearance\(/g)).toHaveLength(5); // both mouths and all seat slices
+    expect(flat).toContain('if (reveal <= 0.0) return 0.0;');
+    expect(flat).toContain('min(awGlassCameClearance(xy, slope, seat, quarry), awGlassBarClearance(xy, slope, seat, bars))');
+    expect(flat).toContain('const float revealFeather = 0.018000;');
+    expect(flat).toContain('smoothstep(0.0, revealFeather, reveal) * smoothstep(0.0, 0.006000, tracery)');
+    expect(refracted).toContain('planes, segments, 0.0) <= 0.0'); // no change to bent-path masks
   } finally {
     controller.dispose();
   }

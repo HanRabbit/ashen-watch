@@ -12,7 +12,8 @@ import { applySky, makeSkyMaterial, SkyState } from './sky';
 import { FogController, installHeightFog } from './post/fog';
 import { DAMP_FALLOFF, WEATHER_BASE, WEATHER_REACH } from './post/airVolume';
 import { PostPipeline } from './post/pipeline';
-import { installSoftShadows } from './post/shadows';
+import { applySkyKey, configureSkyKeyShadowMap, makeSkyKey } from './skyKey';
+import { installSkyKeyDiskShadow } from './skyKeyDiskShadow';
 import { installSpecularCap } from './post/specular';
 import { buildLandmarks, hideLegacy } from './landmarks';
 import { buildScenery } from './scenery';
@@ -24,7 +25,6 @@ import { stageSkyExposureSources } from './skyExposureSources';
 import { installGlassCaustics, type GlassCaustics } from './glassCaustics';
 
 installHeightFog();
-installSoftShadows();
 installSpecularCap();
 installSkyExposure();
 
@@ -35,7 +35,7 @@ interface Rig extends SkyState {
   fogDistMax: number; groundMist: number; freeHaze: number;
   mistColor: number; hazeColor: number; airForward: number;
   hemiSky: number; hemiGround: number; hemi: number;
-  sunI: number; shadowRadius: number; scatter: number;
+  sunI: number; keyPcfMetres: number; keyDiskTan: number; scatter: number;
   exposure: number; window: number;
   envI: number; bloom: number; vignette: number; grain: number; sat: number; contrast: number;
   tintS: number; tintH: number; glowStrength: number;
@@ -45,7 +45,7 @@ const RIGS: Record<'morning' | 'day' | 'dusk' | 'night', Rig> = {
   morning: {
     fog: 0x939ba3, fogNear: WEATHER_REACH, fogFar: 140, fogDistMax: 0.56, groundMist: 0.028, freeHaze: 0.0094, mistColor: 0x6a7882, hazeColor: 0x939da6, airForward: 0.24,
     hemiSky: 0xcdd5db, hemiGround: 0x736d64, hemi: 1.65,
-    sun: 0xffe2c0, sunI: 0.88, shadowRadius: 5.5, scatter: 0.35, sunDir: [-0.75, 0.5, -0.35], exposure: 1.0, window: 0.9,
+    sun: 0xffe2c0, sunI: 0.88, keyPcfMetres: 0.075, keyDiskTan: 0.030, scatter: 0.35, sunDir: [-0.75, 0.5, -0.35], exposure: 1.0, window: 0.9,
     zenith: 0xa8b4c0, horizon: 0xd6dce1, ground: 0x4a4640,
     cloudLit: 0xc8d2da, cloudDark: 0x6a7480, cover: 0.75, rim: 0.22,
     discSize: 0.0, discI: 0, glow: 0.2, stars: 0,
@@ -55,7 +55,7 @@ const RIGS: Record<'morning' | 'day' | 'dusk' | 'night', Rig> = {
     // 阴天：雾色比天空 horizon 略暗，远景被分层吞没但留轮廓（圣经 §4.7/§6 Distant）
     fog: 0x818e9c, fogNear: WEATHER_REACH, fogFar: 142, fogDistMax: 0.57, groundMist: 0.0275, freeHaze: 0.0092, mistColor: 0x5b666f, hazeColor: 0x8996a2, airForward: 0.27,
     hemiSky: 0xc8d2da, hemiGround: 0x7e7972, hemi: 2.34,
-    sun: 0xe4ebef, sunI: 0.72, shadowRadius: 5.5, scatter: 0.32, sunDir: [-0.58, 0.68, -0.42], exposure: 1.0, window: 1.0,
+    sun: 0xe4ebef, sunI: 0.72, keyPcfMetres: 0.075, keyDiskTan: 0.031, scatter: 0.32, sunDir: [-0.58, 0.68, -0.42], exposure: 1.0, window: 1.0,
     zenith: 0xb1bdc8, horizon: 0xcbd2da, ground: 0x504c46,
     cloudLit: 0xcbd3dc, cloudDark: 0x7e8a98, cover: 0.85, rim: 0.15,
     discSize: 0.0, discI: 0, glow: 0.25, stars: 0,
@@ -64,7 +64,7 @@ const RIGS: Record<'morning' | 'day' | 'dusk' | 'night', Rig> = {
   dusk: {
     fog: 0x54505c, fogNear: WEATHER_REACH, fogFar: 120, fogDistMax: 0.62, groundMist: 0.027, freeHaze: 0.0086, mistColor: 0x484c5a, hazeColor: 0x626a78, airForward: 0.34,
     hemiSky: 0x8a92a6, hemiGround: 0x3b332d, hemi: 1.1,
-    sun: 0xe09a62, sunI: 1.6, shadowRadius: 3.5, scatter: 0.46, sunDir: [0.8, 0.2, 0.3], exposure: 1.0, window: 0.45,
+    sun: 0xe09a62, sunI: 1.6, keyPcfMetres: 0.06, keyDiskTan: 0.016, scatter: 0.46, sunDir: [0.8, 0.2, 0.3], exposure: 1.0, window: 0.45,
     zenith: 0x39445a, horizon: 0x9a7260, ground: 0x332c28,
     cloudLit: 0xb08a78, cloudDark: 0x4a4452, cover: 0.7, rim: 0.5,
     discSize: 0.035, discI: 2.6, glow: 0.7, stars: 0.18,
@@ -74,7 +74,7 @@ const RIGS: Record<'morning' | 'day' | 'dusk' | 'night', Rig> = {
     // 月光从画面右上方来（与天空月盘同向），冷蓝 #7f9ccf；暗部保留约 20–30% 可读亮度。
     fog: 0x202d40, fogNear: WEATHER_REACH, fogFar: 110, fogDistMax: 0.68, groundMist: 0.025, freeHaze: 0.0078, mistColor: 0x202b39, hazeColor: 0x324359, airForward: 0.52,
     hemiSky: 0x7d90b4, hemiGround: 0x3c414b, hemi: 2.45,
-    sun: 0x7f9ccf, sunI: 1.20, shadowRadius: 3.4, scatter: 0.69, sunDir: [0.72, 0.42, -0.35], exposure: 1.15, window: 0.07,
+    sun: 0x7f9ccf, sunI: 1.20, keyPcfMetres: 0.055, keyDiskTan: 0.011, scatter: 0.69, sunDir: [0.72, 0.42, -0.35], exposure: 1.15, window: 0.07,
     zenith: 0x111b29, horizon: 0x202f44, ground: 0x0a0e15,
     cloudLit: 0x657791, cloudDark: 0x162133, cover: 0.84, rim: 0.60,
     discSize: 0.017, discI: 4.2, glow: 0.34, stars: 1,
@@ -83,7 +83,7 @@ const RIGS: Record<'morning' | 'day' | 'dusk' | 'night', Rig> = {
 };
 
 const COLOR_KEYS = ['fog', 'mistColor', 'hazeColor', 'hemiSky', 'hemiGround', 'sun', 'zenith', 'horizon', 'ground', 'cloudLit', 'cloudDark', 'tintS', 'tintH'] as const;
-const NUM_KEYS = ['fogNear', 'fogFar', 'fogDistMax', 'groundMist', 'freeHaze', 'airForward', 'hemi', 'sunI', 'shadowRadius', 'scatter', 'exposure', 'window', 'discSize', 'discI', 'glow', 'stars', 'cover', 'rim', 'envI', 'bloom', 'vignette', 'grain', 'sat', 'contrast', 'glowStrength'] as const;
+const NUM_KEYS = ['fogNear', 'fogFar', 'fogDistMax', 'groundMist', 'freeHaze', 'airForward', 'hemi', 'sunI', 'keyPcfMetres', 'keyDiskTan', 'scatter', 'exposure', 'window', 'discSize', 'discI', 'glow', 'stars', 'cover', 'rim', 'envI', 'bloom', 'vignette', 'grain', 'sat', 'contrast', 'glowStrength'] as const;
 
 
 export interface RenderPose { x: number; z: number; y?: number; ghosts: { x: number; z: number; y?: number }[] } // map:
@@ -98,7 +98,7 @@ export class SceneView {
   quality: Quality = 'cinematic';
   private level: StaticLevel;
   private hemi = new THREE.HemisphereLight(0xffffff, 0x444444, 1);
-  private sun = new THREE.DirectionalLight(0xffffff, 1);
+  private sun = makeSkyKey();
   private fog = new THREE.Fog(0x888888, 20, 120);
   private fogCtl: FogController;
   private skyMat = makeSkyMaterial();
@@ -126,7 +126,8 @@ export class SceneView {
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
     this.renderer.setPixelRatio(window.devicePixelRatio); // 默认 cinematic：满像素比
     this.renderer.shadowMap.enabled = true;
-    this.renderer.shadowMap.type = THREE.VSMShadowMap; // PCSS-like 可变半影（post/shadows.ts）
+    configureSkyKeyShadowMap(this.renderer.shadowMap, this.sun, this.quality);
+    applySkyKey(this.sun, this.renderer.shadowMap.type, this.rig);
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     // 后期含多个渲染 pass：关闭自动重置，在每帧开头手动重置，探针统计才是整帧的绘制调用。
     this.renderer.info.autoReset = false;
@@ -153,20 +154,8 @@ export class SceneView {
     this.scene.add(this.sky);
 
     this.hemi.name = 'Outdoor sky irradiance';
-    this.sun.name = 'Sky directional key';
-    this.sun.castShadow = true;
-    // Opaque blockers remove the direct beam. Sky and surface bounce supply the penumbra fill.
-    this.sun.shadow.intensity = 1;
-    this.sun.shadow.mapSize.set(2048, 2048);
-    const sc = this.sun.shadow.camera;
-    sc.near = 12; sc.far = 100; sc.left = -31; sc.right = 31; sc.top = 29; sc.bottom = -29;
-    this.sun.shadow.bias = -0.0006;
-    this.sun.shadow.normalBias = 0.035;
-    this.sun.shadow.radius = 4;
-    this.sun.shadow.blurSamples = 8;
-    // Site-sized, world-anchored shadow volume. No shadow texel drift as the player walks.
-    this.sun.target.position.set(9.5, 3, -10.25);
     this.scene.add(this.hemi, this.sun, this.sun.target);
+    installSkyKeyDiskShadow(this.renderer, this.scene, this.sun, () => this.rig.keyDiskTan);
     this.glassCaustics = installGlassCaustics(this.scene, this.level.group, this.sun);
 
     // Stable broad-sky probe. The live key supplies sun/moon energy; baking a disc here
@@ -228,10 +217,8 @@ export class SceneView {
     setMaterialsQuality(heavy ? 'high' : 'low');
     // cinematic 用满设备像素比；high 保留 1.5 上限；low 直出 1x。
     this.renderer.setPixelRatio(q === 'cinematic' ? window.devicePixelRatio : q === 'high' ? Math.min(window.devicePixelRatio, 1.5) : 1);
-    this.renderer.shadowMap.type = q === 'cinematic' ? THREE.VSMShadowMap : THREE.PCFShadowMap;
-    this.sun.shadow.mapSize.set(heavy ? 2048 : 1024, heavy ? 2048 : 1024);
-    this.sun.shadow.map?.dispose();
-    this.sun.shadow.map = null;
+    configureSkyKeyShadowMap(this.renderer.shadowMap, this.sun, q);
+    applySkyKey(this.sun, this.renderer.shadowMap.type, this.rig);
     this.dust.visible = heavy;
     // props 内部以 'high' 判定重特效：cinematic 同样按高档传入。
     this.props.setQuality(q === 'cinematic' ? 'high' : q);
@@ -290,9 +277,8 @@ export class SceneView {
       freeDensity: this.quality === 'low' ? r.freeHaze * 0.76 : 0,
       heightFalloff: DAMP_FALLOFF, heightBase: WEATHER_BASE, distMax: r.fogDistMax },
     this.portal, this.portalIrradiance, lerp(1.2, 0.35, nightAmt), lerp(2.5, 2.2, nightAmt));
-    this.sun.color.setHex(r.sun); this.sun.intensity = r.sunI;
+    applySkyKey(this.sun, this.renderer.shadowMap.type, r);
     this.glassCaustics.beamFraction = (1 - r.cover) * this.sun.intensity / (this.sun.intensity + this.hemi.intensity);
-    this.sun.position.set(...r.sunDir).normalize().multiplyScalar(55).add(this.sun.target.position);
     this.renderer.toneMappingExposure = r.exposure * this.brightness;
 
     // 天空与环境光（同一着色器烘 IBL，见构造函数）
@@ -311,7 +297,6 @@ export class SceneView {
       hiThresh: lerp(3.0, 0.92, nightAmt),
       hiKneeCool: lerp(0.82, 3.7, nightAmt), hiKneeWarm: lerp(0.45, 0.82, nightAmt),
     });
-    this.sun.shadow.radius = r.shadowRadius;
     this.level.windowMat.emissiveIntensity = .58 * r.window;
     this.level.hearthWindowMat.emissiveIntensity = w.hearth.lit ? .87 : 0;
     const dayness = clamp01((r.hemi - 1.0) / 1.1) * (1 - r.stars);

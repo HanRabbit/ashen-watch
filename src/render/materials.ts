@@ -483,6 +483,10 @@ export interface AwUniforms {
   uAwRubble: { value: number };
   /** AO recess interval, loose aggregate fraction, and calibrated mineral finish flag. */
   uAwMineral: { value: THREE.Vector4 };
+  /** Face slope (tan of the tilt angle) at which grazing/distant compression starts. Zero opts out. */
+  uAwReliefKnee: { value: number };
+  /** Minimum soft-knee weight on exposed, light-coloured scan faces; off unless calibrated. */
+  uAwNearFace: { value: number };
   /** Continuous phase displacement, in UV units; zero for single-face/atlas UVs. */
   uAwScanDrift: { value: THREE.Vector2 };
   uAwYard: { value: number };
@@ -534,6 +538,8 @@ export function awUniforms(floor: number, wet: number, desat: number, tint: [num
     uAwPool: { value: 0 },
     uAwRubble: { value: 0 },
     uAwMineral: { value: new THREE.Vector4(0, 1, 0, 0) },
+    uAwReliefKnee: { value: 0 },
+    uAwNearFace: { value: 0 },
     uAwScanDrift: { value: new THREE.Vector2() },
     uAwYard: { value: 0 },
     uAwPeel: { value: 0 },
@@ -564,7 +570,7 @@ const AW_FRAG_PREFIX = /* glsl */`
 varying vec3 vAwWorldPos;
 varying vec3 vAwWorldNormal;
 uniform float uAwSteps, uAwFloor, uAwWet, uAwDesat, uAwHeightScale, uAwHasDisp, uAwPool, uAwRubble;
-uniform float uAwYard, uAwPeel;
+uniform float uAwYard, uAwPeel, uAwReliefKnee, uAwNearFace;
 uniform vec2 uAwScanDrift;
 uniform vec2 uAwStreakBand;
 uniform vec4 uAwMineral;
@@ -574,7 +580,7 @@ uniform vec3 uAwTint;
 uniform sampler2D uAwHeightMap;
 vec2 awUv, awDx, awDy, awScanBasisUv;
 float awWet, awMoss, awPuddle, awLime;
-float awScanAO, awCavity, awGrit, awGrain;
+float awScanAO, awCavity, awGrit, awGrain, awFacePressure;
 vec3 awGrainSlope;
 ${STONE_POOL_GLSL}
 ${YARD_WEATHER_GLSL}
@@ -597,30 +603,75 @@ vec3 awFineGrain(vec2 p) {
 float awHeight(vec2 uv) {
   return textureGrad(uAwHeightMap, uv, awDx, awDy).r;
 }
+float awCrossUV(vec2 a, vec2 b) {
+  return a.x * b.y - a.y * b.x;
+}
 vec2 awPom(vec2 uv, vec3 vTs) {
   if (uAwSteps < 1.0 || uAwHasDisp < 0.5 || uAwHeightScale <= 0.0) return uv;
   // 掠射钳制（圣经 7）：视线与面夹角极小时衰减步长与偏移，退化为普通法线贴图，杜绝整面发黑/撕裂
   float graze = smoothstep(0.10, 0.35, abs(vTs.z));
-  // A relief shift below a fraction of a pixel isn't worth a texture march.
-  float footprint = max(length(awDx), length(awDy));
-  graze *= 1.0 - smoothstep(uAwHeightScale * 0.55, uAwHeightScale * 1.4, footprint);
   if (graze < 0.02) return uv;
+  vec2 ray = (vTs.xy / max(0.35, abs(vTs.z))) * uAwHeightScale * graze;
+  float fade;
+  if (uAwReliefKnee > 0.0) {
+    // Convert the candidate ray span into pixels through the unshifted UV
+    // Jacobian. A head-on ray vanishes, and a long grazing footprint only
+    // suppresses rays along that footprint, not the resolved transverse axis.
+    float area = abs(awCrossUV(awDx, awDy));
+    if (area <= 1e-5 * max(dot(awDx, awDx), dot(awDy, awDy))) return uv;
+    float pixels = length(vec2(awCrossUV(ray, awDy), awCrossUV(awDx, ray))) / area;
+    fade = smoothstep(0.75, 2.5, pixels);
+  } else {
+    // Keep the legacy footprint budget for non-profiled surfaces (roof/earth).
+    float footprint = max(length(awDx), length(awDy));
+    fade = 1.0 - smoothstep(uAwHeightScale * 0.55, uAwHeightScale * 1.4, footprint);
+  }
+  if (graze * fade < 0.02) return uv;
+  float h = awHeight(uv);
+  if (h >= 1.0) return uv;
   int steps = int(uAwSteps);
   float layerH = 1.0 / float(steps);
-  vec2 delta = (vTs.xy / max(0.35, vTs.z)) * uAwHeightScale * graze / float(steps);
-  float maxOff = uAwHeightScale * 2.0;
-  delta = clamp(delta, vec2(-maxOff), vec2(maxOff));
+  vec2 delta = ray * fade / float(steps);
   vec2 cur = uv; float curH = 1.0;
-  float h = awHeight(cur);
+  float before = 0.0;
   for (int i = 0; i < 24; i++) {
     if (i >= steps || curH <= h) break;
+    before = h - curH;
     cur -= delta; curH -= layerH; h = awHeight(cur);
   }
-  vec2 prev = cur + delta;
   float after = h - curH;
-  float before = awHeight(prev) - (curH + layerH);
   float w = clamp(after / (after - before + 1e-5), 0.0, 1.0);
-  return mix(cur, prev, w);
+  return cur + delta * w;
+}
+
+float awReliefPressure(float viewCos, vec2 dx, vec2 dy) {
+  // Major axis of the pixel in scan UV, invariant under screen-axis rotation.
+  // 0.4–2% of a repeat spans ~4–41 texels on the 1–2K normal scans.
+  float a = dot(dx, dx), b = dot(dy, dy);
+  float footprint = sqrt(0.5 * (a + b + length(vec2(a - b, 2.0 * dot(dx, dy)))));
+  return max(1.0 - smoothstep(0.12, 0.42, viewCos), smoothstep(0.004, 0.020, footprint));
+}
+float awNearFacePressure(float strength, float lum, float cavity) {
+  // On high-AO ashlar, linear albedo p10/median = .094/.158. Pale mortar
+  // overlaps this range, so do not classify exposed faces from colour alone.
+  return strength * smoothstep(0.09, 0.16, lum) * (1.0 - smoothstep(0.08, 0.50, cavity));
+}
+float awTailScale(float tilt, float knee, float pressure) {
+  float excess = max(tilt - knee, 0.0);
+  return 1.0 - pressure * (excess / (knee + excess)) * (excess / max(tilt, 1e-4));
+}
+vec3 awStoneNormal(vec3 base, vec3 mapped, vec3 grain, float knee, float pressure) {
+  // Compose slopes on the geometric normal, not two independent rotations.
+  // The scan already includes pores/chips: leave grain room only on quiet parts.
+  float z = dot(base, mapped);
+  vec3 slope = (mapped - base * z) / max(z, 1e-4);
+  slope -= grain * (1.0 - smoothstep(0.65 * knee, 1.5 * knee, length(slope))) * (1.0 - 0.70 * pressure);
+  float tilt = length(slope);
+  // Soft knee: unchanged below the threshold, continuous slope at the knee,
+  // and a finite tail instead of normals pointing almost along the surface.
+  // Only the tail gets a near-field floor. Grain visibility still uses view pressure.
+  float scale = awTailScale(tilt, knee, max(pressure, awFacePressure));
+  return normalize(base + slope * scale);
 }
 `;
 
@@ -628,7 +679,8 @@ vec2 awPom(vec2 uv, vec3 vTs) {
 const AW_MAP_BLOCK = /* glsl */`
 {
   vec3 awN = normalize(vAwWorldNormal);
-  vec3 awV = normalize(cameraPosition - vAwWorldPos);
+  vec3 awV = isOrthographic ? transformDirectionByInverseViewMatrix(vec3(0.0, 0.0, 1.0), viewMatrix)
+                            : normalize(cameraPosition - vAwWorldPos);
   vec2 awW = vAwWorldPos.xz;
   float awUp = clamp(awN.y, 0.0, 1.0);
   float awCourtY = 1.0 - smoothstep(0.03, 0.16, abs(vAwWorldPos.y));
@@ -688,9 +740,11 @@ const AW_MAP_BLOCK = /* glsl */`
   float awLum = dot(awSample.rgb, vec3(0.2126, 0.7152, 0.0722));
   awScanAO = 1.0;
   awCavity = 0.0;
+  awFacePressure = 0.0;
   #ifdef USE_AOMAP
     awScanAO = textureGrad(aoMap, awUv, awDx, awDy).r;
     awCavity = 1.0 - smoothstep(uAwMineral.x, uAwMineral.y, awScanAO);
+    if (uAwNearFace > 0.0) awFacePressure = awNearFacePressure(uAwNearFace, awLum, awCavity);
   #endif
   float awMortar = 0.0;
   if (uAwRubble > 0.0) {
@@ -821,8 +875,18 @@ normal = mix(normal, nonPerturbedNormal, awMudCover * 0.20);
 #endif
 normal = mix(normal, nonPerturbedNormal, max(awLime * 0.73, awMoss * 0.12));
 vec3 awSlope = mat3(viewMatrix) * awGrainSlope;
-normal -= (awSlope - nonPerturbedNormal * dot(awSlope, nonPerturbedNormal))
+vec3 awGrainTangent = (awSlope - nonPerturbedNormal * dot(awSlope, nonPerturbedNormal))
   * mix(0.033, 0.083, max(awGrit, awLime)) * (1.0 - 0.45 * awWet);
+if (uAwReliefKnee > 0.0) {
+  vec3 awView = isOrthographic ? vec3(0.0, 0.0, 1.0) : normalize(vViewPosition);
+  float pressure = awReliefPressure(abs(dot(awView, nonPerturbedNormal)), awDx, awDy);
+  // Recesses get more slope headroom; AO and physical contacts aren't filtered.
+  float knee = mix(uAwReliefKnee, 0.90, awCavity);
+  normal = awStoneNormal(nonPerturbedNormal, normal, awGrainTangent, knee, pressure);
+} else {
+  normal -= awGrainTangent;
+}
+vec3 awMineralDelta = normalize(normal) - nonPerturbedNormal;
 // Standing water follows level, not the bump-mapped stone or its sloping crown.
 normal = normalize(mix(normal, viewMatrix[1].xyz, awPuddle * 0.95));
 `;
@@ -830,9 +894,9 @@ normal = normalize(mix(normal, viewMatrix[1].xyz, awPuddle * 0.95));
 // Integrate the subpixel slope variance into the GGX lobe. Three already
 // filters geometric edges. This term accounts only for the mapped relief.
 const FILTER_MINERAL_SPECULAR = /* glsl */`
-  vec3 reliefNormal = normal - nonPerturbedNormal;
-  vec3 slopeX = dFdx(reliefNormal), slopeY = dFdy(reliefNormal);
-  float slopeVariance = min(0.055, 0.22 * (dot(slopeX, slopeX) + dot(slopeY, slopeY)));
+  // Don't interpret the water mask's edge or a submerged slab as water ripples.
+  vec3 slopeX = dFdx(awMineralDelta), slopeY = dFdy(awMineralDelta);
+  float slopeVariance = min(0.055, 0.22 * (dot(slopeX, slopeX) + dot(slopeY, slopeY))) * (1.0 - awPuddle);
   float alpha = material.roughness * material.roughness;
   material.roughness = sqrt(sqrt(min(1.0, alpha * alpha + slopeVariance)));
 `;
@@ -886,7 +950,7 @@ export function stoneShader(mat: THREE.MeshStandardMaterial, u: AwUniforms): voi
         material.specularColorBlended = mix(material.specularColor, diffuseColor.rgb, metalnessFactor);
       `);
   };
-  mat.customProgramCacheKey = () => 'aw-stone-mineral';
+  mat.customProgramCacheKey = () => 'aw-stone-mineral-relief';
 }
 
 export interface Materials {
@@ -943,11 +1007,17 @@ export function enhance(mat: THREE.MeshStandardMaterial, name: string, normalSca
   const albedo = grab('diff', true, (t) => { mat.map = t; });
   const normal = grab('nor', false, (t) => { mat.normalMap = t; mat.normalScale.set(normalScale, normalScale); });
   grab('rough', false, (t) => { mat.roughnessMap = t; });
-  grab('ao', false, (t) => { mat.aoMap = t; mat.aoMapIntensity = 1.0; });
+  const ao = grab('ao', false, (t) => { mat.aoMap = t; mat.aoMapIntensity = 1.0; });
   const u = mat.userData.aw as AwUniforms | undefined;
   if (u) {
     const mineral = AW_MINERAL_SCANS[name];
     if (mineral) u.uAwMineral.value.set(...mineral, 1);
+    if (name === 'medieval_blocks_03') {
+      // Calibrated for this scan only: don't classify procedural fallback stone.
+      pending.push(Promise.all([albedo, normal, ao]).then(([a, n, o]) => {
+        if (a && n && o) u.uAwNearFace.value = .90;
+      }));
+    }
     if (u.uAwHeightScale.value > 0) {
       // Don't apply the height of one material to unrelated fallback UVs.
       u.uAwHasDisp.value = 0;
@@ -1040,13 +1110,15 @@ export function makeMaterials(): Materials {
   const rubble = awUniforms(0, 0.5, 0.64, [0.88, 0.92, 0.98], 0.013, [2.2, 4.15]);
   const darkRubble = awUniforms(0, 0.5, 0.63, [0.74, 0.78, 0.85], 0.013, [4.4, 6.85]);
   rubble.uAwRubble.value = darkRubble.uAwRubble.value = 1;
+  rubble.uAwReliefKnee.value = darkRubble.uAwReliefKnee.value = .31;
   rubble.uAwScanDrift.value.set(.16, .035);
   darkRubble.uAwScanDrift.value.copy(rubble.uAwScanDrift.value);
   stoneShader(m.stone, rubble);
   stoneShader(m.stoneDark, darkRubble);
-  // Actual crowns and bevels are modeled. The very shallow scan-height trace
-  // stays within the inset single-face crops; it never supplies a second joint.
-  const flag = awUniforms(1, 0.54, 0.52, [0.94, 0.98, 1.02], .0018);
+  // Real crowns, bevels and bedding set the contact. Keep the single-face
+  // crop registered to them instead of sliding its scan across the shoulder.
+  const flag = awUniforms(1, 0.54, 0.52, [0.94, 0.98, 1.02], 0);
+  flag.uAwReliefKnee.value = .26;
   flag.uAwPool.value = 1;
   flag.uAwYard.value = 1;
   stoneShader(m.flag, flag);

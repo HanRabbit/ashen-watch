@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { afterEach, beforeAll, expect, it, vi } from 'vitest';
-import { BRAZIER_POS, LAMP_POS } from '../src/sim/level';
+import { BRAZIER_POS, LAMP_POS, S1_SHAFT } from '../src/sim/level';
 import { newWorld } from '../src/sim/state';
 import { LOCAL_LIGHT_UNIFORMS, installLocalLightTransport, traceLocalLight } from '../src/render/localLightTransport';
 import { shieldWatchmanLamp } from '../src/render/characterAssets';
@@ -78,6 +78,20 @@ it('blocks opaque floor and ceiling slabs but leaves the stair apertures open', 
   expect(leg(p(7, 0.9, 9.9), p(7, -1.0, 9.9))).toBe(true);
   expect(leg(p(15, 1.1, 18.5), p(15, -0.1, 18.5))).toBe(true);
   expect(leg(p(7, 1, 12), p(7, 0, 12))).toBe(true); // top surface receives illumination
+});
+
+it('lights recessed clay and joints from the yard without opening the foundation or shaft lips', () => {
+  // A grazing ray used to terminate inside the flat walking proxy; increasing
+  // the global ray bias instead would also weaken closed doors and wall contact.
+  const lamp = p(-.82, .9, 12.2);
+  for (const h of [.018, -.012, -.027, -.042]) {
+    expect(leg(lamp, p(-2.3, h, 10.3))).toBe(true);
+    expect(leg(p(-.82, -1.2, 12.2), p(-2.3, h, 10.3))).toBe(false);
+  }
+  expect(leg(lamp, p(-2.3, -.25, 10.3))).toBe(false);
+  const midX = (S1_SHAFT.x0 + S1_SHAFT.x1) / 2;
+  expect(leg(p(midX, -.023, S1_SHAFT.z0 + .36), p(midX, -.023, S1_SHAFT.z0 - .36))).toBe(false);
+  expect(leg(p(midX, -.023, S1_SHAFT.z0 + .36), p(midX, -.023, S1_SHAFT.z0 + .07))).toBe(true);
 });
 
 it('keeps both fire baskets and the wall lantern at their own flames across player movement', () => {

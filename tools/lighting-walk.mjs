@@ -205,10 +205,14 @@ async function walkGround() {
       const relief = mat.userData.aw;
       return { normal: mat.normalScale.x, enabled: relief.uAwHasDisp.value === 1,
         height: relief.uAwHeightScale.value, steps: relief.uAwSteps.value,
-        sources: [mat.map, mat.normalMap, relief.uAwHeightMap.value].map(t => new URL(t.image.src).pathname) };
+        sources: [mat.map, mat.normalMap, ...(relief.uAwHasDisp.value ? [relief.uAwHeightMap.value] : [])].map(t => new URL(t.image.src).pathname) };
     });
   });
-  if (report.groundMaterials.some(m => !m.enabled || m.normal < .75 || !(m.height > 0) || (m.steps > 0) !== (quality !== 'low'))) {
+  // Exposed earth still uses scan parallax. On the fitted paving the geometry
+  // already supplies the shoulders: a second height offset is a regression.
+  const [earth, paving] = report.groundMaterials;
+  if (!earth.enabled || !(earth.height > 0) || paving.enabled || paving.height !== 0 ||
+      report.groundMaterials.some(m => m.normal < .75 || (m.steps > 0) !== (quality !== 'low'))) {
     throw Error(`Invalid ground detail: ${JSON.stringify(report.groundMaterials)}`);
   }
   // Observe the skinned sole (not its IK target) on each new landing. The
