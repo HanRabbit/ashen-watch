@@ -38,3 +38,8 @@ The bake samples the authored body-space joint trajectories at 64 phases per loo
 contact across speeds, and stores only millimetre-quantized landmarks. No source mesh, skin,
 or unrelated clips ship. In game, the hands, knees and feet can adapt to the watchman’s
 proportions, carried lantern and actual ground instead of inheriting the mannequin’s bind pose.
+
+## 用户提供的 Tripo 模型
+
+- tripo-watchkeeper.glb：守夜人，由用户提供的 Tripo GLB 优化而来，保留蒙皮和动作片段。
+- tripo-ash-wraith.fbx 和对应 .fbm 贴图：灰影，来自用户提供的 Tripo ZIP。
