@@ -104,7 +104,7 @@ export class SceneView {
   private skyMat = makeSkyMaterial();
   private sky: THREE.Mesh;
   private portal = new THREE.Vector2();
-  private portalIrradiance = new THREE.Color();
+  private portalIrradiance = new THREE.Color(0, 0, 0);
   readonly glassCaustics: GlassCaustics;
   private post: PostPipeline;
   private atmo: THREE.Object3D[] = [];
@@ -141,7 +141,7 @@ export class SceneView {
     this.player = new PlayerModel(m, glowTexture(), this.level.courtContact);
     this.ghosts = new GhostModels();
     this.scene.add(this.level.group, this.props.group, this.player.group, this.ghosts.group, floors.group); // map:
-    const landmarks = buildLandmarks(m); hideLegacy(this.level.group);
+    const landmarks = buildLandmarks(m, this.portalIrradiance); hideLegacy(this.level.group);
     hideGroundHoles(this.level.group);
     this.scene.add(landmarks.group, buildScenery().group);
 

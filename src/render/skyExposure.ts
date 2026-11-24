@@ -2,7 +2,7 @@
 // imported and material-customized meshes. Visibility is applied to incident
 // energy before the BRDF so diffuse, sheen, clearcoat and IBL stay consistent.
 import * as THREE from 'three';
-import { COURT_TRANSPORT_GLSL, loadCourtTransport } from './probeLighting';
+import { COURT_TRANSPORT_GLSL, loadChapelSurfaceTransport, loadCourtTransport } from './probeLighting';
 import { skyExposureSourceUniforms } from './skyExposureSources';
 
 let installed = false;
@@ -77,6 +77,10 @@ ${COURT_TRANSPORT_GLSL}
   // them. lights_fragment_end remains available to the direct specular cap.
   THREE.ShaderChunk.lights_fragment_maps += INCIDENT_LIGHT;
 
-  const uniforms = { uAwCourtTransport: { value: loadCourtTransport() }, ...skyExposureSourceUniforms };
+  const uniforms = {
+    uAwCourtTransport: { value: loadCourtTransport() },
+    uAwChapelSurface: { value: loadChapelSurfaceTransport() },
+    ...skyExposureSourceUniforms,
+  };
   for (const shader of [THREE.ShaderLib.standard, THREE.ShaderLib.physical]) Object.assign(shader.uniforms, uniforms);
 }

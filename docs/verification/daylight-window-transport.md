@@ -33,3 +33,5 @@ AW_OUT=.cache/review/chapel AW_CHAPEL_AIR=1 node tools/window-air-walk.mjs chrom
 AW_OUT=.cache/review/receivers node tools/light-source-audit.mjs chromium --headless --accept
 AW_OUT=.cache/review/wet AW_OPTICS=wet node tools/optics-audit.mjs chromium --headless
 ```
+
+**后续教堂专项（2026-11-24）：**上面的独立高窗站位是历史对照，不代表日常玩法可见度。教堂采用新的受光和散射实现后，见[入口至祭台的连续实走与多视角对比](chapel-daylight.md)。

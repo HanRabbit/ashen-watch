@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { expect, it } from 'vitest';
 import { CameraRig } from '../src/render/camera';
 import { LightGlowShader } from '../src/render/post/glow';
-import { AIR_SOURCE_GLSL, WEATHER_REACH, WINDOW_SCATTER_GLSL } from '../src/render/post/airVolume';
+import { WEATHER_REACH, WINDOW_SCATTER_GLSL } from '../src/render/post/airVolume';
 import { ShadowVolumePass } from '../src/render/post/shadowVolume';
 import { groundY } from '../src/sim/level';
 import { newWorld } from '../src/sim/state';
@@ -16,10 +16,8 @@ const apertures = [...WINDOW_SCATTER_GLSL.matchAll(/AwAirAperture\(vec3\(([^)]+)
     return { sill: vec(sill), normal: new THREE.Vector3(x, 0, z), lateral: new THREE.Vector3(z, 0, x), shape: vec(shape), transmission: +transmission };
   });
 type Aperture = typeof apertures[number];
-const [front, frontPane, rear, rearPane, ...chapel] = apertures;
+const [front, frontPane, rear, rearPane] = apertures;
 const [frontDepth, rearDepth] = [...WINDOW_SCATTER_GLSL.matchAll(/, 0\), (0\.\d+)\)/g)].map(([, n]) => +n);
-const blockers = [...AIR_SOURCE_GLSL.matchAll(/awBoxLeg\(a, inv, vec3\(([^)]+)\), vec3\(([^)]+)\)\)/g)]
-  .map(([, lo, hi]) => new THREE.Box3(vec(lo), vec(hi)));
 const constant = (pattern: RegExp) => +WINDOW_SCATTER_GLSL.match(pattern)![1];
 const dust = constant(/AW_WINDOW_DUST = ([.\d]+)/);
 const skyGain = constant(/AW_WINDOW_SKY_GAIN = ([.\d]+)/);
@@ -42,24 +40,17 @@ function frame(a: Aperture, p: THREE.Vector3, feather: number) {
   const head = THREE.MathUtils.lerp(a.shape.y,a.shape.z,t*(1.44-.44*t));
   return smooth(0,feather,Math.min(a.shape.x-x,offset.y,head-offset.y));
 }
-function access(p: THREE.Vector3, toKey: THREE.Vector3, mouth: Aperture, pane = mouth, half = .25, church = false) {
+function access(p: THREE.Vector3, toKey: THREE.Vector3, mouth: Aperture, pane = mouth, half = .25) {
   const recess = mouth.sill.clone().sub(p).dot(mouth.normal), inside = recess-half;
-  const reach = church ? 8.5 : 3.65;
+  const reach = 3.65;
   if (inside <= 0 || inside >= reach) return [0,0];
   const path = (dir: THREE.Vector3) => {
     const incidence=dir.dot(mouth.normal);
     if (incidence <= .025) return 0;
     const hit = (offset: number) => p.clone().addScaledVector(dir,(recess+offset)/incidence);
-    const outer = hit(half), feather = church ? .13 : .055;
+    const outer = hit(half), feather = .055;
     const reveal = Math.min(frame(mouth,outer,feather),frame(mouth,hit(-half),feather));
     if (!reveal) return 0;
-    if (church) {
-      const ray = new THREE.Ray(p,dir);
-      return blockers.some((b) => {
-        const h = ray.intersectBox(b,new THREE.Vector3());
-        return b.containsPoint(p) || h && h.distanceTo(p) < .998*outer.distanceTo(p);
-      }) ? 0 : reveal;
-    }
     const seat = pane.sill.clone().sub(mouth.sill).dot(mouth.normal);
     return Math.min(reveal,frame(pane,hit(seat-.027),feather),frame(pane,hit(seat+.027),feather));
   };
@@ -102,12 +93,6 @@ function rayLight(origin: THREE.Vector3, direction: THREE.Vector3, depth: number
           skyAccess+=s; keyAccess+=k;
         }
       }
-      if (p.x>13.5 && p.x<22 && p.z>-22.25 && p.z< -10.75 && p.y>.45 && p.y<14.1) {
-        for (const a of chapel) {
-          const [s,k]=access(p,sun,a,a,.25,true);
-          skyAccess+=s; keyAccess=Math.max(keyAccess,k);
-        }
-      }
       // Conservative sizing fixture: apply 15% upstream transmittance loss and no inferred bounce.
       L+=.85*.5*(stop-start)*dust*daylight*(skyGain*irradiance*skyAccess+keyGain*key*phase(direction)*keyAccess*shadow);
     }
@@ -119,16 +104,12 @@ function rayLight(origin: THREE.Vector3, direction: THREE.Vector3, depth: number
 
 it('admits the daytime sun only through the actual stone lips and glass seat', () => {
   expect([frontDepth,rearDepth]).toEqual([.25,.28]);
-  expect(apertures).toHaveLength(7); // front/rear mouths and seats, west rose and two lancets; not a door, roof or bridge.
+  expect(apertures).toHaveLength(4); // gatehouse front/rear mouths and seats, not the door.
   const frontCore = new THREE.Vector3(-1.033,.95,.45);
-  const roseCore = new THREE.Vector3(15.4,8.9,-14.94);
   expect(access(frontCore,sun,front,frontPane,frontDepth)[1]).toBeGreaterThan(.02);
-  expect(access(roseCore,sun,chapel[0],chapel[0],.25,true)[1]).toBeGreaterThan(.12);
   expect(access(frontCore.clone().add(new THREE.Vector3(.43,0,0)),sun,front,frontPane,frontDepth)[1]).toBe(0);
   expect(access(new THREE.Vector3(.6,1.97,7.05),sun,rear,rearPane,rearDepth)[1]).toBe(0);
   expect(access(new THREE.Vector3(.6,1.97,7.05),sun,rear,rearPane,rearDepth)[0]).toBeGreaterThan(.05);
-  const behindPartition=new THREE.Vector3(19,.8,-16.5);
-  expect(access(behindPartition,sun,chapel[0],chapel[0],.25,true)[0]).toBe(0);
 });
 
 // Neutral stone witness: match the scalar Three ACES fit for neutral gray, then sRGB;
@@ -142,7 +123,6 @@ function displayGray(hdr: number) {
 it('integrates a subtle daylight difference on camera rays at both quality budgets and stops at opaque depth', () => {
   const fixtures = [
     { camera: follow(-.93,-3.48,-.31,-.04), target: new THREE.Vector3(-1.99,1.90,.88), name:'gatehouse' },
-    { camera: follow(20.75,15.85,-1.58,-.76), target: new THREE.Vector3(15.06,8.29,-15.10), name:'chapel' },
   ];
   for (const {camera,target,name} of fixtures) {
     const direction=target.clone().sub(camera.position).normalize(), length=target.distanceTo(camera.position);
@@ -155,7 +135,6 @@ it('integrates a subtle daylight difference on camera rays at both quality budge
       expect(shaded,name).toBeGreaterThan(.0015); // A soft visible term even without a clear directional tap.
       expect(on,name).toBeLessThan(.02);
       expect(255*(displayGray(.035+shaded)-displayGray(.035)),name).toBeGreaterThan(1);
-      if (name==='chapel') expect(on-shaded).toBeGreaterThan(.004);
       expect(rayLight(camera.position,direction,length+.78,steps,{toggle:0}),name).toBe(0);
       expect(rayLight(camera.position,direction,length+.78,steps,{haze:nightHaze,irradiance:nightIrradiance,key:moonKey}),name).toBe(0);
       expect(rayLight(camera.position,direction,Math.max(.1,length-5),steps),name).toBeLessThan(on*.27);
@@ -179,14 +158,14 @@ it.each([[.08,-3.6],[-1.35,-2.02]])('has a gatehouse signal at the walk QA stops
 
 it('calibrates day luminance while keeping sky and key independently source-driven', () => {
   expect(skyGain*dayIrradiance).toBeCloseTo(2.7*dayHaze,3);
-  const camera=follow(20.75,15.85,-1.58,-.76);
-  const ray=new THREE.Vector3(15.06,8.29,-15.10).sub(camera.position);
-  const depth=ray.length()+.78;
-  ray.normalize();
-  const draw = (sources?: Parameters<typeof rayLight>[4]) => rayLight(camera.position,ray,depth,32,sources);
+  // Cross the front pane's actual key corridor near the sill (the follow
+  // witnesses above deliberately look mostly at the diffuse hearth air).
+  const origin=new THREE.Vector3(-1.033,.95,.95);
+  const ray=new THREE.Vector3(0,0,-1);
+  const draw = (sources?: Parameters<typeof rayLight>[4]) => rayLight(origin,ray,.92,32,sources);
   const skyOnly=draw({key:0}), keyOnly=draw({irradiance:0});
-  expect(skyOnly).toBeGreaterThan(.0015);
-  expect(keyOnly).toBeGreaterThan(.004);
+  expect(skyOnly).toBeGreaterThan(0);
+  expect(keyOnly).toBeGreaterThan(0);
   expect(draw()).toBeCloseTo(skyOnly+keyOnly,10);
   expect(draw({key:0,irradiance:dayIrradiance*.5})).toBeCloseTo(skyOnly*.5,10);
   expect(draw({irradiance:0,key:0})).toBe(0); // bright weather tint cannot stand in for either emitter

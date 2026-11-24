@@ -1,4 +1,5 @@
 import { AREAS, B1_CEILINGS, B1_FOUNDATION_BACKING, CHAPEL_SLABS, DECK_SLABS, DOORS, RAISED_Y, WALLS, type Box, type Rect } from '../../sim/level';
+import chapelSkyData from '../baked/chapel-sky.r8?url&inline';
 import { GATEHOUSE_LIGHTS } from '../gatehouseWindows';
 import { CHAPEL_APERTURES, GATEHOUSE_APERTURES, SKY_RECEIVER_PLAN, SKY_SHAFTS } from '../probeLighting';
 
@@ -29,10 +30,20 @@ const chapelInterior = [
   ...WALLS.filter(w => w.x0 === 17.5 && w.x1 === 17.9).map(w => ({ ...w, y0: RAISED_Y })),
   ...DECK_SLABS.filter(w => w.x0 >= 13),
 ];
+export const CHAPEL_AIR_BAFFLES = [
+  ...chapelInterior,
+  ...WALLS.filter(w => w.tag === 'holeGuard' && w.x0 >= 13),
+];
 const chapelDoor = DOORS.chapelFront.box;
 const [frontPane, rearPane] = GATEHOUSE_LIGHTS;
 const {court: courtShaft, chapel: chapelShaft} = SKY_SHAFTS;
-const gateReceiver = SKY_RECEIVER_PLAN.gatehouse, chapelReceiver = SKY_RECEIVER_PLAN.chapel;
+const gateReceiver = SKY_RECEIVER_PLAN.gatehouse;
+// The slab pieces ring S2. Use their whole envelope for *outside-weather*
+// classification: the S2 cut opens into the chapel, not straight to the sky.
+const chapelSlabEnvelope: Rect = {
+  x0: Math.min(...CHAPEL_SLABS.map(s => s.x0)), z0: Math.min(...CHAPEL_SLABS.map(s => s.z0)),
+  x1: Math.max(...CHAPEL_SLABS.map(s => s.x1)), z1: Math.max(...CHAPEL_SLABS.map(s => s.z1)),
+};
 const boxTests = (walls: readonly Box[]) => walls
   .map(w => `awBoxLeg(a, inv, ${bounds(w)})`).join(' ||\n      ');
 const airAperture = (w: typeof GATEHOUSE_APERTURES[number]) => {
@@ -42,6 +53,49 @@ const airAperture = (w: typeof GATEHOUSE_APERTURES[number]) => {
     `${vec2(alongX ? w.side : 0, alongX ? 0 : -w.side)}, ${vec3(w.width * .5, w.spring, w.height)}, ${w.transmission.toFixed(4)}, ${door})`;
 };
 const airApertures = (list: typeof GATEHOUSE_APERTURES) => list.map(airAperture).join(',\n  ');
+
+// Four wall groups, indexed by the first jamb plane a light leg reaches. The
+// repeat is keyed by authored lateral centre, not by a guessed regular spacing.
+export const CHAPEL_AIR_WALL_GROUPS = ([['x', -1], ['x', 1], ['z', -1], ['z', 1]] as const).map(([axis, side]) =>
+  CHAPEL_APERTURES.flatMap((a, i) => a.axis === axis && a.side === side && a.bottom > 7 ? [i] : [])
+    .sort((a,b) => CHAPEL_APERTURES[a].lateral-CHAPEL_APERTURES[b].lateral));
+const chapelNearest = (indices: number[]): string => {
+  if (indices.length === 1) return `${indices[0]}`;
+  const m = indices.length >> 1;
+  const a = CHAPEL_APERTURES[indices[m-1]], b = CHAPEL_APERTURES[indices[m]];
+  const split = (a.lateral+a.width*.5 + b.lateral-b.width*.5) / 2;
+  return `(along < ${split.toFixed(4)} ? ${chapelNearest(indices.slice(0,m))} : ${chapelNearest(indices.slice(m))})`;
+};
+const west = CHAPEL_APERTURES[CHAPEL_AIR_WALL_GROUPS[0][0]].plane;
+const east = CHAPEL_APERTURES[CHAPEL_AIR_WALL_GROUPS[1][0]].plane;
+const south = CHAPEL_APERTURES[CHAPEL_AIR_WALL_GROUPS[2][0]].plane;
+const north = CHAPEL_APERTURES[CHAPEL_AIR_WALL_GROUPS[3][0]].plane;
+export const CHAPEL_REVEAL = .25; // glazedWall's 0.50 m stone extrusion, not the glazing seat
+export const CHAPEL_AIR_GRID = {
+  lo: [west+CHAPEL_REVEAL, RAISED_Y, -north+CHAPEL_REVEAL],
+  hi: [east-CHAPEL_REVEAL, 16.2, -south-CHAPEL_REVEAL],
+  size: [49, 45, 33], // approximately 35 cm; x is contiguous
+  // Sqrt encoding keeps the dim nave values well above 8-bit quantisation.
+  maxSky: .25,
+} as const;
+export const CHAPEL_AIR_EXTINCTION = .014;
+// Artistic exposure of the revealed local sources; neither is a minimum
+// light level. The cloudy sky keeps the gaps dark, the key picks out shafts.
+export const CHAPEL_SKY_GAIN = 5.0;
+export const CHAPEL_KEY_GAIN = 5.2;
+export const CHAPEL_BEAM_NODES = [.18343464,.52553241,.79666648,.96028986] as const;
+export const CHAPEL_BEAM_WEIGHTS = [.36268378,.31370665,.22238103,.10122854] as const;
+export const CHAPEL_BEAM_SPLIT = [1.45,2.75] as const;
+
+// Import the offline bake exactly like the court irradiance bake. The game
+// decodes 72,765 bytes; the pane quadrature never runs on the main thread.
+export function loadChapelSkyField(): Uint8Array<ArrayBuffer> {
+  const bytes = atob(chapelSkyData.slice(chapelSkyData.indexOf(',')+1));
+  if (bytes.length !== CHAPEL_AIR_GRID.size.reduce<number>((a,b) => a*b,1)) throw new Error('Invalid chapel sky field');
+  const data = new Uint8Array(bytes.length);
+  for (let i=0; i<data.length; ++i) data[i] = bytes.charCodeAt(i);
+  return data;
+}
 
 // Shared by opaque-depth weather and the inexpensive per-surface fallback. Height is
 // bounded at the datum, so subterranean rays never turn into denser and denser weather.
@@ -106,10 +160,26 @@ float awGateRoom(vec3 p) {
   float roof = 5.45 - 0.51 * abs(p.x);
   return smoothstep(-0.05, 0.15, plan) * (1.0-smoothstep(roof-0.20, roof, p.y));
 }
-float awChapelRoom(vec3 p) {
-  float plan = awFootprintInset(p.xz, ${footprint(chapelReceiver)});
-  float roof = max(7.0,16.1 - 0.86 * abs(p.z+16.5));
-  return smoothstep(-0.06, 0.20, plan) * (1.0-smoothstep(roof-0.30, roof, p.y));
+const vec3 AW_CHAPEL_LO = ${vec3(...CHAPEL_AIR_GRID.lo)};
+const vec3 AW_CHAPEL_HI = ${vec3(...CHAPEL_AIR_GRID.hi)};
+float awChapelRoofHeight(vec3 p) {
+  return max(16.2 - (5.6/5.8)*abs(p.z+16.5), p.z > -16.5 ? 14.685 - (3.8/2.9)*abs(p.x-18.) : 0.);
+}
+// This weight feathers only the added chapel medium. It is not a classifier
+// for access to outside weather, even when the weight is exactly zero.
+float awChapelMediumWeight(vec3 p) {
+  float inset = min(awChapelRoofHeight(p)-p.y,awRoomInset(p,AW_CHAPEL_LO,AW_CHAPEL_HI));
+  return smoothstep(0.,.18,inset);
+}
+const float AW_CHAPEL_FLOOR = ${RAISED_Y.toFixed(2)};
+bool awChapelUnderFloor(vec3 p) {
+  if (p.y >= AW_CHAPEL_FLOOR) return false;
+  return awFootprintInset(p.xz, ${footprint(chapelSlabEnvelope)}) >= 0.0 ||
+    (p.y < ${CHAPEL_SLABS[0].y0!.toFixed(2)} && awFootprintInset(p.xz, ${footprint(SKY_RECEIVER_PLAN.store)}) >= 0.0);
+}
+bool awChapelWeatherRoom(vec3 p) {
+  // Mid-wall footprint, independent of the glass-field bounds and feather.
+  return awFootprintInset(p.xz, ${footprint(SKY_RECEIVER_PLAN.chapel)}) >= 0.0 && p.y < awChapelRoofHeight(p);
 }
 struct AwAirAperture {
   vec3 sill;
@@ -134,7 +204,7 @@ bool awBoxLeg(vec3 a, vec3 inv, vec3 lo, vec3 hi) {
 }
 bool awAirChapelBlocked(vec3 a, vec3 b) {
   vec3 inv = awInverseSegment(b-a);
-  return ${boxTests(chapelInterior)};
+  return ${boxTests(CHAPEL_AIR_BAFFLES)};
 }
 float awAirThroughput(AwAirAperture a) {
   float opening = a.door == 1 ? uAirDoors.x : (a.door == 2 ? uAirDoors.y : 1.0);
@@ -150,6 +220,47 @@ float awAirFrameEdge(AwAirAperture a, vec3 p) {
 float awAirFrame(AwAirAperture a, vec3 p) {
   return smoothstep(0.0,0.04,awAirFrameEdge(a,p));
 }
+// X, Y in the returned pair are glazed and non-glazed key access respectively.
+// Route to the first inner lip; a later plane cannot be another route through
+// the same room's solid corner. Only one arch + one interior leg per sample.
+int awChapelGlassIndex(int wall, float along) {
+  if (wall == 0) return ${chapelNearest(CHAPEL_AIR_WALL_GROUPS[0])};
+  if (wall == 1) return ${chapelNearest(CHAPEL_AIR_WALL_GROUPS[1])};
+  if (wall == 2) return ${chapelNearest(CHAPEL_AIR_WALL_GROUPS[2])};
+  return ${chapelNearest(CHAPEL_AIR_WALL_GROUPS[3])};
+}
+vec2 awChapelKeySources(vec3 p, vec3 dir) {
+  // The first-inner-lip routing assumes the receiver is on the nave side.
+  if (dir.y <= .001 || awFootprintInset(p.xz,AW_CHAPEL_LO.xz,AW_CHAPEL_HI.xz) < 0.0) return vec2(0.);
+  vec2 s = vec2(dir.x < 0. ? AW_CHAPEL_LO.x : AW_CHAPEL_HI.x,
+                dir.z > 0. ? AW_CHAPEL_HI.z : AW_CHAPEL_LO.z);
+  vec2 t = abs(s-p.xz)/max(abs(dir.xz),vec2(1e-6));
+  bool xWall = t.x<t.y;
+  int wall = xWall ? (dir.x<0. ? 0 : 1) : (dir.z>0. ? 2 : 3);
+  float incidence = abs(xWall ? dir.x : dir.z);
+  if (incidence <= .025) return vec2(0.);
+  vec3 leg = dir/incidence;
+  vec3 inner = p + dir*min(t.x,t.y);
+  vec3 centre = inner+leg*${CHAPEL_REVEAL.toFixed(2)};
+  vec3 outer = centre+leg*${CHAPEL_REVEAL.toFixed(2)};
+  if (centre.y >= AW_CHAPEL_HI.y) return vec2(0.);
+  bool glazed = wall != 0 || centre.y >= 7.;
+  int idx = glazed ? awChapelGlassIndex(wall,xWall ? -centre.z : centre.x) : (centre.y<4. ? 0 : 1);
+  AwAirAperture a=AW_AIR_CHAPEL[idx];
+  float frame = min(awAirFrameEdge(a,inner),awAirFrameEdge(a,outer));
+  if (frame <= 0. || awAirChapelBlocked(p,outer)) return vec2(0.);
+  float through = awAirThroughput(a)*smoothstep(0.,glazed ? .12 : .04,frame);
+  return glazed ? vec2(through,0.) : vec2(0.,through);
+}
+#ifdef AW_CHAPEL_FIELD
+uniform highp sampler3D tChapelSky;
+float awChapelSky(vec3 p) {
+  const vec3 dims = ${vec3(...CHAPEL_AIR_GRID.size)};
+  vec3 uv = (p-AW_CHAPEL_LO)/(AW_CHAPEL_HI-AW_CHAPEL_LO);
+  float code = texture(tChapelSky,(uv*(dims-1.)+.5)/dims).r;
+  return code*code*${CHAPEL_AIR_GRID.maxSky.toFixed(2)};
+}
+#endif
 float awApertureFlux(AwAirAperture a, vec3 p, bool chapel) {
   float through = awAirThroughput(a);
   if (through <= 0.0) return 0.0;
@@ -174,16 +285,26 @@ float awGateDiffuse(vec3 p) {
   return min(sky,1.0);
 }
 float awChapelDiffuse(vec3 p) {
-  float sky = 0.0;
-  for (int i=0; i<${CHAPEL_APERTURES.length}; ++i) sky += awApertureFlux(AW_AIR_CHAPEL[i],p,true);
+  // Preserve live access at the door and bridge in the ordinary weather layer;
+  // neither participates as a glowing source in the new glass scattering.
+  float sky = awApertureFlux(AW_AIR_CHAPEL[0],p,true)+awApertureFlux(AW_AIR_CHAPEL[1],p,true);
+  #ifdef AW_CHAPEL_FIELD
+    sky += awChapelSky(p);
+  #else
+    // The low-confidence/weather-only fallback needs no additional texture.
+    sky += awApertureFlux(AW_AIR_CHAPEL[awChapelGlassIndex(0,-p.z)],p,true);
+    sky += awApertureFlux(AW_AIR_CHAPEL[awChapelGlassIndex(1,-p.z)],p,true);
+    sky += awApertureFlux(AW_AIR_CHAPEL[awChapelGlassIndex(2,p.x)],p,true);
+    sky += awApertureFlux(AW_AIR_CHAPEL[awChapelGlassIndex(3,p.x)],p,true);
+  #endif
   return min(sky,1.0);
 }
 float awSkyAccess(vec3 p) {
   if (p.y < 0.0) return awCourtShaftSky(p, ${footprint(courtShaft)});
+  if (awChapelUnderFloor(p)) return 0.0;
   float gate = awGateRoom(p);
   if (gate > 0.0) return mix(1.0, awGateDiffuse(p), gate);
-  float chapel = awChapelRoom(p);
-  if (chapel > 0.0) return mix(1.0, awChapelDiffuse(p), chapel);
+  if (awChapelWeatherRoom(p)) return awChapelDiffuse(p);
   return 1.0;
 }
 // Intersect the stair throat at grade AND inside the chute. This vetoes light
@@ -196,7 +317,7 @@ float awCourtShaftKey(vec3 p, vec3 toKey) {
   float tread = p.y - awShaftSill(p, ${footprint(courtShaft)});
   return smoothstep(0.0, 0.10, min(inside, tread)) * smoothstep(-${courtShaft.reach.toFixed(2)}, -0.22, p.y);
 }
-float awApertureKey(AwAirAperture a, vec3 p, vec3 dir, bool chapel) {
+float awApertureKey(AwAirAperture a, vec3 p, vec3 dir) {
   float through = awAirThroughput(a);
   float incidence = dot(dir.xz,a.outward);
   if (through <= 0.0 || incidence <= 0.015) return 0.0;
@@ -204,22 +325,20 @@ float awApertureKey(AwAirAperture a, vec3 p, vec3 dir, bool chapel) {
   float lip = 0.23/incidence;
   if (t+lip <= 0.0) return 0.0;
   vec3 q = p + dir*(t+lip);
-  if (chapel && awAirChapelBlocked(p,q)) return 0.0;
   return through*awAirFrame(a,q)*awAirFrame(a,p+dir*max(0.0,t-lip));
 }
 float awKeyAccess(vec3 p, vec3 toKey) {
   if (p.y < 0.0) return awCourtShaftKey(p, toKey);
+  if (awChapelUnderFloor(p)) return 0.0;
   float gate = awGateRoom(p);
   if (gate > 0.0) {
     float visible = 0.0;
-    for (int i=0; i<${GATEHOUSE_APERTURES.length}; ++i) visible = max(visible,awApertureKey(AW_AIR_GATE[i],p,toKey,false));
+    for (int i=0; i<${GATEHOUSE_APERTURES.length}; ++i) visible = max(visible,awApertureKey(AW_AIR_GATE[i],p,toKey));
     return mix(1.0,visible,gate);
   }
-  float chapel = awChapelRoom(p);
-  if (chapel > 0.0) {
-    float visible = 0.0;
-    for (int i=0; i<${CHAPEL_APERTURES.length}; ++i) visible = max(visible,awApertureKey(AW_AIR_CHAPEL[i],p,toKey,true));
-    return mix(1.0,visible,chapel);
+  if (awChapelWeatherRoom(p)) {
+    vec2 sources = awChapelKeySources(p,toKey);
+    return max(sources.x,sources.y);
   }
   return 1.0;
 }
@@ -236,9 +355,8 @@ const gateScatterWindows = GATEHOUSE_LIGHTS.map((w, i) => {
     spring: aperture.spring-sillRise, height: aperture.height-sillRise };
   return `AwScatterWindow(${airAperture(face)}, ${airAperture(pane)}, ${((w.z1-w.z0)*.5).toFixed(4)})`;
 });
-const chapelScatterWindows = CHAPEL_APERTURES.filter(a => a.axis === 'x' && a.side === -1 && a.bottom > 7);
 
-/** Local single scattering from the actual glazed gatehouse and west chapel openings.
+/** Local single scattering from the actual glazed gatehouse openings.
  * No baked screen sprite, generic ambient fill, or source at the open door/bridge. */
 export const WINDOW_SCATTER_GLSL = /* glsl */`
 uniform float uWindowScatter;
@@ -256,9 +374,6 @@ struct AwScatterWindow {
 const AwScatterWindow AW_SCATTER_GATE[${gateScatterWindows.length}] = AwScatterWindow[${gateScatterWindows.length}](
   ${gateScatterWindows.join(',\n  ')}
 );
-const AwAirAperture AW_SCATTER_CHAPEL[${chapelScatterWindows.length}] = AwAirAperture[${chapelScatterWindows.length}](
-  ${airApertures(chapelScatterWindows)}
-);
 float awWindowDaylight(float hazeRigLuma) {
   // Keep the existing rig's dusk fade independent of source power. Both real
   // sky irradiance and the directional key can be nonzero during moonlight.
@@ -267,31 +382,30 @@ float awWindowDaylight(float hazeRigLuma) {
 float awWindowFrame(AwAirAperture a, vec3 p, float feather) {
   return smoothstep(0.,feather,awAirFrameEdge(a,p));
 }
-float awWindowPath(AwScatterWindow w, vec3 p, vec3 dir, float recess, bool chapel) {
+float awWindowPath(AwScatterWindow w, vec3 p, vec3 dir, float recess) {
   float incidence=dot(dir.xz,w.mouth.outward);
   if(incidence <= .025) return 0.;
   vec3 perMetre=dir/incidence;
   vec3 centre=p+perMetre*recess;
   vec3 outer=centre+perMetre*w.halfDepth;
-  float feather=chapel ? .13 : .055;
+  float feather=.055;
   float frame=min(awWindowFrame(w.mouth,outer,feather),
                   awWindowFrame(w.mouth,centre-perMetre*w.halfDepth,feather));
   if(frame<=0.) return 0.;
-  if(chapel) return awAirChapelBlocked(p,outer) ? 0. : frame;
   float seat=dot(w.pane.sill.xz-w.mouth.sill.xz,w.mouth.outward);
   return min(frame,min(awWindowFrame(w.pane,centre+perMetre*(seat-.027),feather),
                        awWindowFrame(w.pane,centre+perMetre*(seat+.027),feather)));
 }
-vec2 awWindowLight(AwScatterWindow w, vec3 p, vec3 toKey, bool chapel) {
+vec2 awWindowLight(AwScatterWindow w, vec3 p, vec3 toKey) {
   float recess=dot(w.mouth.sill.xz-p.xz,w.mouth.outward);
   float inside=recess-w.halfDepth;
-  float reach=chapel ? 8.5 : 3.65;
+  float reach=3.65;
   if(inside<=0. || inside>=reach) return vec2(0.);
   vec3 fromSill=p-w.pane.sill;
   if(abs(dot(fromSill.xz,w.mouth.outward.yx)) > w.pane.shape.x+reach ||
      abs(fromSill.y-.45*w.pane.shape.z) > w.pane.shape.z+reach) return vec2(0.);
   float local=smoothstep(0.,.16,inside)*(1.-smoothstep(reach*.48,reach,inside));
-  float key=awWindowPath(w,p,toKey,recess,chapel);
+  float key=awWindowPath(w,p,toKey,recess);
   // Projected solid angle of the exposed glazing. Three distributed taps see
   // a cloudy sky over a range of angles, not a cone aimed at the pane centre.
   float sky=0.;
@@ -306,24 +420,16 @@ vec2 awWindowLight(AwScatterWindow w, vec3 p, vec3 toKey, bool chapel) {
     float projected=max(0.,dot(dir.xz,w.pane.outward));
     // Lower rays run into the yard/roof rather than the sky hemisphere.
     float openSky=smoothstep(-.24,.14,dir.y);
-    sky+=awWindowPath(w,p,dir,recess,chapel)*openSky*projected*area/(3.141593*d2+area);
+    sky+=awWindowPath(w,p,dir,recess)*openSky*projected*area/(3.141593*d2+area);
   }
   return w.pane.transmission*local*vec2(sky/3.,key);
 }
-vec2 awWindowTransport(vec3 p, vec3 toKey, bool gate, bool chapel) {
+vec2 awWindowTransport(vec3 p, vec3 toKey) {
   vec2 light=vec2(0.);
-  if(gate && p.y>.02 && p.y<3.5) {
+  if(p.y>.02 && p.y<3.5) {
     float room=awGateRoom(p);
     if(room>0.) for(int i=0;i<${gateScatterWindows.length};++i)
-      light+=room*awWindowLight(AW_SCATTER_GATE[i],p,toKey,false);
-  }
-  if(chapel && p.y>0.45 && p.y<14.1 && p.x>13.50 && p.x<22.) {
-    float room=awChapelRoom(p);
-    if(room>0.) for(int i=0;i<${chapelScatterWindows.length};++i){
-      AwAirAperture a=AW_SCATTER_CHAPEL[i];
-      vec2 w=room*awWindowLight(AwScatterWindow(a,a,.25),p,toKey,true);
-      light=vec2(light.x+w.x,max(light.y,w.y));
-    }
+      light+=room*awWindowLight(AW_SCATTER_GATE[i],p,toKey);
   }
   return min(light,vec2(1.));
 }
@@ -331,6 +437,56 @@ vec2 awWindowInterval(vec3 origin, vec3 inv, vec3 lo, vec3 hi) {
   vec3 a=(lo-origin)*inv,b=(hi-origin)*inv;
   vec3 entry=min(a,b),exit=max(a,b);
   return vec2(max(0.,max(entry.x,max(entry.y,entry.z))),min(exit.x,min(exit.y,exit.z)));
+}
+`;
+
+/** Key-only geometry for the bounded camera integral. Project the whole view
+ * ray to both reveal lips once per facing wall; never find windows per tap. */
+export const CHAPEL_BEAM_GLSL = /* glsl */`
+const int AW_BEAM_ORDER[${CHAPEL_AIR_WALL_GROUPS.flat().length}] = int[${CHAPEL_AIR_WALL_GROUPS.flat().length}](${CHAPEL_AIR_WALL_GROUPS.flat().join(',')});
+const ivec4 AW_BEAM_END = ivec4(${CHAPEL_AIR_WALL_GROUPS.map((_,i) => CHAPEL_AIR_WALL_GROUPS.slice(0,i+1).flat().length).join(',')});
+struct AwBeamLine {
+  vec2 inner, outer, slope; // (lateral centre coordinate, height) on the two lips
+  vec2 interval;
+  float t0, dt; // distance to the inner lip from any camera-ray t
+};
+vec2 awBeamClip(vec2 t, float p, float d, vec2 limits) {
+  if(abs(d)<1e-5) return (p>=limits.x && p<=limits.y) ? t : vec2(1.,0.);
+  vec2 ends=(limits-p)/d;
+  return vec2(max(t.x,min(ends.x,ends.y)),min(t.y,max(ends.x,ends.y)));
+}
+AwBeamLine awBeamLine(vec3 origin, vec3 ray, vec2 interval, vec3 key, bool xWall) {
+  float component=xWall ? key.x : key.z;
+  float wall=xWall ? (component<0. ? AW_CHAPEL_LO.x : AW_CHAPEL_HI.x)
+                   : (component<0. ? AW_CHAPEL_LO.z : AW_CHAPEL_HI.z);
+  float t0=(wall-(xWall ? origin.x : origin.z))/component;
+  float dt=-(xWall ? ray.x : ray.z)/component;
+  vec2 projected=vec2(xWall ? -key.z : key.x,key.y);
+  vec2 inner=vec2(xWall ? -origin.z : origin.x,origin.y)+projected*t0;
+  vec2 outer=inner+projected*(${(2*CHAPEL_REVEAL).toFixed(2)}/abs(component));
+  vec2 slope=vec2(xWall ? -ray.z : ray.x,ray.y)+projected*dt;
+  // Reject rays that reach another wall before this one (including corner
+  // strips where the jamb lip meets the lower stone shell).
+  vec2 lateral=xWall ? vec2(-AW_CHAPEL_HI.z,-AW_CHAPEL_LO.z) : vec2(AW_CHAPEL_LO.x,AW_CHAPEL_HI.x);
+  interval=awBeamClip(interval,inner.x,slope.x,lateral);
+  return AwBeamLine(inner,outer,slope,interval,t0,dt);
+}
+vec2 awBeamSpan(AwBeamLine line, AwAirAperture a, float lateral) {
+  vec2 width=lateral+vec2(-1.,1.)*a.shape.x;
+  vec2 height=a.sill.y+vec2(0.,a.shape.z);
+  vec2 t=awBeamClip(line.interval,line.inner.x,line.slope.x,width);
+  t=awBeamClip(t,line.outer.x,line.slope.x,width);
+  t=awBeamClip(t,line.inner.y,line.slope.y,height);
+  return awBeamClip(t,line.outer.y,line.slope.y,height);
+}
+float awBeamArch(vec2 frame, vec3 shape) {
+  float u=abs(frame.x), root=sqrt(max(0.,1.-u/shape.x));
+  float head=mix(shape.y,shape.z,root*(1.44-.44*root));
+  return min(shape.x-u,min(frame.y,head-frame.y));
+}
+float awBeamReveal(AwBeamLine line, AwAirAperture a, float t, float lateral) {
+  vec2 fromSill=line.slope*t-vec2(lateral,a.sill.y);
+  return smoothstep(0.,.12,min(awBeamArch(line.inner+fromSill,a.shape),awBeamArch(line.outer+fromSill,a.shape)));
 }
 `;
 

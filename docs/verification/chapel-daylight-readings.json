@@ -1,0 +1,3064 @@
+{
+  "date": "2026-11-24",
+  "baselineRevision": "ac1efbb",
+  "comparison": "Re-walked routes in normal play. Only the three scatter-toggle frames within a batch are pixel-aligned. Camera pose and minor animated details may differ between builds. Y is display-relative linear luminance decoded from sRGB, not lux.",
+  "thresholds": {
+    "surfaceReadableOffY": 0.012,
+    "perceptibleDeltaY": 0.006,
+    "perceptibleDeltaMinRgbCode": 5
+  },
+  "before": {
+    "build": "index-Dsr-0LZ7.js",
+    "quality": "cinematic",
+    "gpu": "ANGLE (Apple, ANGLE Metal Renderer: Apple M3 Max, Unspecified Version)",
+    "viewport": [
+      1280,
+      720
+    ],
+    "ok": true,
+    "stops": [
+      {
+        "id": "vestibule",
+        "mode": "playing",
+        "locked": true,
+        "fixedCam": false,
+        "camera": {
+          "position": [
+            13.539423238737697,
+            2.0761107772675023,
+            -16.31630077428735
+          ],
+          "rotation": [
+            0.0025420709694491364,
+            0.9407793791336772,
+            0.007055977643579503,
+            -0.3389364407252968
+          ],
+          "projection": [
+            1.080552446421281,
+            0,
+            0,
+            0,
+            0,
+            1.920982126971166,
+            0,
+            0,
+            0,
+            0,
+            -1.0002623294858344,
+            -1,
+            0,
+            0,
+            -0.16002098635886677,
+            0
+          ]
+        },
+        "simPose": [
+          14.4,
+          0.45,
+          16.5,
+          "1F",
+          2.45,
+          0.015
+        ],
+        "sources": {
+          "doors": {
+            "gatehouse": false,
+            "gate": false,
+            "chapelFront": false
+          },
+          "lantern": false,
+          "hearth": false,
+          "lamp": 0,
+          "braziers": {
+            "chapel": 0,
+            "side": 0
+          },
+          "key": 0.72,
+          "exposure": 1
+        },
+        "roi": [
+          0.27,
+          0.14,
+          0.88,
+          0.76
+        ],
+        "full": {
+          "pixels": 921600,
+          "changed": 712201,
+          "repeatChanged": 0,
+          "changedOverNoise": 712201,
+          "brighterOverNoise": 712201,
+          "readableOffPixels": 72,
+          "visibleGainPixels": 0,
+          "maxCode": 10,
+          "maxRepeatCode": 0,
+          "meanOffY": 0.0009093342885786235,
+          "meanSignedY": 0.0005925591870539161,
+          "meanPositiveY": 0.0005925591870539161,
+          "meanNoiseY": 0
+        },
+        "crop": {
+          "pixels": 347880,
+          "changed": 298703,
+          "repeatChanged": 0,
+          "changedOverNoise": 298703,
+          "brighterOverNoise": 298703,
+          "readableOffPixels": 60,
+          "visibleGainPixels": 0,
+          "maxCode": 9,
+          "maxRepeatCode": 0,
+          "meanOffY": 0.0008532590585429155,
+          "meanSignedY": 0.0007684147151739922,
+          "meanPositiveY": 0.0007684147151739922,
+          "meanNoiseY": 0
+        },
+        "drawCalls": 521
+      },
+      {
+        "id": "pews",
+        "mode": "playing",
+        "locked": true,
+        "fixedCam": false,
+        "camera": {
+          "position": [
+            18.978549505659096,
+            1.9306984784114203,
+            -11.132216923182304
+          ],
+          "rotation": [
+            0.043736206010520674,
+            -0.4833295411135491,
+            0.024186202829057327,
+            0.8740107130713463
+          ],
+          "projection": [
+            1.0803771584475448,
+            0,
+            0,
+            0,
+            0,
+            1.9206705039067462,
+            0,
+            0,
+            0,
+            0,
+            -1.0002623294858344,
+            -1,
+            0,
+            0,
+            -0.16002098635886677,
+            0
+          ]
+        },
+        "simPose": [
+          19.74000582262602,
+          0.45,
+          12.530881421201112,
+          "1F",
+          1.0102000000000002,
+          -0.1
+        ],
+        "sources": {
+          "doors": {
+            "gatehouse": false,
+            "gate": false,
+            "chapelFront": false
+          },
+          "lantern": false,
+          "hearth": false,
+          "lamp": 0,
+          "braziers": {
+            "chapel": 0,
+            "side": 0
+          },
+          "key": 0.72,
+          "exposure": 1
+        },
+        "roi": [
+          0.27,
+          0.14,
+          0.88,
+          0.76
+        ],
+        "full": {
+          "pixels": 921600,
+          "changed": 861295,
+          "repeatChanged": 0,
+          "changedOverNoise": 861295,
+          "brighterOverNoise": 861287,
+          "readableOffPixels": 16917,
+          "visibleGainPixels": 0,
+          "maxCode": 5,
+          "maxRepeatCode": 0,
+          "meanOffY": 0.006779935695325587,
+          "meanSignedY": 0.00032463332072261595,
+          "meanPositiveY": 0.00032464837545207386,
+          "meanNoiseY": 0
+        },
+        "crop": {
+          "pixels": 347880,
+          "changed": 341935,
+          "repeatChanged": 0,
+          "changedOverNoise": 341935,
+          "brighterOverNoise": 341934,
+          "readableOffPixels": 3047,
+          "visibleGainPixels": 0,
+          "maxCode": 3,
+          "maxRepeatCode": 0,
+          "meanOffY": 0.0033844460294607717,
+          "meanSignedY": 0.000292755303167908,
+          "meanPositiveY": 0.0002927662042763693,
+          "meanNoiseY": 0
+        },
+        "drawCalls": 551
+      },
+      {
+        "id": "altar-approach",
+        "mode": "playing",
+        "locked": true,
+        "fixedCam": false,
+        "camera": {
+          "position": [
+            20.674797806317585,
+            2.1969132771508106,
+            -15.415741864842976
+          ],
+          "rotation": [
+            -0.01488333210330117,
+            -0.6739302757711539,
+            -0.013581658051672739,
+            0.7385201475850789
+          ],
+          "projection": [
+            1.0803768120413162,
+            0,
+            0,
+            0,
+            0,
+            1.9206698880734507,
+            0,
+            0,
+            0,
+            0,
+            -1.0002623294858344,
+            -1,
+            0,
+            0,
+            -0.16002098635886677,
+            0
+          ]
+        },
+        "simPose": [
+          23.737916572205652,
+          0.45,
+          16.479739020667576,
+          "1F",
+          1.4794000000000003,
+          0.040299999999999996
+        ],
+        "sources": {
+          "doors": {
+            "gatehouse": false,
+            "gate": false,
+            "chapelFront": false
+          },
+          "lantern": false,
+          "hearth": false,
+          "lamp": 0,
+          "braziers": {
+            "chapel": 0,
+            "side": 0
+          },
+          "key": 0.72,
+          "exposure": 1
+        },
+        "roi": [
+          0.27,
+          0.14,
+          0.88,
+          0.76
+        ],
+        "full": {
+          "pixels": 921600,
+          "changed": 360768,
+          "repeatChanged": 0,
+          "changedOverNoise": 360768,
+          "brighterOverNoise": 360768,
+          "readableOffPixels": 24,
+          "visibleGainPixels": 0,
+          "maxCode": 1,
+          "maxRepeatCode": 0,
+          "meanOffY": 0.0008514989292441977,
+          "meanSignedY": 5.004523618967133e-05,
+          "meanPositiveY": 5.004523618967133e-05,
+          "meanNoiseY": 0
+        },
+        "crop": {
+          "pixels": 347880,
+          "changed": 128951,
+          "repeatChanged": 0,
+          "changedOverNoise": 128951,
+          "brighterOverNoise": 128951,
+          "readableOffPixels": 0,
+          "visibleGainPixels": 0,
+          "maxCode": 1,
+          "maxRepeatCode": 0,
+          "meanOffY": 0.000920535590095179,
+          "meanSignedY": 4.5766848900835425e-05,
+          "meanPositiveY": 4.5766848900835425e-05,
+          "meanNoiseY": 0
+        },
+        "drawCalls": 491
+      },
+      {
+        "id": "nave",
+        "mode": "playing",
+        "locked": true,
+        "fixedCam": false,
+        "camera": {
+          "position": [
+            26.73706730560972,
+            1.4689091699950971,
+            -17.563519784463523
+          ],
+          "rotation": [
+            0.06434645379632895,
+            0.7378026285354939,
+            -0.07105166828029721,
+            0.6681754826724334
+          ],
+          "projection": [
+            1.0803768120413162,
+            0,
+            0,
+            0,
+            0,
+            1.9206698880734507,
+            0,
+            0,
+            0,
+            0,
+            -1.0002623294858344,
+            -1,
+            0,
+            0,
+            -0.16002098635886677,
+            0
+          ]
+        },
+        "simPose": [
+          23.737916572205652,
+          0.45,
+          16.479739020667576,
+          "1F",
+          4.6143,
+          -0.192
+        ],
+        "sources": {
+          "doors": {
+            "gatehouse": false,
+            "gate": false,
+            "chapelFront": false
+          },
+          "lantern": false,
+          "hearth": false,
+          "lamp": 0,
+          "braziers": {
+            "chapel": 0,
+            "side": 0
+          },
+          "key": 0.72,
+          "exposure": 1
+        },
+        "roi": [
+          0.27,
+          0.14,
+          0.88,
+          0.76
+        ],
+        "full": {
+          "pixels": 921600,
+          "changed": 350967,
+          "repeatChanged": 0,
+          "changedOverNoise": 350967,
+          "brighterOverNoise": 350921,
+          "readableOffPixels": 31398,
+          "visibleGainPixels": 2428,
+          "maxCode": 22,
+          "maxRepeatCode": 0,
+          "meanOffY": 0.012846546493771729,
+          "meanSignedY": 0.000864554268803362,
+          "meanPositiveY": 0.0008645645778147727,
+          "meanNoiseY": 0
+        },
+        "crop": {
+          "pixels": 347880,
+          "changed": 205013,
+          "repeatChanged": 0,
+          "changedOverNoise": 205013,
+          "brighterOverNoise": 204999,
+          "readableOffPixels": 18599,
+          "visibleGainPixels": 496,
+          "maxCode": 21,
+          "maxRepeatCode": 0,
+          "meanOffY": 0.022874335098063525,
+          "meanSignedY": 0.0012336922093479422,
+          "meanPositiveY": 0.0012337094918243253,
+          "meanNoiseY": 0
+        },
+        "drawCalls": 1070
+      },
+      {
+        "id": "altar-return",
+        "mode": "playing",
+        "locked": true,
+        "fixedCam": false,
+        "camera": {
+          "position": [
+            30.290680939376788,
+            1.643889100255746,
+            -15.84332048483427
+          ],
+          "rotation": [
+            0.07374982635045538,
+            0.4844383321592932,
+            -0.04103065837218737,
+            0.8707450548361126
+          ],
+          "projection": [
+            1.0803765691798934,
+            0,
+            0,
+            0,
+            0,
+            1.9206694563198103,
+            0,
+            0,
+            0,
+            0,
+            -1.0002623294858344,
+            -1,
+            0,
+            0,
+            -0.16002098635886677,
+            0
+          ]
+        },
+        "simPose": [
+          27.757868492015742,
+          0.45,
+          16.49890916981952,
+          "1F",
+          -1.0160999999999998,
+          -0.16900000000000004
+        ],
+        "sources": {
+          "doors": {
+            "gatehouse": false,
+            "gate": false,
+            "chapelFront": false
+          },
+          "lantern": false,
+          "hearth": false,
+          "lamp": 0,
+          "braziers": {
+            "chapel": 0,
+            "side": 0
+          },
+          "key": 0.72,
+          "exposure": 1
+        },
+        "roi": [
+          0.27,
+          0.14,
+          0.88,
+          0.76
+        ],
+        "full": {
+          "pixels": 921600,
+          "changed": 235911,
+          "repeatChanged": 0,
+          "changedOverNoise": 235911,
+          "brighterOverNoise": 235851,
+          "readableOffPixels": 32512,
+          "visibleGainPixels": 1844,
+          "maxCode": 21,
+          "maxRepeatCode": 0,
+          "meanOffY": 0.011942764593008786,
+          "meanSignedY": 0.0006670947984483416,
+          "meanPositiveY": 0.0006671022836029203,
+          "meanNoiseY": 0
+        },
+        "crop": {
+          "pixels": 347880,
+          "changed": 46746,
+          "repeatChanged": 0,
+          "changedOverNoise": 46746,
+          "brighterOverNoise": 46706,
+          "readableOffPixels": 5201,
+          "visibleGainPixels": 232,
+          "maxCode": 21,
+          "maxRepeatCode": 0,
+          "meanOffY": 0.004869368084338173,
+          "meanSignedY": 0.00039172494594023633,
+          "meanPositiveY": 0.0003917395380601735,
+          "meanNoiseY": 0
+        },
+        "drawCalls": 870
+      },
+      {
+        "id": "night-altar",
+        "mode": "playing",
+        "locked": true,
+        "fixedCam": false,
+        "camera": {
+          "position": [
+            30.29051250854729,
+            1.6440978610380848,
+            -15.847301100508735
+          ],
+          "rotation": [
+            0.07373938441527537,
+            0.48473871291058573,
+            -0.04105818960631376,
+            0.8705774568974876
+          ],
+          "projection": [
+            1.0803765691798934,
+            0,
+            0,
+            0,
+            0,
+            1.9206694563198103,
+            0,
+            0,
+            0,
+            0,
+            -1.0002623294858344,
+            -1,
+            0,
+            0,
+            -0.16002098635886677,
+            0
+          ]
+        },
+        "simPose": [
+          27.757868492015742,
+          0.45,
+          16.49890916981952,
+          "1F",
+          -1.0160999999999998,
+          -0.16900000000000004
+        ],
+        "sources": {
+          "doors": {
+            "gatehouse": false,
+            "gate": false,
+            "chapelFront": false
+          },
+          "lantern": false,
+          "hearth": false,
+          "lamp": 0,
+          "braziers": {
+            "chapel": 0,
+            "side": 0
+          },
+          "key": 1.2,
+          "exposure": 1.15
+        },
+        "roi": [
+          0.27,
+          0.14,
+          0.88,
+          0.76
+        ],
+        "full": {
+          "pixels": 921600,
+          "changed": 0,
+          "repeatChanged": 0,
+          "changedOverNoise": 0,
+          "brighterOverNoise": 0,
+          "readableOffPixels": 23788,
+          "visibleGainPixels": 0,
+          "maxCode": 0,
+          "maxRepeatCode": 0,
+          "meanOffY": 0.0014373799281013667,
+          "meanSignedY": 0,
+          "meanPositiveY": 0,
+          "meanNoiseY": 0
+        },
+        "crop": {
+          "pixels": 347880,
+          "changed": 0,
+          "repeatChanged": 0,
+          "changedOverNoise": 0,
+          "brighterOverNoise": 0,
+          "readableOffPixels": 22562,
+          "visibleGainPixels": 0,
+          "maxCode": 0,
+          "maxRepeatCode": 0,
+          "meanOffY": 0.0030043575928821514,
+          "meanSignedY": 0,
+          "meanPositiveY": 0,
+          "meanNoiseY": 0
+        },
+        "drawCalls": 880
+      },
+      {
+        "id": "sealed-b1",
+        "mode": "playing",
+        "locked": true,
+        "fixedCam": false,
+        "camera": {
+          "position": [
+            17.87658003479842,
+            -0.9716524507479611,
+            -14.620000000000001
+          ],
+          "rotation": [
+            -0.04592958274688536,
+            -0.7056135439663109,
+            -0.04592958274688535,
+            0.7056135439663109
+          ],
+          "projection": [
+            1.0803765691798934,
+            0,
+            0,
+            0,
+            0,
+            1.9206694563198103,
+            0,
+            0,
+            0,
+            0,
+            -1.0002623294858344,
+            -1,
+            0,
+            0,
+            -0.16002098635886677,
+            0
+          ]
+        },
+        "simPose": [
+          21,
+          -3,
+          15.4,
+          "B1",
+          1.5707963267948966,
+          0.13
+        ],
+        "sources": {
+          "doors": {
+            "gatehouse": false,
+            "gate": false,
+            "chapelFront": false
+          },
+          "lantern": false,
+          "hearth": false,
+          "lamp": 0,
+          "braziers": {
+            "chapel": 0,
+            "side": 0
+          },
+          "key": 0.72,
+          "exposure": 1
+        },
+        "roi": null,
+        "full": {
+          "pixels": 921600,
+          "changed": 0,
+          "repeatChanged": 0,
+          "changedOverNoise": 0,
+          "brighterOverNoise": 0,
+          "readableOffPixels": 2,
+          "visibleGainPixels": 0,
+          "maxCode": 0,
+          "maxRepeatCode": 0,
+          "meanOffY": 1.4025520194017558e-06,
+          "meanSignedY": 0,
+          "meanPositiveY": 0,
+          "meanNoiseY": 0
+        },
+        "crop": null,
+        "drawCalls": 503
+      }
+    ],
+    "walks": [
+      {
+        "id": "partition-opening",
+        "target": [
+          16.5,
+          12.7
+        ],
+        "from": [
+          14.4,
+          0.45,
+          16.5,
+          "1F",
+          2.45,
+          0.015
+        ],
+        "to": [
+          16.373468863025295,
+          0.45,
+          12.929032703188163,
+          "1F",
+          2.6363000000000003,
+          0.1001
+        ]
+      },
+      {
+        "id": "to-pews",
+        "target": [
+          20,
+          12.5
+        ],
+        "from": [
+          16.373468863025295,
+          0.45,
+          12.929032703188163,
+          "1F",
+          2.6363000000000003,
+          0.1001
+        ],
+        "to": [
+          19.74000582262602,
+          0.45,
+          12.530881421201112,
+          "1F",
+          1.6864000000000003,
+          0.1001
+        ]
+      },
+      {
+        "id": "central-aisle",
+        "target": [
+          24,
+          16.5
+        ],
+        "from": [
+          19.74000582262602,
+          0.45,
+          12.530881421201112,
+          "1F",
+          1.0102000000000002,
+          -0.1
+        ],
+        "to": [
+          23.737916572205652,
+          0.45,
+          16.479739020667576,
+          "1F",
+          1.4932000000000003,
+          0.1001
+        ]
+      },
+      {
+        "id": "to-altar",
+        "target": [
+          28,
+          16.5
+        ],
+        "from": [
+          23.737916572205652,
+          0.45,
+          16.479739020667576,
+          "1F",
+          4.6143,
+          -0.192
+        ],
+        "to": [
+          27.757868492015742,
+          0.45,
+          16.49890916981952,
+          "1F",
+          1.5645000000000002,
+          0.10009999999999997
+        ]
+      }
+    ]
+  },
+  "cinematic": {
+    "build": "index-CIGoiFz7.js",
+    "quality": "cinematic",
+    "gpu": "ANGLE (Apple, ANGLE Metal Renderer: Apple M3 Max, Unspecified Version)",
+    "viewport": [
+      1280,
+      720
+    ],
+    "ok": true,
+    "stops": [
+      {
+        "id": "vestibule",
+        "mode": "playing",
+        "locked": true,
+        "fixedCam": false,
+        "camera": {
+          "position": [
+            13.539423238737697,
+            2.0761107772675023,
+            -16.31630077428735
+          ],
+          "rotation": [
+            0.0025420709694491364,
+            0.9407793791336772,
+            0.007055977643579503,
+            -0.3389364407252968
+          ],
+          "projection": [
+            1.080552446421281,
+            0,
+            0,
+            0,
+            0,
+            1.920982126971166,
+            0,
+            0,
+            0,
+            0,
+            -1.0002623294858344,
+            -1,
+            0,
+            0,
+            -0.16002098635886677,
+            0
+          ]
+        },
+        "simPose": [
+          14.4,
+          0.45,
+          16.5,
+          "1F",
+          2.45,
+          0.015
+        ],
+        "sources": {
+          "doors": {
+            "gatehouse": false,
+            "gate": false,
+            "chapelFront": false
+          },
+          "lantern": false,
+          "hearth": false,
+          "lamp": 0,
+          "braziers": {
+            "chapel": 0,
+            "side": 0
+          },
+          "key": 0.72,
+          "exposure": 1
+        },
+        "roi": [
+          0.27,
+          0.14,
+          0.88,
+          0.76
+        ],
+        "full": {
+          "pixels": 921600,
+          "changed": 820954,
+          "repeatChanged": 0,
+          "changedOverNoise": 820954,
+          "brighterOverNoise": 820177,
+          "readableOffPixels": 62522,
+          "visibleGainPixels": 37615,
+          "maxCode": 25,
+          "maxRepeatCode": 0,
+          "meanOffY": 0.007619430644575311,
+          "meanSignedY": 0.0011097624265209425,
+          "meanPositiveY": 0.0011099470157307479,
+          "meanNoiseY": 0
+        },
+        "crop": {
+          "pixels": 347880,
+          "changed": 329873,
+          "repeatChanged": 0,
+          "changedOverNoise": 329873,
+          "brighterOverNoise": 329561,
+          "readableOffPixels": 19972,
+          "visibleGainPixels": 20479,
+          "maxCode": 25,
+          "maxRepeatCode": 0,
+          "meanOffY": 0.008016688841856525,
+          "meanSignedY": 0.0013913928914700156,
+          "meanPositiveY": 0.0013917065240869316,
+          "meanNoiseY": 0
+        },
+        "drawCalls": 520,
+        "timing": {
+          "samples": 32,
+          "medianMs": 16.69999999999891,
+          "p95Ms": 16.700000000000728,
+          "calls": 520
+        }
+      },
+      {
+        "id": "pews",
+        "mode": "playing",
+        "locked": true,
+        "fixedCam": false,
+        "camera": {
+          "position": [
+            18.97869945227795,
+            1.9307198098606784,
+            -11.132228590708237
+          ],
+          "rotation": [
+            0.04373676453491191,
+            -0.48331854223243564,
+            0.024185793443135074,
+            0.8740167787622026
+          ],
+          "projection": [
+            1.080377058361253,
+            0,
+            0,
+            0,
+            0,
+            1.9206703259755609,
+            0,
+            0,
+            0,
+            0,
+            -1.0002623294858344,
+            -1,
+            0,
+            0,
+            -0.16002098635886677,
+            0
+          ]
+        },
+        "simPose": [
+          19.739884991378478,
+          0.45,
+          12.530814759358787,
+          "1F",
+          1.0102000000000002,
+          -0.1
+        ],
+        "sources": {
+          "doors": {
+            "gatehouse": false,
+            "gate": false,
+            "chapelFront": false
+          },
+          "lantern": false,
+          "hearth": false,
+          "lamp": 0,
+          "braziers": {
+            "chapel": 0,
+            "side": 0
+          },
+          "key": 0.72,
+          "exposure": 1
+        },
+        "roi": [
+          0.27,
+          0.14,
+          0.88,
+          0.76
+        ],
+        "full": {
+          "pixels": 921600,
+          "changed": 879547,
+          "repeatChanged": 0,
+          "changedOverNoise": 879547,
+          "brighterOverNoise": 865081,
+          "readableOffPixels": 77871,
+          "visibleGainPixels": 270176,
+          "maxCode": 30,
+          "maxRepeatCode": 0,
+          "meanOffY": 0.012970902769674303,
+          "meanSignedY": 0.004863413594055432,
+          "meanPositiveY": 0.005373699525724334,
+          "meanNoiseY": 0
+        },
+        "crop": {
+          "pixels": 347880,
+          "changed": 346968,
+          "repeatChanged": 0,
+          "changedOverNoise": 346968,
+          "brighterOverNoise": 344800,
+          "readableOffPixels": 26221,
+          "visibleGainPixels": 131905,
+          "maxCode": 30,
+          "maxRepeatCode": 0,
+          "meanOffY": 0.010516609867150539,
+          "meanSignedY": 0.006038933978323264,
+          "meanPositiveY": 0.006238356814703267,
+          "meanNoiseY": 0
+        },
+        "drawCalls": 550,
+        "timing": {
+          "samples": 32,
+          "medianMs": 16.700000000000728,
+          "p95Ms": 16.799999999999272,
+          "calls": 550
+        }
+      },
+      {
+        "id": "altar-approach",
+        "mode": "playing",
+        "locked": true,
+        "fixedCam": false,
+        "camera": {
+          "position": [
+            20.674812010538613,
+            2.1969132771264435,
+            -15.41570365329424
+          ],
+          "rotation": [
+            -0.014883332102197196,
+            -0.6739302757790385,
+            -0.013581658050955878,
+            0.7385201475779193
+          ],
+          "projection": [
+            1.0803767079608981,
+            0,
+            0,
+            0,
+            0,
+            1.9206697030415967,
+            0,
+            0,
+            0,
+            0,
+            -1.0002623294858344,
+            -1,
+            0,
+            0,
+            -0.16002098635886677,
+            0
+          ]
+        },
+        "simPose": [
+          23.737930776425376,
+          0.45,
+          16.47970080903059,
+          "1F",
+          1.4794000000000003,
+          0.040299999999999996
+        ],
+        "sources": {
+          "doors": {
+            "gatehouse": false,
+            "gate": false,
+            "chapelFront": false
+          },
+          "lantern": false,
+          "hearth": false,
+          "lamp": 0,
+          "braziers": {
+            "chapel": 0,
+            "side": 0
+          },
+          "key": 0.72,
+          "exposure": 1
+        },
+        "roi": [
+          0.27,
+          0.14,
+          0.88,
+          0.76
+        ],
+        "full": {
+          "pixels": 921600,
+          "changed": 914633,
+          "repeatChanged": 0,
+          "changedOverNoise": 914633,
+          "brighterOverNoise": 914387,
+          "readableOffPixels": 35833,
+          "visibleGainPixels": 100315,
+          "maxCode": 23,
+          "maxRepeatCode": 0,
+          "meanOffY": 0.00711937632542038,
+          "meanSignedY": 0.0026503205697987974,
+          "meanPositiveY": 0.002650420309618305,
+          "meanNoiseY": 0
+        },
+        "crop": {
+          "pixels": 347880,
+          "changed": 347783,
+          "repeatChanged": 0,
+          "changedOverNoise": 347783,
+          "brighterOverNoise": 347779,
+          "readableOffPixels": 16156,
+          "visibleGainPixels": 46583,
+          "maxCode": 23,
+          "maxRepeatCode": 0,
+          "meanOffY": 0.007803867699484804,
+          "meanSignedY": 0.0028824848689565246,
+          "meanPositiveY": 0.002882487382122976,
+          "meanNoiseY": 0
+        },
+        "drawCalls": 490,
+        "timing": {
+          "samples": 32,
+          "medianMs": 16.700000000000728,
+          "p95Ms": 16.80000000000291,
+          "calls": 490
+        }
+      },
+      {
+        "id": "nave",
+        "mode": "playing",
+        "locked": true,
+        "fixedCam": false,
+        "camera": {
+          "position": [
+            26.73708324488465,
+            1.4689091697032288,
+            -17.5634768599329
+          ],
+          "rotation": [
+            0.06434648099262796,
+            0.7378023371088761,
+            -0.07105163593989669,
+            0.6681758052869096
+          ],
+          "projection": [
+            1.0803767079608981,
+            0,
+            0,
+            0,
+            0,
+            1.9206697030415967,
+            0,
+            0,
+            0,
+            0,
+            -1.0002623294858344,
+            -1,
+            0,
+            0,
+            -0.16002098635886677,
+            0
+          ]
+        },
+        "simPose": [
+          23.737930776425376,
+          0.45,
+          16.47970080903059,
+          "1F",
+          4.6143,
+          -0.192
+        ],
+        "sources": {
+          "doors": {
+            "gatehouse": false,
+            "gate": false,
+            "chapelFront": false
+          },
+          "lantern": false,
+          "hearth": false,
+          "lamp": 0,
+          "braziers": {
+            "chapel": 0,
+            "side": 0
+          },
+          "key": 0.72,
+          "exposure": 1
+        },
+        "roi": [
+          0.27,
+          0.14,
+          0.88,
+          0.76
+        ],
+        "full": {
+          "pixels": 921600,
+          "changed": 921058,
+          "repeatChanged": 0,
+          "changedOverNoise": 921058,
+          "brighterOverNoise": 898167,
+          "readableOffPixels": 100031,
+          "visibleGainPixels": 197129,
+          "maxCode": 69,
+          "maxRepeatCode": 0,
+          "meanOffY": 0.019012923572757502,
+          "meanSignedY": 0.005653500255335797,
+          "meanPositiveY": 0.006319448757104502,
+          "meanNoiseY": 0
+        },
+        "crop": {
+          "pixels": 347880,
+          "changed": 347543,
+          "repeatChanged": 0,
+          "changedOverNoise": 347543,
+          "brighterOverNoise": 333644,
+          "readableOffPixels": 62116,
+          "visibleGainPixels": 114503,
+          "maxCode": 69,
+          "maxRepeatCode": 0,
+          "meanOffY": 0.030617450132732094,
+          "meanSignedY": 0.008550536835939098,
+          "meanPositiveY": 0.009644862747023782,
+          "meanNoiseY": 0
+        },
+        "drawCalls": 1069,
+        "timing": {
+          "samples": 32,
+          "medianMs": 16.69999999999709,
+          "p95Ms": 16.700000000000728,
+          "calls": 1069
+        }
+      },
+      {
+        "id": "altar-return",
+        "mode": "playing",
+        "locked": true,
+        "fixedCam": false,
+        "camera": {
+          "position": [
+            30.29061578928333,
+            1.6439740170131372,
+            -15.84484784429634
+          ],
+          "rotation": [
+            0.07374572805348638,
+            0.48455573555920206,
+            -0.041041408146479226,
+            0.8706795676641873
+          ],
+          "projection": [
+            1.0803765648173296,
+            0,
+            0,
+            0,
+            0,
+            1.9206694485641416,
+            0,
+            0,
+            0,
+            0,
+            -1.0002623294858344,
+            -1,
+            0,
+            0,
+            -0.16002098635886677,
+            0
+          ]
+        },
+        "simPose": [
+          27.757882696235466,
+          0.45,
+          16.498870958182533,
+          "1F",
+          -1.0160999999999998,
+          -0.16900000000000004
+        ],
+        "sources": {
+          "doors": {
+            "gatehouse": false,
+            "gate": false,
+            "chapelFront": false
+          },
+          "lantern": false,
+          "hearth": false,
+          "lamp": 0,
+          "braziers": {
+            "chapel": 0,
+            "side": 0
+          },
+          "key": 0.72,
+          "exposure": 1
+        },
+        "roi": [
+          0.27,
+          0.14,
+          0.88,
+          0.76
+        ],
+        "full": {
+          "pixels": 921600,
+          "changed": 759719,
+          "repeatChanged": 0,
+          "changedOverNoise": 759719,
+          "brighterOverNoise": 731236,
+          "readableOffPixels": 115913,
+          "visibleGainPixels": 161493,
+          "maxCode": 62,
+          "maxRepeatCode": 0,
+          "meanOffY": 0.017960594622707538,
+          "meanSignedY": 0.003744682263050279,
+          "meanPositiveY": 0.0046483228497377314,
+          "meanNoiseY": 0
+        },
+        "crop": {
+          "pixels": 347880,
+          "changed": 334690,
+          "repeatChanged": 0,
+          "changedOverNoise": 334690,
+          "brighterOverNoise": 330676,
+          "readableOffPixels": 45045,
+          "visibleGainPixels": 40088,
+          "maxCode": 49,
+          "maxRepeatCode": 0,
+          "meanOffY": 0.009967719366418106,
+          "meanSignedY": 0.002714112202006874,
+          "meanPositiveY": 0.0032492145671407743,
+          "meanNoiseY": 0
+        },
+        "drawCalls": 869,
+        "timing": {
+          "samples": 32,
+          "medianMs": 16.700000000000728,
+          "p95Ms": 16.799999999999272,
+          "calls": 869
+        }
+      },
+      {
+        "id": "day-air-no-sources",
+        "mode": "playing",
+        "locked": true,
+        "fixedCam": false,
+        "camera": {
+          "position": [
+            30.290512501843786,
+            1.6441007202662201,
+            -15.847271845409058
+          ],
+          "rotation": [
+            0.07373938400843517,
+            0.4847387246844383,
+            -0.04105819068700827,
+            0.8705774503252828
+          ],
+          "projection": [
+            1.0803765648173296,
+            0,
+            0,
+            0,
+            0,
+            1.9206694485641416,
+            0,
+            0,
+            0,
+            0,
+            -1.0002623294858344,
+            -1,
+            0,
+            0,
+            -0.16002098635886677,
+            0
+          ]
+        },
+        "simPose": [
+          27.757882696235466,
+          0.45,
+          16.498870958182533,
+          "1F",
+          -1.0160999999999998,
+          -0.16900000000000004
+        ],
+        "sources": {
+          "doors": {
+            "gatehouse": false,
+            "gate": false,
+            "chapelFront": false
+          },
+          "lantern": false,
+          "hearth": false,
+          "lamp": 0,
+          "braziers": {
+            "chapel": 0,
+            "side": 0
+          },
+          "key": 0.72,
+          "exposure": 1
+        },
+        "roi": [
+          0.27,
+          0.14,
+          0.88,
+          0.76
+        ],
+        "full": {
+          "pixels": 921600,
+          "changed": 544484,
+          "repeatChanged": 0,
+          "changedOverNoise": 544484,
+          "brighterOverNoise": 260,
+          "readableOffPixels": 116061,
+          "visibleGainPixels": 0,
+          "maxCode": 22,
+          "maxRepeatCode": 0,
+          "meanOffY": 0.017937565799747528,
+          "meanSignedY": -0.0030901491180202988,
+          "meanPositiveY": 4.6919493132160373e-08,
+          "meanNoiseY": 0
+        },
+        "crop": {
+          "pixels": 347880,
+          "changed": 203345,
+          "repeatChanged": 0,
+          "changedOverNoise": 203345,
+          "brighterOverNoise": 95,
+          "readableOffPixels": 44985,
+          "visibleGainPixels": 0,
+          "maxCode": 22,
+          "maxRepeatCode": 0,
+          "meanOffY": 0.009923634285166249,
+          "meanSignedY": -0.0016270604087785124,
+          "meanPositiveY": 4.485946477645093e-08,
+          "meanNoiseY": 0
+        },
+        "drawCalls": 869
+      },
+      {
+        "id": "night-altar",
+        "mode": "playing",
+        "locked": true,
+        "fixedCam": false,
+        "camera": {
+          "position": [
+            30.290512500789585,
+            1.644100721540099,
+            -15.847271869911475
+          ],
+          "rotation": [
+            0.0737393839444714,
+            0.4847387265358249,
+            -0.04105819085694839,
+            0.8705774492918312
+          ],
+          "projection": [
+            1.0803765648173296,
+            0,
+            0,
+            0,
+            0,
+            1.9206694485641416,
+            0,
+            0,
+            0,
+            0,
+            -1.0002623294858344,
+            -1,
+            0,
+            0,
+            -0.16002098635886677,
+            0
+          ]
+        },
+        "simPose": [
+          27.757882696235466,
+          0.45,
+          16.498870958182533,
+          "1F",
+          -1.0160999999999998,
+          -0.16900000000000004
+        ],
+        "sources": {
+          "doors": {
+            "gatehouse": false,
+            "gate": false,
+            "chapelFront": false
+          },
+          "lantern": false,
+          "hearth": false,
+          "lamp": 0,
+          "braziers": {
+            "chapel": 0,
+            "side": 0
+          },
+          "key": 1.2,
+          "exposure": 1.15
+        },
+        "roi": [
+          0.27,
+          0.14,
+          0.88,
+          0.76
+        ],
+        "full": {
+          "pixels": 921600,
+          "changed": 0,
+          "repeatChanged": 0,
+          "changedOverNoise": 0,
+          "brighterOverNoise": 0,
+          "readableOffPixels": 9330,
+          "visibleGainPixels": 0,
+          "maxCode": 0,
+          "maxRepeatCode": 0,
+          "meanOffY": 0.0008232341416667525,
+          "meanSignedY": 0,
+          "meanPositiveY": 0,
+          "meanNoiseY": 0
+        },
+        "crop": {
+          "pixels": 347880,
+          "changed": 0,
+          "repeatChanged": 0,
+          "changedOverNoise": 0,
+          "brighterOverNoise": 0,
+          "readableOffPixels": 7955,
+          "visibleGainPixels": 0,
+          "maxCode": 0,
+          "maxRepeatCode": 0,
+          "meanOffY": 0.001362776717428725,
+          "meanSignedY": 0,
+          "meanPositiveY": 0,
+          "meanNoiseY": 0
+        },
+        "drawCalls": 879
+      },
+      {
+        "id": "sealed-b1",
+        "mode": "playing",
+        "locked": true,
+        "fixedCam": false,
+        "camera": {
+          "position": [
+            17.87658003479842,
+            -0.9716524507479611,
+            -14.620000000000001
+          ],
+          "rotation": [
+            -0.04592958274688536,
+            -0.7056135439663109,
+            -0.04592958274688535,
+            0.7056135439663109
+          ],
+          "projection": [
+            1.0803765648173296,
+            0,
+            0,
+            0,
+            0,
+            1.9206694485641416,
+            0,
+            0,
+            0,
+            0,
+            -1.0002623294858344,
+            -1,
+            0,
+            0,
+            -0.16002098635886677,
+            0
+          ]
+        },
+        "simPose": [
+          21,
+          -3,
+          15.4,
+          "B1",
+          1.5707963267948966,
+          0.13
+        ],
+        "sources": {
+          "doors": {
+            "gatehouse": false,
+            "gate": false,
+            "chapelFront": false
+          },
+          "lantern": false,
+          "hearth": false,
+          "lamp": 0,
+          "braziers": {
+            "chapel": 0,
+            "side": 0
+          },
+          "key": 0.72,
+          "exposure": 1
+        },
+        "roi": null,
+        "full": {
+          "pixels": 921600,
+          "changed": 0,
+          "repeatChanged": 0,
+          "changedOverNoise": 0,
+          "brighterOverNoise": 0,
+          "readableOffPixels": 0,
+          "visibleGainPixels": 0,
+          "maxCode": 0,
+          "maxRepeatCode": 0,
+          "meanOffY": 3.8032255130418404e-06,
+          "meanSignedY": 0,
+          "meanPositiveY": 0,
+          "meanNoiseY": 0
+        },
+        "crop": null,
+        "drawCalls": 502
+      }
+    ],
+    "walks": [
+      {
+        "id": "partition-opening",
+        "target": [
+          16.5,
+          12.7
+        ],
+        "from": [
+          14.4,
+          0.45,
+          16.5,
+          "1F",
+          2.45,
+          0.015
+        ],
+        "to": [
+          16.373348031777752,
+          0.45,
+          12.928966041345838,
+          "1F",
+          2.6386000000000003,
+          0.1001
+        ]
+      },
+      {
+        "id": "to-pews",
+        "target": [
+          20,
+          12.5
+        ],
+        "from": [
+          16.373348031777752,
+          0.45,
+          12.928966041345838,
+          "1F",
+          2.6386000000000003,
+          0.1001
+        ],
+        "to": [
+          19.739884991378478,
+          0.45,
+          12.530814759358787,
+          "1F",
+          1.6887000000000003,
+          0.1001
+        ]
+      },
+      {
+        "id": "central-aisle",
+        "target": [
+          24,
+          16.5
+        ],
+        "from": [
+          19.739884991378478,
+          0.45,
+          12.530814759358787,
+          "1F",
+          1.0102000000000002,
+          -0.1
+        ],
+        "to": [
+          23.737930776425376,
+          0.45,
+          16.47970080903059,
+          "1F",
+          1.4932000000000003,
+          0.1001
+        ]
+      },
+      {
+        "id": "to-altar",
+        "target": [
+          28,
+          16.5
+        ],
+        "from": [
+          23.737930776425376,
+          0.45,
+          16.47970080903059,
+          "1F",
+          4.6143,
+          -0.192
+        ],
+        "to": [
+          27.757882696235466,
+          0.45,
+          16.498870958182533,
+          "1F",
+          1.5668000000000002,
+          0.10009999999999997
+        ]
+      }
+    ]
+  },
+  "high": {
+    "build": "index-CIGoiFz7.js",
+    "quality": "high",
+    "gpu": "ANGLE (Apple, ANGLE Metal Renderer: Apple M3 Max, Unspecified Version)",
+    "viewport": [
+      1280,
+      720
+    ],
+    "ok": true,
+    "stops": [
+      {
+        "id": "vestibule",
+        "mode": "playing",
+        "locked": true,
+        "fixedCam": false,
+        "camera": {
+          "position": [
+            13.539423238737697,
+            2.0761107772675023,
+            -16.31630077428735
+          ],
+          "rotation": [
+            0.0025420709694491364,
+            0.9407793791336772,
+            0.007055977643579503,
+            -0.3389364407252968
+          ],
+          "projection": [
+            1.080552446421281,
+            0,
+            0,
+            0,
+            0,
+            1.920982126971166,
+            0,
+            0,
+            0,
+            0,
+            -1.0002623294858344,
+            -1,
+            0,
+            0,
+            -0.16002098635886677,
+            0
+          ]
+        },
+        "simPose": [
+          14.4,
+          0.45,
+          16.5,
+          "1F",
+          2.45,
+          0.015
+        ],
+        "sources": {
+          "doors": {
+            "gatehouse": false,
+            "gate": false,
+            "chapelFront": false
+          },
+          "lantern": false,
+          "hearth": false,
+          "lamp": 0,
+          "braziers": {
+            "chapel": 0,
+            "side": 0
+          },
+          "key": 0.72,
+          "exposure": 1
+        },
+        "roi": [
+          0.27,
+          0.14,
+          0.88,
+          0.76
+        ],
+        "full": {
+          "pixels": 921600,
+          "changed": 821408,
+          "repeatChanged": 0,
+          "changedOverNoise": 821408,
+          "brighterOverNoise": 820557,
+          "readableOffPixels": 64045,
+          "visibleGainPixels": 33981,
+          "maxCode": 25,
+          "maxRepeatCode": 0,
+          "meanOffY": 0.007647503605969114,
+          "meanSignedY": 0.0010926595838165354,
+          "meanPositiveY": 0.0010929097522153544,
+          "meanNoiseY": 0
+        },
+        "crop": {
+          "pixels": 347880,
+          "changed": 329885,
+          "repeatChanged": 0,
+          "changedOverNoise": 329885,
+          "brighterOverNoise": 329546,
+          "readableOffPixels": 20537,
+          "visibleGainPixels": 19027,
+          "maxCode": 25,
+          "maxRepeatCode": 0,
+          "meanOffY": 0.008046995423636323,
+          "meanSignedY": 0.0013784850669854,
+          "meanPositiveY": 0.0013788284466099518,
+          "meanNoiseY": 0
+        },
+        "drawCalls": 412,
+        "timing": {
+          "samples": 32,
+          "medianMs": 16.69999999999891,
+          "p95Ms": 16.700000000000728,
+          "calls": 412
+        }
+      },
+      {
+        "id": "pews",
+        "mode": "playing",
+        "locked": true,
+        "fixedCam": false,
+        "camera": {
+          "position": [
+            19.00144904640853,
+            1.9313968230456269,
+            -11.132217612022561
+          ],
+          "rotation": [
+            0.04373623289258222,
+            -0.4833288403619096,
+            0.024186171918637405,
+            0.8740111000981049
+          ],
+          "projection": [
+            1.080376884694748,
+            0,
+            0,
+            0,
+            0,
+            1.9206700172351074,
+            0,
+            0,
+            0,
+            0,
+            -1.0002623294858344,
+            -1,
+            0,
+            0,
+            -0.16002098635886677,
+            0
+          ]
+        },
+        "simPose": [
+          19.757004951278784,
+          0.45,
+          12.527185021453302,
+          "1F",
+          1.0102000000000004,
+          -0.1
+        ],
+        "sources": {
+          "doors": {
+            "gatehouse": false,
+            "gate": false,
+            "chapelFront": false
+          },
+          "lantern": false,
+          "hearth": false,
+          "lamp": 0,
+          "braziers": {
+            "chapel": 0,
+            "side": 0
+          },
+          "key": 0.72,
+          "exposure": 1
+        },
+        "roi": [
+          0.27,
+          0.14,
+          0.88,
+          0.76
+        ],
+        "full": {
+          "pixels": 921600,
+          "changed": 885404,
+          "repeatChanged": 0,
+          "changedOverNoise": 885404,
+          "brighterOverNoise": 871067,
+          "readableOffPixels": 78068,
+          "visibleGainPixels": 292812,
+          "maxCode": 34,
+          "maxRepeatCode": 0,
+          "meanOffY": 0.012962791644873533,
+          "meanSignedY": 0.005215006789662135,
+          "meanPositiveY": 0.00570315284684664,
+          "meanNoiseY": 0
+        },
+        "crop": {
+          "pixels": 347880,
+          "changed": 346997,
+          "repeatChanged": 0,
+          "changedOverNoise": 346997,
+          "brighterOverNoise": 344841,
+          "readableOffPixels": 26212,
+          "visibleGainPixels": 143547,
+          "maxCode": 34,
+          "maxRepeatCode": 0,
+          "meanOffY": 0.010486472772440913,
+          "meanSignedY": 0.006585502486596221,
+          "meanPositiveY": 0.006771650496011952,
+          "meanNoiseY": 0
+        },
+        "drawCalls": 436,
+        "timing": {
+          "samples": 32,
+          "medianMs": 16.69999999999891,
+          "p95Ms": 16.80000000000109,
+          "calls": 436
+        }
+      },
+      {
+        "id": "altar-approach",
+        "mode": "playing",
+        "locked": true,
+        "fixedCam": false,
+        "camera": {
+          "position": [
+            20.67745791739403,
+            2.196913277609977,
+            -15.41555451646667
+          ],
+          "rotation": [
+            -0.014883332106428181,
+            -0.6739302756392488,
+            -0.013581658049654843,
+            0.7385201477054218
+          ],
+          "projection": [
+            1.080376742216486,
+            0,
+            0,
+            0,
+            0,
+            1.9206697639404193,
+            0,
+            0,
+            0,
+            0,
+            -1.0002623294858344,
+            -1,
+            0,
+            0,
+            -0.16002098635886677,
+            0
+          ]
+        },
+        "simPose": [
+          23.74057669370479,
+          0.45,
+          16.479551675234575,
+          "1F",
+          1.4794000000000003,
+          0.040299999999999996
+        ],
+        "sources": {
+          "doors": {
+            "gatehouse": false,
+            "gate": false,
+            "chapelFront": false
+          },
+          "lantern": false,
+          "hearth": false,
+          "lamp": 0,
+          "braziers": {
+            "chapel": 0,
+            "side": 0
+          },
+          "key": 0.72,
+          "exposure": 1
+        },
+        "roi": [
+          0.27,
+          0.14,
+          0.88,
+          0.76
+        ],
+        "full": {
+          "pixels": 921600,
+          "changed": 914521,
+          "repeatChanged": 0,
+          "changedOverNoise": 914521,
+          "brighterOverNoise": 914287,
+          "readableOffPixels": 35925,
+          "visibleGainPixels": 100719,
+          "maxCode": 23,
+          "maxRepeatCode": 0,
+          "meanOffY": 0.00712231718163607,
+          "meanSignedY": 0.002652522806124678,
+          "meanPositiveY": 0.0026526318306042225,
+          "meanNoiseY": 0
+        },
+        "crop": {
+          "pixels": 347880,
+          "changed": 347728,
+          "repeatChanged": 0,
+          "changedOverNoise": 347728,
+          "brighterOverNoise": 347718,
+          "readableOffPixels": 16239,
+          "visibleGainPixels": 47071,
+          "maxCode": 23,
+          "maxRepeatCode": 0,
+          "meanOffY": 0.007811868296104071,
+          "meanSignedY": 0.002897528947454058,
+          "meanPositiveY": 0.002897586105383761,
+          "meanNoiseY": 0
+        },
+        "drawCalls": 395,
+        "timing": {
+          "samples": 32,
+          "medianMs": 16.700000000000728,
+          "p95Ms": 16.700000000000728,
+          "calls": 395
+        }
+      },
+      {
+        "id": "nave",
+        "mode": "playing",
+        "locked": true,
+        "fixedCam": false,
+        "camera": {
+          "position": [
+            26.739729191111984,
+            1.4689091696784873,
+            -17.56332767601588
+          ],
+          "rotation": [
+            0.06434648119637443,
+            0.7378023351492441,
+            -0.07105163574595684,
+            0.6681758074517448
+          ],
+          "projection": [
+            1.080376742216486,
+            0,
+            0,
+            0,
+            0,
+            1.9206697639404193,
+            0,
+            0,
+            0,
+            0,
+            -1.0002623294858344,
+            -1,
+            0,
+            0,
+            -0.16002098635886677,
+            0
+          ]
+        },
+        "simPose": [
+          23.74057669370479,
+          0.45,
+          16.479551675234575,
+          "1F",
+          4.6143,
+          -0.192
+        ],
+        "sources": {
+          "doors": {
+            "gatehouse": false,
+            "gate": false,
+            "chapelFront": false
+          },
+          "lantern": false,
+          "hearth": false,
+          "lamp": 0,
+          "braziers": {
+            "chapel": 0,
+            "side": 0
+          },
+          "key": 0.72,
+          "exposure": 1
+        },
+        "roi": [
+          0.27,
+          0.14,
+          0.88,
+          0.76
+        ],
+        "full": {
+          "pixels": 921600,
+          "changed": 921066,
+          "repeatChanged": 0,
+          "changedOverNoise": 921066,
+          "brighterOverNoise": 894368,
+          "readableOffPixels": 100036,
+          "visibleGainPixels": 195425,
+          "maxCode": 56,
+          "maxRepeatCode": 0,
+          "meanOffY": 0.019009315092033012,
+          "meanSignedY": 0.004602743866868242,
+          "meanPositiveY": 0.005487092278934125,
+          "meanNoiseY": 0
+        },
+        "crop": {
+          "pixels": 347880,
+          "changed": 347639,
+          "repeatChanged": 0,
+          "changedOverNoise": 347639,
+          "brighterOverNoise": 330655,
+          "readableOffPixels": 62059,
+          "visibleGainPixels": 114284,
+          "maxCode": 56,
+          "maxRepeatCode": 0,
+          "meanOffY": 0.030620536642968474,
+          "meanSignedY": 0.0067525188075387,
+          "meanPositiveY": 0.00818357420727019,
+          "meanNoiseY": 0
+        },
+        "drawCalls": 783,
+        "timing": {
+          "samples": 32,
+          "medianMs": 16.69999999999709,
+          "p95Ms": 16.799999999999272,
+          "calls": 783
+        }
+      },
+      {
+        "id": "altar-return",
+        "mode": "playing",
+        "locked": true,
+        "fixedCam": false,
+        "camera": {
+          "position": [
+            30.290680955434105,
+            1.6444232719289682,
+            -15.844992521907436
+          ],
+          "rotation": [
+            0.07374982027778643,
+            0.48443843520697755,
+            -0.041030666416646634,
+            0.8707449976408794
+          ],
+          "projection": [
+            1.0803764608695179,
+            0,
+            0,
+            0,
+            0,
+            1.9206692637680316,
+            0,
+            0,
+            0,
+            0,
+            -1.0002623294858344,
+            -1,
+            0,
+            0,
+            -0.16002098635886677,
+            0
+          ]
+        },
+        "simPose": [
+          27.760527548230165,
+          0.45,
+          16.498928821599733,
+          "1F",
+          -1.0160999999999998,
+          -0.16900000000000004
+        ],
+        "sources": {
+          "doors": {
+            "gatehouse": false,
+            "gate": false,
+            "chapelFront": false
+          },
+          "lantern": false,
+          "hearth": false,
+          "lamp": 0,
+          "braziers": {
+            "chapel": 0,
+            "side": 0
+          },
+          "key": 0.72,
+          "exposure": 1
+        },
+        "roi": [
+          0.27,
+          0.14,
+          0.88,
+          0.76
+        ],
+        "full": {
+          "pixels": 921600,
+          "changed": 761159,
+          "repeatChanged": 0,
+          "changedOverNoise": 761159,
+          "brighterOverNoise": 731980,
+          "readableOffPixels": 116509,
+          "visibleGainPixels": 170435,
+          "maxCode": 49,
+          "maxRepeatCode": 0,
+          "meanOffY": 0.01795643161381771,
+          "meanSignedY": 0.002859252479971827,
+          "meanPositiveY": 0.004011380394511718,
+          "meanNoiseY": 0
+        },
+        "crop": {
+          "pixels": 347880,
+          "changed": 335490,
+          "repeatChanged": 0,
+          "changedOverNoise": 335490,
+          "brighterOverNoise": 331513,
+          "readableOffPixels": 45264,
+          "visibleGainPixels": 52457,
+          "maxCode": 40,
+          "maxRepeatCode": 0,
+          "meanOffY": 0.00995001898387181,
+          "meanSignedY": 0.0029090480755309613,
+          "meanPositiveY": 0.0034311934660394023,
+          "meanNoiseY": 0
+        },
+        "drawCalls": 650,
+        "timing": {
+          "samples": 32,
+          "medianMs": 16.700000000000728,
+          "p95Ms": 16.700000000000728,
+          "calls": 650
+        }
+      },
+      {
+        "id": "day-air-no-sources",
+        "mode": "playing",
+        "locked": true,
+        "fixedCam": false,
+        "camera": {
+          "position": [
+            30.290512504159977,
+            1.6446316027626082,
+            -15.848968367262197
+          ],
+          "rotation": [
+            0.0737393841488237,
+            0.48473872061912565,
+            -0.041058190313814066,
+            0.8705774525945638
+          ],
+          "projection": [
+            1.0803764608695179,
+            0,
+            0,
+            0,
+            0,
+            1.9206692637680316,
+            0,
+            0,
+            0,
+            0,
+            -1.0002623294858344,
+            -1,
+            0,
+            0,
+            -0.16002098635886677,
+            0
+          ]
+        },
+        "simPose": [
+          27.760527548230165,
+          0.45,
+          16.498928821599733,
+          "1F",
+          -1.0160999999999998,
+          -0.16900000000000004
+        ],
+        "sources": {
+          "doors": {
+            "gatehouse": false,
+            "gate": false,
+            "chapelFront": false
+          },
+          "lantern": false,
+          "hearth": false,
+          "lamp": 0,
+          "braziers": {
+            "chapel": 0,
+            "side": 0
+          },
+          "key": 0.72,
+          "exposure": 1
+        },
+        "roi": [
+          0.27,
+          0.14,
+          0.88,
+          0.76
+        ],
+        "full": {
+          "pixels": 921600,
+          "changed": 544863,
+          "repeatChanged": 0,
+          "changedOverNoise": 544863,
+          "brighterOverNoise": 129,
+          "readableOffPixels": 116209,
+          "visibleGainPixels": 0,
+          "maxCode": 23,
+          "maxRepeatCode": 0,
+          "meanOffY": 0.017925094474738765,
+          "meanSignedY": -0.0030906495849948854,
+          "meanPositiveY": 2.316007109287012e-08,
+          "meanNoiseY": 0
+        },
+        "crop": {
+          "pixels": 347880,
+          "changed": 203541,
+          "repeatChanged": 0,
+          "changedOverNoise": 203541,
+          "brighterOverNoise": 33,
+          "readableOffPixels": 45064,
+          "visibleGainPixels": 0,
+          "maxCode": 23,
+          "maxRepeatCode": 0,
+          "meanOffY": 0.00988243904734684,
+          "meanSignedY": -0.0016213617498934154,
+          "meanPositiveY": 1.4466661637194397e-08,
+          "meanNoiseY": 0
+        },
+        "drawCalls": 650
+      },
+      {
+        "id": "night-altar",
+        "mode": "playing",
+        "locked": true,
+        "fixedCam": false,
+        "camera": {
+          "position": [
+            30.290512500789685,
+            1.6446316068266136,
+            -15.84896844550138
+          ],
+          "rotation": [
+            0.07373938394447781,
+            0.48473872653564026,
+            -0.04105819085693145,
+            0.8705774492919341
+          ],
+          "projection": [
+            1.0803764608695179,
+            0,
+            0,
+            0,
+            0,
+            1.9206692637680316,
+            0,
+            0,
+            0,
+            0,
+            -1.0002623294858344,
+            -1,
+            0,
+            0,
+            -0.16002098635886677,
+            0
+          ]
+        },
+        "simPose": [
+          27.760527548230165,
+          0.45,
+          16.498928821599733,
+          "1F",
+          -1.0160999999999998,
+          -0.16900000000000004
+        ],
+        "sources": {
+          "doors": {
+            "gatehouse": false,
+            "gate": false,
+            "chapelFront": false
+          },
+          "lantern": false,
+          "hearth": false,
+          "lamp": 0,
+          "braziers": {
+            "chapel": 0,
+            "side": 0
+          },
+          "key": 1.2,
+          "exposure": 1.15
+        },
+        "roi": [
+          0.27,
+          0.14,
+          0.88,
+          0.76
+        ],
+        "full": {
+          "pixels": 921600,
+          "changed": 0,
+          "repeatChanged": 0,
+          "changedOverNoise": 0,
+          "brighterOverNoise": 0,
+          "readableOffPixels": 17577,
+          "visibleGainPixels": 0,
+          "maxCode": 0,
+          "maxRepeatCode": 0,
+          "meanOffY": 0.0010430016302826564,
+          "meanSignedY": 0,
+          "meanPositiveY": 0,
+          "meanNoiseY": 0
+        },
+        "crop": {
+          "pixels": 347880,
+          "changed": 0,
+          "repeatChanged": 0,
+          "changedOverNoise": 0,
+          "brighterOverNoise": 0,
+          "readableOffPixels": 16195,
+          "visibleGainPixels": 0,
+          "maxCode": 0,
+          "maxRepeatCode": 0,
+          "meanOffY": 0.0019452780561702995,
+          "meanSignedY": 0,
+          "meanPositiveY": 0,
+          "meanNoiseY": 0
+        },
+        "drawCalls": 657
+      },
+      {
+        "id": "sealed-b1",
+        "mode": "playing",
+        "locked": true,
+        "fixedCam": false,
+        "camera": {
+          "position": [
+            17.87658003479842,
+            -0.9716524507479611,
+            -14.620000000000001
+          ],
+          "rotation": [
+            -0.04592958274688536,
+            -0.7056135439663109,
+            -0.04592958274688535,
+            0.7056135439663109
+          ],
+          "projection": [
+            1.0803764608695179,
+            0,
+            0,
+            0,
+            0,
+            1.9206692637680316,
+            0,
+            0,
+            0,
+            0,
+            -1.0002623294858344,
+            -1,
+            0,
+            0,
+            -0.16002098635886677,
+            0
+          ]
+        },
+        "simPose": [
+          21,
+          -3,
+          15.4,
+          "B1",
+          1.5707963267948966,
+          0.13
+        ],
+        "sources": {
+          "doors": {
+            "gatehouse": false,
+            "gate": false,
+            "chapelFront": false
+          },
+          "lantern": false,
+          "hearth": false,
+          "lamp": 0,
+          "braziers": {
+            "chapel": 0,
+            "side": 0
+          },
+          "key": 0.72,
+          "exposure": 1
+        },
+        "roi": null,
+        "full": {
+          "pixels": 921600,
+          "changed": 0,
+          "repeatChanged": 0,
+          "changedOverNoise": 0,
+          "brighterOverNoise": 0,
+          "readableOffPixels": 0,
+          "visibleGainPixels": 0,
+          "maxCode": 0,
+          "maxRepeatCode": 0,
+          "meanOffY": 3.912334340587312e-06,
+          "meanSignedY": 0,
+          "meanPositiveY": 0,
+          "meanNoiseY": 0
+        },
+        "crop": null,
+        "drawCalls": 404
+      }
+    ],
+    "walks": [
+      {
+        "id": "partition-opening",
+        "target": [
+          16.5,
+          12.7
+        ],
+        "from": [
+          14.4,
+          0.45,
+          16.5,
+          "1F",
+          2.45,
+          0.015
+        ],
+        "to": [
+          16.387869938054365,
+          0.45,
+          12.902715055876847,
+          "1F",
+          2.6386000000000003,
+          0.1001
+        ]
+      },
+      {
+        "id": "to-pews",
+        "target": [
+          20,
+          12.5
+        ],
+        "from": [
+          16.387869938054365,
+          0.45,
+          12.902715055876847,
+          "1F",
+          2.6386000000000003,
+          0.1001
+        ],
+        "to": [
+          19.757004951278784,
+          0.45,
+          12.527185021453302,
+          "1F",
+          1.6795000000000004,
+          0.1001
+        ]
+      },
+      {
+        "id": "central-aisle",
+        "target": [
+          24,
+          16.5
+        ],
+        "from": [
+          19.757004951278784,
+          0.45,
+          12.527185021453302,
+          "1F",
+          1.0102000000000004,
+          -0.1
+        ],
+        "to": [
+          23.74057669370479,
+          0.45,
+          16.479551675234575,
+          "1F",
+          1.4932000000000003,
+          0.1001
+        ]
+      },
+      {
+        "id": "to-altar",
+        "target": [
+          28,
+          16.5
+        ],
+        "from": [
+          23.74057669370479,
+          0.45,
+          16.479551675234575,
+          "1F",
+          4.6143,
+          -0.192
+        ],
+        "to": [
+          27.760527548230165,
+          0.45,
+          16.498928821599733,
+          "1F",
+          1.5645000000000002,
+          0.10009999999999997
+        ]
+      }
+    ]
+  },
+  "gatehouseControl": {
+    "build": "index-CIGoiFz7.js",
+    "quality": "cinematic",
+    "gpu": "ANGLE (Apple, ANGLE Metal Renderer: Apple M3 Max, Unspecified Version)",
+    "viewport": [
+      1280,
+      720
+    ],
+    "ok": true,
+    "stops": [
+      {
+        "id": "day-approach",
+        "mode": "playing",
+        "locked": true,
+        "fixedCam": false,
+        "camera": {
+          "position": [
+            2.5032565851859543,
+            1.4685114115918025,
+            6.050437050390536
+          ],
+          "rotation": [
+            0.023074912105686646,
+            0.28538721334491113,
+            -0.006873204573457937,
+            0.9581098297948061
+          ],
+          "projection": [
+            1.080378225225458,
+            0,
+            0,
+            0,
+            0,
+            1.920672400400814,
+            0,
+            0,
+            0,
+            0,
+            -1.0002623294858344,
+            -1,
+            0,
+            0,
+            -0.16002098635886677,
+            0
+          ]
+        },
+        "simPose": [
+          0.12983613940005362,
+          0,
+          -3.842568335879081,
+          "1F",
+          -0.5796,
+          -0.04819999999999999
+        ],
+        "sources": {
+          "doors": {
+            "gatehouse": false,
+            "gate": false,
+            "chapelFront": false
+          },
+          "lantern": false,
+          "hearth": false,
+          "lamp": 0,
+          "braziers": {
+            "chapel": 0,
+            "side": 0
+          },
+          "key": 0.72,
+          "exposure": 1
+        },
+        "roi": [
+          0.39619906785069203,
+          0.355590074526539,
+          0.5413698868509805,
+          0.5865216656756588
+        ],
+        "full": {
+          "pixels": 921600,
+          "changed": 900650,
+          "repeatChanged": 0,
+          "changedOverNoise": 900650,
+          "brighterOverNoise": 900647,
+          "readableOffPixels": 2770,
+          "visibleGainPixels": 0,
+          "maxCode": 12,
+          "maxRepeatCode": 0,
+          "meanOffY": 0.0006676872499021344,
+          "meanSignedY": 0.0004923821965052924,
+          "meanPositiveY": 0.0004923829928075831,
+          "meanNoiseY": 0
+        },
+        "crop": {
+          "pixels": 30876,
+          "changed": 30490,
+          "repeatChanged": 0,
+          "changedOverNoise": 30490,
+          "brighterOverNoise": 30488,
+          "readableOffPixels": 2732,
+          "visibleGainPixels": 0,
+          "maxCode": 12,
+          "maxRepeatCode": 0,
+          "meanOffY": 0.005609646278282306,
+          "meanSignedY": 0.0009784011284245885,
+          "meanPositiveY": 0.0009784208538511007,
+          "meanNoiseY": 0
+        },
+        "drawCalls": 800
+      },
+      {
+        "id": "day-cross-angle",
+        "mode": "playing",
+        "locked": true,
+        "fixedCam": false,
+        "camera": {
+          "position": [
+            1.3889903722166153,
+            1.4035376677747575,
+            4.116353787429575
+          ],
+          "rotation": [
+            0.03238702901822462,
+            0.33798544930434543,
+            -0.011638585405954135,
+            0.940521908165706
+          ],
+          "projection": [
+            1.0803772283176785,
+            0,
+            0,
+            0,
+            0,
+            1.9206706281203172,
+            0,
+            0,
+            0,
+            0,
+            -1.0002623294858344,
+            -1,
+            0,
+            0,
+            -0.16002098635886677,
+            0
+          ]
+        },
+        "simPose": [
+          -1.2128531333352186,
+          0,
+          -2.189063105590926,
+          "1F",
+          -0.6900000000000001,
+          -0.0689
+        ],
+        "sources": {
+          "doors": {
+            "gatehouse": false,
+            "gate": false,
+            "chapelFront": false
+          },
+          "lantern": false,
+          "hearth": false,
+          "lamp": 0,
+          "braziers": {
+            "chapel": 0,
+            "side": 0
+          },
+          "key": 0.72,
+          "exposure": 1
+        },
+        "roi": [
+          0.39436607568937265,
+          0.24793342128722556,
+          0.6083128477476724,
+          0.6139547895009043
+        ],
+        "full": {
+          "pixels": 921600,
+          "changed": 482304,
+          "repeatChanged": 0,
+          "changedOverNoise": 482304,
+          "brighterOverNoise": 482296,
+          "readableOffPixels": 4863,
+          "visibleGainPixels": 0,
+          "maxCode": 12,
+          "maxRepeatCode": 0,
+          "meanOffY": 0.000971003798445161,
+          "meanSignedY": 0.00018074479343949565,
+          "meanPositiveY": 0.00018074606818786084,
+          "meanNoiseY": 0
+        },
+        "crop": {
+          "pixels": 72062,
+          "changed": 69230,
+          "repeatChanged": 0,
+          "changedOverNoise": 69230,
+          "brighterOverNoise": 69230,
+          "readableOffPixels": 4863,
+          "visibleGainPixels": 0,
+          "maxCode": 12,
+          "maxRepeatCode": 0,
+          "meanOffY": 0.004835560066674006,
+          "meanSignedY": 0.0007309048786569626,
+          "meanPositiveY": 0.0007309048786569626,
+          "meanNoiseY": 0
+        },
+        "drawCalls": 755
+      },
+      {
+        "id": "night-window",
+        "mode": "playing",
+        "locked": true,
+        "fixedCam": false,
+        "camera": {
+          "position": [
+            -1.1182649450564692,
+            1.143372851498127,
+            4.861591606573695
+          ],
+          "rotation": [
+            0.08134485083901008,
+            -0.05646213403260902,
+            0.004615637082773296,
+            0.995074740186275
+          ],
+          "projection": [
+            1.080333715372416,
+            0,
+            0,
+            0,
+            0,
+            1.9205932717731837,
+            0,
+            0,
+            0,
+            0,
+            -1.0002623294858344,
+            -1,
+            0,
+            0,
+            -0.16002098635886677,
+            0
+          ]
+        },
+        "simPose": [
+          -1.5586040376230699,
+          0,
+          -1.8948168291881757,
+          "1F",
+          0.11039999999999961,
+          -0.1632
+        ],
+        "sources": {
+          "doors": {
+            "gatehouse": false,
+            "gate": false,
+            "chapelFront": false
+          },
+          "lantern": false,
+          "hearth": false,
+          "lamp": 0,
+          "braziers": {
+            "chapel": 0,
+            "side": 0
+          },
+          "key": 1.2,
+          "exposure": 1.15
+        },
+        "roi": [
+          0.2588324001967927,
+          0.27185713008165685,
+          0.4875935570321067,
+          0.6423202621974483
+        ],
+        "full": {
+          "pixels": 921600,
+          "changed": 0,
+          "repeatChanged": 0,
+          "changedOverNoise": 0,
+          "brighterOverNoise": 0,
+          "readableOffPixels": 16,
+          "visibleGainPixels": 0,
+          "maxCode": 0,
+          "maxRepeatCode": 0,
+          "meanOffY": 0.00010007256658119238,
+          "meanSignedY": 0,
+          "meanPositiveY": 0,
+          "meanNoiseY": 0
+        },
+        "crop": {
+          "pixels": 77938,
+          "changed": 0,
+          "repeatChanged": 0,
+          "changedOverNoise": 0,
+          "brighterOverNoise": 0,
+          "readableOffPixels": 16,
+          "visibleGainPixels": 0,
+          "maxCode": 0,
+          "maxRepeatCode": 0,
+          "meanOffY": 0.0006941343396951151,
+          "meanSignedY": 0,
+          "meanPositiveY": 0,
+          "meanNoiseY": 0
+        },
+        "drawCalls": 974
+      },
+      {
+        "id": "day-b1-sealed",
+        "mode": "playing",
+        "locked": true,
+        "fixedCam": false,
+        "camera": {
+          "position": [
+            17.87658003479842,
+            -0.9716524507479611,
+            -14.620000000000001
+          ],
+          "rotation": [
+            -0.04592958274688536,
+            -0.7056135439663109,
+            -0.04592958274688535,
+            0.7056135439663109
+          ],
+          "projection": [
+            1.080333715372416,
+            0,
+            0,
+            0,
+            0,
+            1.9205932717731837,
+            0,
+            0,
+            0,
+            0,
+            -1.0002623294858344,
+            -1,
+            0,
+            0,
+            -0.16002098635886677,
+            0
+          ]
+        },
+        "simPose": [
+          21,
+          -3,
+          15.4,
+          "B1",
+          1.5707963267948966,
+          0.13
+        ],
+        "sources": {
+          "doors": {
+            "gatehouse": false,
+            "gate": false,
+            "chapelFront": false
+          },
+          "lantern": false,
+          "hearth": false,
+          "lamp": 0,
+          "braziers": {
+            "chapel": 0,
+            "side": 0
+          },
+          "key": 0.72,
+          "exposure": 1
+        },
+        "roi": null,
+        "full": {
+          "pixels": 921600,
+          "changed": 0,
+          "repeatChanged": 0,
+          "changedOverNoise": 0,
+          "brighterOverNoise": 0,
+          "readableOffPixels": 0,
+          "visibleGainPixels": 0,
+          "maxCode": 0,
+          "maxRepeatCode": 0,
+          "meanOffY": 3.892759460788031e-06,
+          "meanSignedY": 0,
+          "meanPositiveY": 0,
+          "meanNoiseY": 0
+        },
+        "crop": null,
+        "drawCalls": 502
+      }
+    ],
+    "walks": [
+      {
+        "id": "day-approach",
+        "target": [
+          0.08,
+          -3.6
+        ],
+        "from": [
+          0.45,
+          0,
+          -5.4,
+          "1F",
+          0,
+          0.03
+        ],
+        "to": [
+          0.12983613940005362,
+          0,
+          -3.842568335879081,
+          "1F",
+          -0.2024,
+          0.099
+        ]
+      },
+      {
+        "id": "day-cross-angle",
+        "target": [
+          -1.35,
+          -2.02
+        ],
+        "from": [
+          0.12983613940005362,
+          0,
+          -3.842568335879081,
+          "1F",
+          -0.5796,
+          -0.04819999999999999
+        ],
+        "to": [
+          -1.2128531333352186,
+          0,
+          -2.189063105590926,
+          "1F",
+          -0.6831,
+          0.1013
+        ]
+      },
+      {
+        "id": "day-past-window",
+        "target": [
+          -2.52,
+          -1.3
+        ],
+        "from": [
+          -1.2128531333352186,
+          0,
+          -2.189063105590926,
+          "1F",
+          -0.6900000000000001,
+          -0.0689
+        ],
+        "to": [
+          -2.304326957812982,
+          0,
+          -1.4467134155817662,
+          "1F",
+          -0.9729000000000001,
+          0.09899999999999999
+        ]
+      },
+      {
+        "id": "night-return",
+        "target": [
+          -1.35,
+          -2.02
+        ],
+        "from": [
+          -2.304326957812982,
+          0,
+          -1.4467134155817662,
+          "1F",
+          -0.9729000000000001,
+          0.09899999999999999
+        ],
+        "to": [
+          -1.5586040376230699,
+          0,
+          -1.8948168291881757,
+          "1F",
+          2.1136999999999997,
+          0.10129999999999999
+        ]
+      }
+    ]
+  }
+}

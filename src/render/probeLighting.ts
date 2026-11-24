@@ -2,13 +2,19 @@ import * as THREE from 'three';
 import { AREAS, DOORS, RAISED_Y, S1_SHAFT, S2_SHAFT, WALLS } from '../sim/level';
 import { GATEHOUSE_LIGHTS } from './gatehouseWindows';
 import bakedData from './baked/court.irr.bin?url&inline';
+import chapelSurfaceData from './baked/chapel-surface.irr.bin?url&inline';
 import { PROBE_COUNT, PROBE_GRID as g } from './probeGrid';
+
+function readTransport(asset: string, size: number): Uint8Array<ArrayBuffer> {
+  const encoded = asset.slice(asset.indexOf(',') + 1);
+  const data = Uint8Array.from(atob(encoded), value => value.charCodeAt(0));
+  if (data.length !== size) throw new Error('Invalid diffuse transport bake');
+  return data;
+}
 
 /** Install the immutable bake before Three clones its first material uniforms. */
 export function loadCourtTransport(): THREE.Data3DTexture {
-  const encoded = bakedData.slice(bakedData.indexOf(',') + 1);
-  const data = Uint8Array.from(atob(encoded), value => value.charCodeAt(0));
-  if (data.length !== PROBE_COUNT * 8) throw new Error('Invalid courtyard light bake');
+  const data = readTransport(bakedData, PROBE_COUNT * 8);
   const map = new THREE.Data3DTexture(data, g.nx, g.nz, 2 * g.ny);
   map.name = 'Court diffuse transport';
   map.minFilter = map.magFilter = THREE.LinearFilter;
@@ -18,7 +24,7 @@ export function loadCourtTransport(): THREE.Data3DTexture {
 
 /** Effective pierced opening in metres. The normal points from the room to
  * weather. Transmission includes glazing and the fraction open within tracery. */
-interface Aperture {
+export interface Aperture {
   plane: number; lateral: number; bottom: number; width: number; height: number;
   spring: number; axis: 'x' | 'z'; side: 1 | -1; transmission: number; door?: 'gatehouse' | 'chapelFront';
 }
@@ -74,6 +80,31 @@ export const CHAPEL_APERTURES: readonly Aperture[] = [
   ...[9.3, 12.1, 15.2, 20.4, 24.6].map(z => clerestory(z, 24.75, 1)),
 ];
 
+// This is the extra *daylight* band of the staged sky radiance, not an ambient
+// floor. The night rig is ~0.095 linear luminance; full morning is ~0.77.
+export const CHAPEL_DAYLIGHT_RANGE = [.12, .66] as const;
+// The legacy hemi × env proxy is tuned to broad outdoor fill, not to the
+// bright sky visible through the clerestory. Calibrate its daylight band in
+// scene-linear units against the gameplay view; only the traced transfer is
+// scaled. The cap controls near-sill peaks without lifting occluded surfaces.
+export const CHAPEL_DAYLIGHT_GAIN = 28;
+export const CHAPEL_DAYLIGHT_CAP = 2.5;
+// X,Z,Y layout, with positive and negative normal axes in two RGB banks.
+// Keep 25 cm vertical sampling through the baffle/gallery. Above them the
+// room is open: 75 cm layers continue through the clerestory to the vault.
+export const CHAPEL_SURFACE_GRID = { x: 13.58, y: .475, z: 11.04, nx: 68, ny: 36, nz: 44, step: .25, fineLayers: 19, upperStep: .75, range: 1.04 } as const;
+const surfaceProbeCount = CHAPEL_SURFACE_GRID.nx * CHAPEL_SURFACE_GRID.ny * CHAPEL_SURFACE_GRID.nz;
+
+export function loadChapelSurfaceTransport(): THREE.Data3DTexture {
+  const data = readTransport(chapelSurfaceData, surfaceProbeCount * 8);
+  const { nx, ny, nz } = CHAPEL_SURFACE_GRID;
+  const map = new THREE.Data3DTexture(data, nx, nz, 2 * ny);
+  map.name = 'Chapel glazing / stone diffuse transfer';
+  map.minFilter = map.magFilter = THREE.LinearFilter;
+  map.needsUpdate = true;
+  return map;
+}
+
 // One representative footprint per pane. Collapse the daylight hitting the
 // floor and its low masonry edges into an upward diffuse emitter of finite
 // area. The retained flux includes the capture fraction and stone reflectance.
@@ -93,6 +124,7 @@ const pack = (list: readonly Aperture[]) => list.map(w => {
 
 export const COURT_TRANSPORT_GLSL = /* glsl */`
 uniform highp sampler3D uAwCourtTransport;
+uniform highp sampler3D uAwChapelSurface;
 uniform vec2 uAwSkyDoors;
 uniform vec3 uAwSkyIrradiance;
 
@@ -197,6 +229,24 @@ bool awChapelBlocked(vec3 p, vec3 q) {
   if (awSegmentBox(p,q,vec3(13.50,3.70,20.0),vec3(24.0,4.0,22.0))) return true;
   ${chapelPartition.map(w => `if (awSegmentBox(p,q,vec3(${f(w.x0)},${f(RAISED_Y)},${f(w.z0)}),vec3(${f(w.x1)},${f(w.h)},${f(w.z1)}))) return true;`).join('\n  ')}
   return false;
+}
+
+// Offline one-leg glazing + one stone return. A coarse directional cube
+// takes two trilinear reads. Geometric bias selects the air side of a baffle;
+// shading normals still give the diffuse response on the stone or wood.
+float awChapelSurfaceDaylight(vec3 p, vec3 n, vec3 geometricN) {
+  vec3 q = p + geometricN * 0.17;
+  if (q.y < 0.15 || q.y > 16.27) return 0.0;
+  vec3 dims = vec3(${CHAPEL_SURFACE_GRID.nx}.0, ${CHAPEL_SURFACE_GRID.nz}.0, ${CHAPEL_SURFACE_GRID.ny}.0);
+  vec3 cell = (q.xzy - vec3(${f(CHAPEL_SURFACE_GRID.x)}, ${f(CHAPEL_SURFACE_GRID.z)}, ${f(CHAPEL_SURFACE_GRID.y)})) / ${f(CHAPEL_SURFACE_GRID.step)};
+  cell.z = min(cell.z, ${f(CHAPEL_SURFACE_GRID.fineLayers)}) + max(0.0, cell.z - ${f(CHAPEL_SURFACE_GRID.fineLayers)}) * ${f(CHAPEL_SURFACE_GRID.step / CHAPEL_SURFACE_GRID.upperStep)};
+  vec3 uvw = (clamp(cell, vec3(0.0), dims - 1.0) + 0.5) / (dims * vec3(1.0, 1.0, 2.0));
+  vec3 positive = texture(uAwChapelSurface, uvw).rgb;
+  vec3 negative = texture(uAwChapelSurface, uvw + vec3(0.0, 0.0, 0.5)).rgb;
+  vec3 incident = mix(negative, positive, step(vec3(0.0), n));
+  float transfer = ${f(CHAPEL_SURFACE_GRID.range)} * dot(n*n, incident*incident);
+  float energy = ${f(CHAPEL_DAYLIGHT_GAIN)} * transfer;
+  return energy / (1.0 + energy / ${f(CHAPEL_DAYLIGHT_CAP)});
 }
 
 // Projected solid angle of the effective hole. Clamp the projected centre
@@ -327,6 +377,13 @@ AwReceiverLight awReceiverLight(vec3 p, vec3 n, vec3 geometricN, int room) {
     }
   } else {
     light.aperture = awRoomDiffuse(p + geometricN*0.025, n, room);
+    if (room == AW_CHAPEL) {
+      float skyLuminance = dot(uAwSkyIrradiance, vec3(0.2126, 0.7152, 0.0722));
+      float daylight = smoothstep(${f(CHAPEL_DAYLIGHT_RANGE[0])}, ${f(CHAPEL_DAYLIGHT_RANGE[1])}, skyLuminance);
+      // Aperture.x still feeds rough reflections. Only this additive
+      // diffuse term changes, and only on daylit chapel surface receivers.
+      if (daylight > 0.0) light.aperture.y += daylight * awChapelSurfaceDaylight(p, n, geometricN);
+    }
   }
   return light;
 }

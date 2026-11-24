@@ -167,7 +167,7 @@ export function glazedWall(b: Batch, f: Fabric, wall: Wall): void {
 
 /** Clear leaded quarries, not coloured stained glass. A single repeating sheet
  * supplies the glass colour, shallow cylinder-glass waves and raised lead cames. */
-export function chapelGlass(): { glass: THREE.MeshStandardMaterial; lead: THREE.MeshStandardMaterial } {
+export function chapelGlass(skyIrradiance: THREE.Color): { glass: THREE.MeshStandardMaterial; lead: THREE.MeshStandardMaterial } {
   const size = 256, colour = new Uint8Array(size * size * 4), normals = new Uint8Array(colour.length), finish = new Uint8Array(colour.length);
   const mask = new Uint8Array(colour.length);
   const tau = Math.PI * 2;
@@ -214,7 +214,7 @@ export function chapelGlass(): { glass: THREE.MeshStandardMaterial; lead: THREE.
   const mat = new THREE.MeshPhysicalMaterial({ name: 'Chapel | leaded clear quarries', map: texture(colour, true),
     normalMap, normalScale: new THREE.Vector2(0.44, 0.44), roughnessMap, roughness: 1, metalness: 0,
     specularIntensity: 0.42, envMapIntensity: 0.55, transparent: true, depthWrite: false, forceSinglePass: true,
-    color: 0x97a4af, emissive: 0xc1d0dc, side: THREE.DoubleSide });
+    color: 0x97a4af, emissiveIntensity: 0.46, side: THREE.DoubleSide });
   mat.onBeforeCompile = (shader) => {
     shader.fragmentShader = shader.fragmentShader.replace('#include <emissivemap_fragment>', `
       #include <emissivemap_fragment>
@@ -235,6 +235,18 @@ export function chapelGlass(): { glass: THREE.MeshStandardMaterial; lead: THREE.
     `);
   };
   mat.customProgramCacheKey = () => 'chapel-glass-front-and-nave';
-  mat.onBeforeRender = (_renderer, scene) => { mat.emissiveIntensity = THREE.MathUtils.lerp(0.65, 0.028, scene.userData.night ?? 0); };
+  // This term represents transmitted sky, not a luminous pane keyed to time
+  // of day. SceneView updates this linear radiance in place before every frame.
+  mat.emissive = skyIrradiance;
   return { glass: mat, lead };
+}
+
+/** VSM draws receivers into its shadow map as well as casters. Only the
+ * thin clear sheet opts out; its separate alpha-tested cames and stone stay. */
+export function finishChapelGlazing(group: THREE.Group, glass: THREE.Material): void {
+  for (const object of group.children) {
+    if (object instanceof THREE.Mesh && object.material === glass) {
+      object.castShadow = object.receiveShadow = false;
+    }
+  }
 }

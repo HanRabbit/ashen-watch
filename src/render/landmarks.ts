@@ -6,7 +6,7 @@ import { archBand, archHeader, archLeaf, Batch } from './geom';
 import { Materials, scaleUV, tiledBox } from './materials';
 import { variants } from './materialVariants';
 import { mountRodin } from './rodinAssets';
-import { chapelGlass, glazedWall, type Light } from './chapelWindows';
+import { chapelGlass, finishChapelGlazing, glazedWall, type Light } from './chapelWindows';
 
 const R = RAISED_Y;
 const HALF_PI = Math.PI / 2;
@@ -51,7 +51,7 @@ function buttress(b: Batch, mat: THREE.Material, z: number, tall: boolean): void
   else b.geo(mat, new THREE.ConeGeometry(0.3, 0.9, 4), 12.9, top + 0.6, z, Math.PI / 4);
 }
 
-export function buildLandmarks(m: Materials): Landmarks {
+export function buildLandmarks(m: Materials, skyIrradiance: THREE.Color): Landmarks {
   const group = new THREE.Group();
   group.name = 'landmarks';
   const b = new Batch();
@@ -60,7 +60,7 @@ export function buildLandmarks(m: Materials): Landmarks {
   const ash = v.wallAshlar, trim = v.wallTrim, rough = v.wallRough;
   const woodPlank = v.woodPlank, woodBeam = v.woodBeam;
 
-  const { glass: glassMat, lead } = chapelGlass();
+  const { glass: glassMat, lead } = chapelGlass(skyIrradiance);
   const windowFabric = { ash, trim, iron: m.iron, glass: glassMat, lead };
   const narrow = (u: number): Light => ({ u, sill: 0.53, width: 1.25, spring: 1.54, height: 2.65, pattern: 'pair' });
   const waxMat = new THREE.MeshStandardMaterial({ color: 0xcfc4a8, roughness: 0.85 });
@@ -284,11 +284,7 @@ export function buildLandmarks(m: Materials): Landmarks {
   crow(12.9, 14.55, 23.4, 0.7);
 
   b.build(group, true);
-  // Only the cames, saddle bars and carved stone occlude the sun/moon.
-  // Do not let a depth-only shadow pass turn the translucent quarries solid.
-  for (const mesh of group.children as THREE.Mesh[]) {
-    if (mesh.material === glassMat) mesh.castShadow = false;
-  }
+  finishChapelGlazing(group, glassMat);
 
   // map: 礼拜堂转 90°，正门朝西面向庭院（构图对齐 concept/03）。
   // 旧占地 x13.5–24.5/z8–25 → 新占地 x13.5–30.5/z11–22。渲染 z=−sim.z。

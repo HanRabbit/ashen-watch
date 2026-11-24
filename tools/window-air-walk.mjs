@@ -1,6 +1,7 @@
 // AW_URL=http://127.0.0.1:4199/ AW_OUT=.cache/window-air-walk AW_ANGLE=metal node tools/window-air-walk.mjs chrome --headless
 // Serve a dev-preset build with the live uWindowScatter toggle. No fixed camera.
 // AW_CHAPEL_AIR=1 runs only the separately seeded chapel positive control.
+// AW_CHAPEL_ROUTE=1 walks the shut, unlit chapel from vestibule to altar; AW_BASELINE=1 records the old build without enforcing the daylight minima.
 // AW_ROUTE_QUALITY=high selects high instead of the default cinematic tier.
 import fs from 'node:fs';
 import path from 'node:path';
@@ -57,7 +58,7 @@ function evidence() {
 
 // Execute all three live compositor renders in one JS turn. The normal game update has
 // already settled the view; it cannot advance simulation, grain, or weather mid-pair.
-function capture({ stateSource, air, toggle }) {
+function capture({ stateSource, air, toggle, cutSources }) {
   const state = (0, eval)(`(${stateSource})`);
   const { view } = window.__awDev;
   const { renderer, camera, post } = view;
@@ -74,7 +75,8 @@ function capture({ stateSource, air, toggle }) {
   if (!materials.length) throw new Error(`${toggle} missing from active air material (expected post.glow or post.volume)`);
 
   let roi;
-  if (air) {
+  if (air?.rect) roi = air.rect;
+  else if (air) {
     const { center: [x, y, z], half: [dx, dy, dz] } = air;
     const projected = [];
     for (const sx of [-1, 1]) for (const sy of [-1, 1]) for (const sz of [-1, 1]) {
@@ -90,10 +92,18 @@ function capture({ stateSource, air, toggle }) {
   }
 
   const sources = materials.map(material => ({ material, uniform: material.uniforms[toggle],
-    original: material.uniforms[toggle].value, hook: material.onBeforeRender, draws: [] }));
+    original: material.uniforms[toggle].value, hook: material.onBeforeRender, draws: [], cut: [] }));
   try {
     for (const source of sources) source.material.onBeforeRender = function (...args) {
       source.hook.apply(this, args);
+      if (cutSources) {
+        for (const key of ['uWindowIrradiance', 'uKeyColour']) {
+          const light = source.material.uniforms[key]?.value;
+          if (!light?.isColor) throw new Error(`Cannot isolate window source ${key} in the live volume`);
+          if (!source.cut.some(row => row.light === light)) source.cut.push({light, saved: light.clone()});
+          light.setRGB(0, 0, 0);
+        }
+      }
       source.draws.push(source.uniform.value);
     };
     const frames = [['off', 0], ['on', 1], ['repeat', 0]].map(([id, value]) => {
@@ -110,7 +120,10 @@ function capture({ stateSource, air, toggle }) {
     if (JSON.stringify(state()) !== JSON.stringify(before)) throw new Error('Camera, game state or sources changed during A/B');
     return { frames, state: before, roi };
   } finally {
-    for (const s of sources) { s.uniform.value = s.original; s.material.onBeforeRender = s.hook; }
+    for (const s of sources) {
+      s.uniform.value = s.original; s.material.onBeforeRender = s.hook;
+      for (const {light, saved} of s.cut) light.copy(saved);
+    }
   }
 }
 
@@ -135,9 +148,11 @@ async function measure({ frames, roi }) {
   const canvas = new OffscreenCanvas(width, height), ctx = canvas.getContext('2d');
   const image = ctx.createImageData(width, height);
   const empty = () => ({ pixels: 0, changed: 0, repeatChanged: 0, changedOverNoise: 0, brighterOverNoise: 0,
-    maxCode: 0, maxRepeatCode: 0, meanOffY: 0, meanSignedY: 0, meanPositiveY: 0, meanNoiseY: 0 });
+    readableOffPixels: 0, visibleGainPixels: 0, maxCode: 0, maxRepeatCode: 0, meanOffY: 0, meanSignedY: 0, meanPositiveY: 0, meanNoiseY: 0 });
   const full = empty(), window = empty();
   function add(m, code, noise, a, d, n) {
+    m.readableOffPixels += +(a >= .012); // ~29/255 neutral sRGB or brighter, with scatter disabled
+    m.visibleGainPixels += +(d > .006 + n && code >= 5);
     m.pixels++; m.changed += +(code > 0); m.repeatChanged += +(noise > 0);
     m.changedOverNoise += +(code > noise); m.brighterOverNoise += +(code > noise && d > n);
     m.maxCode = Math.max(code, m.maxCode); m.maxRepeatCode = Math.max(noise, m.maxRepeatCode);
@@ -172,6 +187,7 @@ async function main() {
   const quality = process.env.AW_ROUTE_QUALITY ?? 'cinematic';
   if (quality !== 'high' && quality !== 'cinematic') throw new Error('AW_ROUTE_QUALITY must be high or cinematic');
   process.env.AW_OUT ||= '.cache/window-air-walk';
+  const chapelRoute = process.env.AW_CHAPEL_ROUTE === '1', baseline = process.env.AW_BASELINE === '1';
   const chapelOnly = process.env.AW_CHAPEL_AIR === '1';
   const { BASE, OUT, launch, shot, sleep, waitFor } = await import('./lib.mjs');
   const { Bot, startNewGame } = await import('./bot.mjs');
@@ -209,6 +225,8 @@ async function main() {
     report.gpu = await page.evaluate(() => window.__awProbe.gpu());
     if (!report.gpu || software.test(report.gpu)) throw new Error(`Game did not expose hardware WebGL: ${report.gpu}`);
     const bot = new Bot(page);
+    // Cold Metal driver compilation may outlast the menu click helper’s normal timeout.
+    await page.locator('#overlay button').filter({hasText: '新游戏'}).first().waitFor({state: 'visible', timeout: 90000});
     await startNewGame(bot);
     await page.evaluate(() => {
       window.__awDev.hud(false);
@@ -225,7 +243,7 @@ async function main() {
     };
     const walk = async ({ id, x, z }) => {
       const from = await page.evaluate(evidence);
-      await bot.walkTo(x, z, { floor: '1F', stop: .27, maxSecs: 12 });
+      await bot.walkTo(x, z, { floor: '1F', stop: .27, maxSecs: chapelRoute ? 40 : 12 });
       await idle();
       const to = await page.evaluate(evidence);
       report.route.push({ id, input: 'WASD (KeyW) + pointer-locked mouse', target: [x, z], from, to });
@@ -242,7 +260,7 @@ async function main() {
       }
     };
     const pair = async (id, kind, air = kind === 'b1' ? null : windowAir) => {
-      const batch = await page.evaluate(capture, { stateSource: evidence.toString(), air, toggle });
+      const batch = await page.evaluate(capture, { stateSource: evidence.toString(), air, toggle, cutSources: kind === 'cut' });
       const record = { id, kind, state: batch.state, roi: batch.roi, frames: [] };
       report.batches.push(record);
       for (const { png, ...frame } of batch.frames) {
@@ -252,17 +270,72 @@ async function main() {
       }
       const { diff, ...stats } = await page.evaluate(measure, { frames: batch.frames.map(f => f.png), roi: batch.roi });
       record.stats = stats;
+      if (chapelRoute && process.env.AW_CHAPEL_PERF === '1' && kind === 'day') {
+        // Ordinary animation frames, not screenshot readback or compositor A/B time.
+        record.timing = await page.evaluate(async () => {
+          const deltas = []; let last;
+          for (let i=0; i<38; ++i) {
+            const now = await new Promise(r => requestAnimationFrame(r));
+            if (i >= 6) deltas.push(now-last);
+            last=now;
+          }
+          deltas.sort((a,b)=>a-b);
+          return { samples:deltas.length, medianMs:deltas[16], p95Ms:deltas[30], calls:window.__awDev.view.renderer.info.render.calls };
+        });
+      }
       record.diff = path.join(OUT, `${id}-delta-x32.png`);
       fs.writeFileSync(record.diff, Buffer.from(diff, 'base64'));
       const m = stats.window ?? stats.full;
-      record.detected = m.brighterOverNoise >= 16 && m.meanPositiveY > 3 * m.meanNoiseY;
-      if (kind === 'day' && !record.detected) report.errors.push(`${id}: no positive window-air signal above off-repeat noise`);
-      if (kind !== 'day' && (stats.full.changedOverNoise > 0 || stats.full.meanPositiveY > stats.full.meanNoiseY)) {
+      record.detected = kind === 'cut' ? m.visibleGainPixels > 0 : m.brighterOverNoise >= 16 && m.meanPositiveY > 3 * m.meanNoiseY;
+      if (kind === 'day' && !baseline && !record.detected) report.errors.push(`${id}: no positive window-air signal above off-repeat noise`);
+      if (kind === 'cut' && stats.full.visibleGainPixels > 0) report.errors.push(`${id}: scatter adds visible light with neither incident source`);
+      if (kind !== 'day' && kind !== 'cut' && (stats.full.changedOverNoise > 0 || stats.full.meanPositiveY > stats.full.meanNoiseY)) {
         report.errors.push(`${id}: daylight scatter changed the ${kind === 'b1' ? 'sealed B1' : 'night'} frame above off-repeat noise`);
       }
       console.log(id, JSON.stringify({ detected: record.detected, ...m }));
     };
 
+    if (chapelRoute) {
+      report.method = 'Continuous collision-following play, real KeyW + pointer lock; same-turn scatter off/on/off. Normalized screen crop excludes outer vignette and most of the avatar. No image exposure correction.';
+      delete report.windowAir;
+      const air = { rect: [.27, .14, .88, .76] };
+      const look = async (yaw, pitch) => {
+        await bot.aim(yaw, .012, pitch); await idle();
+        // The rig can still be slewing long after input.yaw has reached its target,
+        // particularly during the first compilation of a new material variant.
+        await waitFor(page, ([yaw, pitch]) => {
+          const camera = window.__awDev.view.camera, d = camera.getWorldDirection(camera.position.clone());
+          const e = Math.atan2(d.x, -d.z) - yaw;
+          return Math.abs(Math.atan2(Math.sin(e), Math.cos(e))) < .03 && Math.abs(-Math.asin(d.y)-pitch) < .045;
+        }, 9000, [yaw, pitch]);
+        await sleep(350);
+      };
+      await seed('day', [14.4, .45, 16.5, '1F', 2.45, .015]); await look(2.45, .015);
+      await pair('vestibule', 'day', air);
+      await walk({id: 'partition-opening', x:16.5, z:12.7});
+      await walk({id: 'to-pews', x:20, z:12.5}); await look(1.01, -.10); await pair('pews', 'day', air);
+      await walk({id: 'central-aisle', x:24, z:16.5}); await look(1.48, .04); await pair('altar-approach', 'day', air);
+      await look(-1.67, -.19); await pair('nave', 'day', air);
+      await walk({id: 'to-altar', x:28, z:16.5}); await look(-1.02, -.17); await pair('altar-return', 'day', air);
+      if (!baseline) {
+        const daylight = report.batches.filter(b => b.kind === 'day');
+        // These framing rectangles do not include bright clerestory glass:
+        // a white pane cannot pass for a readable altar or vestibule floor.
+        for (const id of ['vestibule', 'altar-approach']) {
+          const m = daylight.find(b => b.id === id).stats.window;
+          if (m.meanOffY < .0055 || m.readableOffPixels/m.pixels < .025) report.errors.push(`${id}: opaque chapel fabric is still crushed without scattering`);
+        }
+        if (daylight.filter(b => b.stats.window.visibleGainPixels / b.stats.window.pixels >= .085).length < 2) {
+          report.errors.push('Fewer than two normal gameplay views show perceptible scattering over a substantial area');
+        }
+      }
+      await pair('day-air-no-sources', 'cut', air);
+      await seed('night'); await idle(); await pair('night-altar', 'night', air);
+      await seed('day', basement); await idle(); await pair('sealed-b1', 'b1');
+      const dark = report.batches.at(-1).stats.full;
+      if (!baseline && dark.meanOffY > .00004) report.errors.push('Sealed B1 is luminous even with daylight scattering disabled');
+      return;
+    }
     if (chapelOnly) {
       await seed('day', chapel.pose);
       await idle();
@@ -289,7 +362,7 @@ async function main() {
   } finally {
     if (browser) await browser.close().catch(error => report.errors.push(error.message));
     report.ok = report.errors.length === 0 && !report.browserErrors?.length;
-    const file = path.join(OUT, chapelOnly ? 'window-air-chapel.json' : 'window-air-walk.json');
+    const file = path.join(OUT, chapelRoute ? 'chapel-daylight-route.json' : chapelOnly ? 'window-air-chapel.json' : 'window-air-walk.json');
     fs.writeFileSync(file, `${JSON.stringify(report, null, 2)}\n`);
     console.log(`Report: ${file}`);
     if (!report.ok) { console.error(...report.errors, ...(report.browserErrors ?? [])); process.exitCode = 1; }

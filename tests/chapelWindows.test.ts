@@ -1,6 +1,6 @@
-import { DoubleSide, Group, Mesh, MeshStandardMaterial, Raycaster, Vector3 } from 'three';
+import { Color, DoubleSide, Group, Mesh, MeshStandardMaterial, Raycaster, Vector3 } from 'three';
 import { expect, it } from 'vitest';
-import { glazedWall } from '../src/render/chapelWindows';
+import { chapelGlass, finishChapelGlazing, glazedWall } from '../src/render/chapelWindows';
 import { Batch } from '../src/render/geom';
 
 it('keeps the great window open through both wall faces, with load-bearing stone between the lights', () => {
@@ -10,7 +10,11 @@ it('keeps the great window open through both wall faces, with load-bearing stone
   glazedWall(b, { ash, trim, iron, glass, lead: iron }, { x: 0, y: 0, z: 0, rot: 0, width: 11, eaves: 4, peak: 9.2,
     lights: [{ u: 0, sill: 0.9, width: 4, spring: 3.10, height: 6.10, pattern: 'great' }],
   });
-  b.build(scene); scene.updateMatrixWorld(true);
+  b.build(scene); finishChapelGlazing(scene, glass); scene.updateMatrixWorld(true);
+  for (const object of scene.children as Mesh[]) {
+    expect(object.castShadow).toBe(object.material !== glass);
+    expect(object.receiveShadow).toBe(object.material !== glass); // VSM also draws receivers
+  }
   for (const side of [-1, 1]) {
     const cast = (x: number, y: number) => new Raycaster(new Vector3(x,y,side), new Vector3(0,0,-side), 0, 2)
       .intersectObjects(scene.children);
@@ -36,4 +40,14 @@ it('keeps the great window open through both wall faces, with load-bearing stone
   // the raking exterior angle, but is glass-first from the nave side.
   expect((first(1).object as Mesh).material).toBe(trim);
   expect((first(-1).object as Mesh).material).toBe(glass);
+});
+
+it('drives the quarry transmission from the staged sky rather than a residual emissive floor', () => {
+  const sky = new Color(0, 0, 0);
+  const { glass, lead } = chapelGlass(sky);
+  expect(glass.emissive).toBe(sky);
+  expect(glass.emissive.getHex()).toBe(0);
+  sky.setRGB(.7, .8, 1);
+  expect(glass.emissive.b * glass.emissiveIntensity).toBeGreaterThan(0);
+  expect(lead.emissive.getHex()).toBe(0);
 });

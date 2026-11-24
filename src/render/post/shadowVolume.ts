@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { FullScreenQuad, Pass } from 'three/addons/postprocessing/Pass.js';
-import { AIR_SOURCE_GLSL, HEIGHT_COLUMN_GLSL, WEATHER_REACH, WINDOW_SCATTER_GLSL } from './airVolume';
+import { AIR_SOURCE_GLSL, CHAPEL_AIR_EXTINCTION, CHAPEL_AIR_GRID, CHAPEL_BEAM_GLSL, CHAPEL_BEAM_NODES, CHAPEL_BEAM_SPLIT, CHAPEL_BEAM_WEIGHTS, CHAPEL_KEY_GAIN, CHAPEL_SKY_GAIN,
+  HEIGHT_COLUMN_GLSL, WEATHER_REACH, WINDOW_SCATTER_GLSL, loadChapelSkyField } from './airVolume';
 import { COURT_MIST_GLSL } from './courtMist';
 
 // RGB = integrated single-scattering radiance, A = camera transmittance in linear HDR.
@@ -17,9 +18,11 @@ const fragment = /* glsl */`
   uniform vec2 uClip, uTan;
   uniform vec3 uOrigin,uFog,uGround,uSky,uKeyDirection,uKeyColour;
   uniform float uTime;
+  #define AW_CHAPEL_FIELD
   ${HEIGHT_COLUMN_GLSL}
   ${AIR_SOURCE_GLSL}
   ${WINDOW_SCATTER_GLSL}
+  ${CHAPEL_BEAM_GLSL}
   ${COURT_MIST_GLSL}
   float awLit(vec3 q) {
     // Beyond the site-sized shadow frustum ease to the open valley, never repeat an edge caster.
@@ -27,6 +30,8 @@ const fragment = /* glsl */`
     float coverage = smoothstep(0.,.023,min(inset.x,min(inset.y,inset.z)));
     if(coverage<=0.) return 1.;
     #ifdef AW_MOMENTS
+      // Three's RG16F VSM pass stores mean and standard deviation, in
+      // normalised shadow depth; G needs squaring (not a second raw moment).
       vec2 moments = texture2D(tKey, q.xy).rg;
       float dz=max(0.,q.z-.0007-moments.x), variance=max(.0000004,moments.y*moments.y);
       float lit=clamp((variance/(variance+dz*dz)-.23)/.77,0.,1.);
@@ -34,6 +39,62 @@ const fragment = /* glsl */`
       float lit=texture(tKey,vec3(q.xy,q.z-.0007));
     #endif
     return mix(1.,lit,coverage);
+  }
+  // Eight-point symmetric Gauss-Legendre quadrature, reparameterised to
+  // each window footprint instead of fixed, camera-centred weather shells.
+  // If a shaft is very long we smoothly introduce a second half-span rule
+  // (no changing sample count/phase discontinuity while walking).
+  const vec4 AW_BEAM_NODES=vec4(${CHAPEL_BEAM_NODES.join(',')});
+  const vec4 AW_BEAM_WEIGHTS=vec4(${CHAPEL_BEAM_WEIGHTS.join(',')});
+  float awBeamTap(float t, AwBeamLine line, AwAirAperture pane, float lateral, vec3 ray, vec3 key,
+                  vec3 q0, vec3 dq, float chapelEntry, float attenuation) {
+    float frame=awBeamReveal(line,pane,t,lateral);
+    if(frame<=0.) return 0.;
+    vec3 p=uOrigin+ray*t;
+    float room=awChapelMediumWeight(p);
+    if(room<=0.) return 0.;
+    float toOuter=line.t0+line.dt*t+.5/max(.025,abs(pane.outward.x!=0. ? key.x : key.z));
+    if(awAirChapelBlocked(p,p+key*toOuter)) return 0.;
+    return room*frame*awLit(q0+dq*t)*exp(-attenuation*(t-chapelEntry));
+  }
+  float awBeamQuad(vec2 t, AwBeamLine line, AwAirAperture pane, float lateral, vec3 ray, vec3 key,
+                   vec3 q0, vec3 dq, float chapelEntry, float attenuation) {
+    float mid=.5*(t.x+t.y), halfSpan=.5*(t.y-t.x);
+    float integral=0.;
+    for(int i=0;i<4;++i) {
+      float offset=AW_BEAM_NODES[i]*halfSpan;
+      integral+=AW_BEAM_WEIGHTS[i]*(awBeamTap(mid-offset,line,pane,lateral,ray,key,q0,dq,chapelEntry,attenuation)
+                                  + awBeamTap(mid+offset,line,pane,lateral,ray,key,q0,dq,chapelEntry,attenuation));
+    }
+    return halfSpan*integral;
+  }
+  float awBeamWall(vec2 interval, vec3 ray, vec3 key, vec3 q0, vec3 dq, bool xWall, float attenuation) {
+    float component=xWall ? key.x : key.z;
+    if(abs(component)<=.025) return 0.;
+    int wall=xWall ? (component<0. ? 0 : 1) : (component>0. ? 2 : 3);
+    AwBeamLine line=awBeamLine(uOrigin,ray,interval,key,xWall);
+    if(line.interval.y<=line.interval.x) return 0.;
+    vec2 lat=line.inner.x+line.interval*line.slope.x;
+    float minLat=min(lat.x,lat.y), maxLat=max(lat.x,lat.y), light=0.;
+    int first=wall==0 ? 0 : AW_BEAM_END[wall-1];
+    for(int i=first;i<AW_BEAM_END[wall];++i){ // one wall family, once per ray
+      AwAirAperture pane=AW_AIR_CHAPEL[AW_BEAM_ORDER[i]];
+      float lateral=xWall ? -pane.sill.z : pane.sill.x;
+      if(lateral+pane.shape.x<minLat) continue;
+      if(lateral-pane.shape.x>maxLat) break;
+      vec2 span=awBeamSpan(line,pane,lateral);
+      if(span.y<=span.x) continue;
+      float split=smoothstep(${CHAPEL_BEAM_SPLIT.join(',')},span.y-span.x);
+      float integral=0.;
+      if(split<1.) integral=awBeamQuad(span,line,pane,lateral,ray,key,q0,dq,interval.x,attenuation)*(1.-split);
+      if(split>0.) {
+        float mid=.5*(span.x+span.y);
+        integral+=split*(awBeamQuad(vec2(span.x,mid),line,pane,lateral,ray,key,q0,dq,interval.x,attenuation)
+                       + awBeamQuad(vec2(mid,span.y),line,pane,lateral,ray,key,q0,dq,interval.x,attenuation));
+      }
+      light+=pane.transmission*integral;
+    }
+    return light;
   }
   // A baked, tileable, single-channel volume: two trilinear fetches instead of
   // evaluating dozens of hashes per step. Wind advects the air, not the stone or camera.
@@ -63,14 +124,20 @@ const fragment = /* glsl */`
     // The lamp rig is calibrated for opaque surfaces. Normalise the scattering
     // lobe; do not paint the moon's surface-light intensity into every mist bin.
     float skyEnergy=dot(uSky,vec3(.2126,.7152,.0722));
-    float windowScale=max(0.,uWindowScatter)*awWindowDaylight(skyEnergy);
+    float daylight=awWindowDaylight(skyEnergy);
+    float windowScale=max(0.,uWindowScatter)*daylight;
     vec3 windowSkySource=AW_WINDOW_SKY_GAIN*uWindowIrradiance;
-    bool hasWindowSource=any(greaterThan(windowSkySource,vec3(0.))) || any(greaterThan(uKeyColour,vec3(0.)));
+    vec3 chapelSkySource=${CHAPEL_SKY_GAIN.toFixed(2)}*uWindowIrradiance;
+    bool hasSky=any(greaterThan(uWindowIrradiance,vec3(0.)));
+    bool hasKey=any(greaterThan(uKeyColour,vec3(0.)));
+    // A/B and night controls fade the chapel medium as well as the source
+    // terms; actual emitter power affects only incident radiance, not density.
+    float chapelMedium=${CHAPEL_AIR_EXTINCTION.toFixed(4)}*clamp(windowScale,0.,1.);
     vec2 gateWindow=vec2(end,0.), chapelWindow=vec2(end,0.);
-    if(windowScale>0. && hasWindowSource) {
+    if(windowScale>0.) {
       vec3 inv=awInverseSegment(ray);
-      gateWindow=awWindowInterval(uOrigin,inv,vec3(-3.,.02,0.),vec3(3.,3.5,7.94));
-      chapelWindow=awWindowInterval(uOrigin,inv,vec3(13.5,.45,-22.25),vec3(22.,14.1,-10.75));
+      if(hasSky || hasKey) gateWindow=awWindowInterval(uOrigin,inv,vec3(-3.,.02,0.),vec3(3.,3.5,7.94));
+      chapelWindow=awWindowInterval(uOrigin,inv,AW_CHAPEL_LO,AW_CHAPEL_HI);
     }
     bool windowRay=gateWindow.x<min(end,gateWindow.y) || chapelWindow.x<min(end,chapelWindow.y);
     if(horizon<.001){
@@ -80,6 +147,11 @@ const fragment = /* glsl */`
     }
     vec3 direct=uKeyColour*(.0795775*phase)*mix(.42,1.,smoothstep(.025,.23,skyEnergy));
     float trans=1.,start=0.; vec3 light=vec3(0.);
+    // Use the existing weather integration for attenuation; it no longer
+    // chooses the sampling positions of directional chapel radiance.
+    vec2 chapelSpan=vec2(chapelWindow.x,min(end,chapelWindow.y));
+    bool chapelKey=hasKey && uKeyDirection.y>.001 && chapelSpan.y>chapelSpan.x;
+    float chapelT0=1.,chapelT1=1.;
     // Fixed near-weighted bins: a nearby character does not change the spacing of all
     // upstream samples. Clip the last bin at the first visible surface. No animated dither.
     for(int i=0;i<AW_RAY_STEPS;i++){
@@ -99,26 +171,46 @@ const fragment = /* glsl */`
       bool gateBin=start<gateWindow.y && stop>gateWindow.x;
       bool chapelBin=start<chapelWindow.y && stop>chapelWindow.x;
       if(opacity>.00008 || gateBin || chapelBin){
-        // Reuse the existing two key-shadow taps. Only the diffuse sky term
-        // can reach a window outside the directional shadow corridor.
+        // Keep the existing two weather/gatehouse key-shadow taps and the
+        // same smooth sampling of the chapel's baked diffuse sky.
         float delta=(stop-start)*.28867513;
         float a=mid-delta, b=mid+delta;
         vec3 pa=uOrigin+ray*a, pb=uOrigin+ray*b;
         vec2 wa=vec2(0.), wb=vec2(0.);
-        if(gateBin || chapelBin){
-          wa=awWindowTransport(pa,uKeyDirection,gateBin,chapelBin);
-          wb=awWindowTransport(pb,uKeyDirection,gateBin,chapelBin);
+        if(gateBin){
+          wa=awWindowTransport(pa,uKeyDirection);
+          wb=awWindowTransport(pb,uKeyDirection);
         }
+        float ra=chapelBin ? awChapelMediumWeight(pa) : 0.;
+        float rb=chapelBin ? awChapelMediumWeight(pb) : 0.;
         float ka=opacity>.00008 ? awKeyAccess(pa,uKeyDirection) : 0.;
         float kb=opacity>.00008 ? awKeyAccess(pb,uKeyDirection) : 0.;
         float litA=max(ka,wa.y)>0. ? awLit(q0+dq*a) : 0.;
         float litB=max(kb,wb.y)>0. ? awLit(q0+dq*b) : 0.;
-        if(gateBin || chapelBin){
-          // First-order radiance of optically thin indoor air. Keep weather
-          // extinction and its outdoor history unchanged for the A/B control.
+        if(gateBin){
+          // Existing optically thin gatehouse term, including its A/B behaviour.
           vec3 windowSky=windowSkySource*.5*(wa.x+wb.x);
           vec3 windowKey=AW_WINDOW_KEY_GAIN*uKeyColour*phase*.5*(wa.y*litA+wb.y*litB);
           light+=trans*(1.-.5*opacity)*(stop-start)*AW_WINDOW_DUST*windowScale*(windowSky+windowKey);
+        }
+        float chapelOpacity=0.;
+        if(ra+rb>0.){
+          // The diffuse field has a broad spatial bandwidth. Only the sharply
+          // shadowed key needs aperture-local quadrature below.
+          float skyA=ra>0. && hasSky ? awChapelSky(pa) : 0.;
+          float skyB=rb>0. && hasSky ? awChapelSky(pb) : 0.;
+          vec3 chapelSky=chapelSkySource*(ra*skyA+rb*skyB);
+          float mass=.5*(stop-start)*chapelMedium;
+          chapelOpacity=1.-exp(-mass*(ra+rb));
+          light+=trans*(1.-.5*opacity)*chapelOpacity*chapelSky/max(ra+rb,1e-5);
+        }
+        if(chapelKey && start<chapelSpan.y && stop>=chapelSpan.x) {
+          // Entry/exit transmittance of the lit volume, including extinction
+          // accumulated before entering. Fit a local exponential for key.
+          float binT=(1.-opacity)*(1.-chapelOpacity);
+          float invSpan=1./max(stop-start,1e-5);
+          if(start<=chapelSpan.x) chapelT0=trans*pow(binT,clamp((chapelSpan.x-start)*invSpan,0.,1.));
+          chapelT1=trans*pow(binT,clamp((chapelSpan.y-start)*invSpan,0.,1.));
         }
         if(opacity>.00008){
           float sun=.5*(ka*litA+kb*litB);
@@ -126,12 +218,20 @@ const fragment = /* glsl */`
           vec3 ambient=mix(uGround,uSky,clamp((upper+.48*bank)/max(density,1e-5),0.,1.));
           float sky=awSkyAccess(p);
           vec3 source=ambient*sky*mix(.84,1.,sun) + direct*sun*(1.-.88*shelter);
-          light+=trans*opacity*source;
+          light+=trans*(1.-.5*chapelOpacity)*opacity*source;
           trans*=1.-opacity;
         }
+        trans*=1.-chapelOpacity;
       }
       if(stop>=end)break;
       start=stop;
+    }
+    if(chapelKey) {
+      float attenuation=max(0.,log(max(1e-5,chapelT0)/max(1e-5,chapelT1)))/(chapelSpan.y-chapelSpan.x);
+      float beam=awBeamWall(chapelSpan,ray,uKeyDirection,q0,dq,true,attenuation)
+                +awBeamWall(chapelSpan,ray,uKeyDirection,q0,dq,false,attenuation);
+      float chapelPhase=mix(1.,min(2.4,phase),.65);
+      light+=chapelT0*chapelMedium*${CHAPEL_KEY_GAIN.toFixed(2)}*chapelPhase*beam*uKeyColour;
     }
     gl_FragColor=vec4(light,trans);
   }
@@ -168,11 +268,20 @@ function weatherTile(): THREE.Data3DTexture {
   return tile;
 }
 
+function chapelSkyTile(): THREE.Data3DTexture {
+  const tile = new THREE.Data3DTexture(loadChapelSkyField(), ...CHAPEL_AIR_GRID.size);
+  tile.name = 'Chapel · revealed overcast sky transfer';
+  tile.format = THREE.RedFormat;
+  tile.minFilter = tile.magFilter = THREE.LinearFilter;
+  tile.needsUpdate = true;
+  return tile;
+}
+
 export class ShadowVolumePass extends Pass {
   readonly target = new THREE.WebGLRenderTarget(1,1, {type:THREE.HalfFloatType, depthBuffer:false,
     minFilter:THREE.NearestFilter,magFilter:THREE.NearestFilter, generateMipmaps:false});
   readonly uniforms = {
-    tWeather:{value:weatherTile()}, tDepth:{value:null as THREE.Texture|null}, tKey:{value:null as THREE.Texture|null},
+    tWeather:{value:weatherTile()}, tChapelSky:{value:chapelSkyTile()}, tDepth:{value:null as THREE.Texture|null}, tKey:{value:null as THREE.Texture|null},
     uShadow:{value:new THREE.Matrix4()}, uWorld:{value:new THREE.Matrix4()},
     uTan:{value:new THREE.Vector2()}, uOrigin:{value:new THREE.Vector3()}, uClip:{value:new THREE.Vector2()},
     uFog:{value:new THREE.Vector3()}, uSky:{value:new THREE.Color()}, uGround:{value:new THREE.Color()},
@@ -205,7 +314,7 @@ export class ShadowVolumePass extends Pass {
     this.uniforms.uShadow.value.copy(shadow.matrix);
     renderer.setRenderTarget(this.target);this.quad.render(renderer);
   }
-  override dispose(){this.uniforms.tWeather.value.dispose();this.target.dispose();this.material.dispose();this.quad.dispose();}
+  override dispose(){this.uniforms.tWeather.value.dispose();this.uniforms.tChapelSky.value.dispose();this.target.dispose();this.material.dispose();this.quad.dispose();}
 }
 
 // Opaque depth guides four half-resolution neighbours. A foreground shoulder against
