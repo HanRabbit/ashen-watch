@@ -24,7 +24,7 @@ export interface Settings {
 }
 
 export function defaultSettings(): Settings {
-  return { mode: 'kbm', sensitivity: 1, brightness: 1, volume: 0.7, quality: 'cinematic', binds: { ...DEFAULT_BINDS } };
+  return { mode: 'kbm', sensitivity: 1, brightness: 1, volume: 0.7, quality: 'low', binds: { ...DEFAULT_BINDS } };
 }
 
 const clamp = (v: unknown, lo: number, hi: number, d: number): number =>
@@ -40,7 +40,7 @@ export function loadSettings(): Settings {
     s.sensitivity = clamp(d.sensitivity, 0.2, 3, 1);
     s.brightness = clamp(d.brightness, 0.5, 2, 1);
     s.volume = clamp(d.volume, 0, 1, 0.7);
-    // 兼容旧两档：high/low 原样保留，缺省与非法值落到 cinematic。
+    // 兼容旧两档：high/low 原样保留，缺省与非法值使用流畅档。
     if (d.quality === 'cinematic' || d.quality === 'high' || d.quality === 'low') s.quality = d.quality;
     if (d.binds && typeof d.binds === 'object') {
       for (const k of Object.keys(DEFAULT_BINDS) as BindAction[]) {

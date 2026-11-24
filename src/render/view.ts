@@ -6,7 +6,7 @@ import { World } from '../sim/state';
 import { CameraRig } from './camera';
 import { GhostModels, PlayerModel } from './characters';
 import { clamp01, lerp, smooth } from './geom';
-import { glowTexture, makeMaterials } from './materials';
+import { glowTexture, makeMaterials, setMaterialsQuality } from './materials';
 import { Props } from './props';
 import { applySky, makeSkyMaterial, SkyState } from './sky';
 import { FogController, installHeightFog } from './post/fog';
@@ -107,6 +107,7 @@ export class SceneView {
   private post: PostPipeline;
   private atmo: THREE.Object3D[] = [];
   private time = 0;
+  private nextShadowUpdate = 0;
   /** 远景轻虚化开关：仅固定机位/标题生效，游戏越肩镜头保持锐利。 */
   cinematicDof = true;
   private camRig: CameraRig;
@@ -219,9 +220,15 @@ export class SceneView {
     if (this.quality === q) return;
     this.quality = q;
     const heavy = q !== 'low';
-    // cinematic 用满设备像素比；high 保留 1.5 上限；low 直出 1x。
-    this.renderer.setPixelRatio(q === 'cinematic' ? window.devicePixelRatio : q === 'high' ? Math.min(window.devicePixelRatio, 1.5) : 1);
     this.renderer.shadowMap.type = q === 'cinematic' ? THREE.VSMShadowMap : THREE.PCFShadowMap;
+    setMaterialsQuality(heavy ? 'high' : 'low');
+    // 流畅档让不透明物先填深度，云层只计算真正露出的天空。
+    this.sky.renderOrder = heavy ? -1 : 100;
+    this.skyMat.defines = heavy ? {} : { AW_SKY_AT_FAR_PLANE: 1 };
+    this.skyMat.needsUpdate = true;
+    this.sun.shadow.autoUpdate = heavy;
+    this.sun.shadow.needsUpdate = true;
+    this.nextShadowUpdate = 0;
     this.sun.shadow.mapSize.set(heavy ? 2048 : 1024, heavy ? 2048 : 1024);
     this.sun.shadow.map?.dispose();
     this.sun.shadow.map = null;
@@ -237,6 +244,11 @@ export class SceneView {
     const w = window.innerWidth, h = window.innerHeight;
     this.camera.aspect = w / Math.max(1, h);
     this.camera.updateProjectionMatrix();
+    // 只降低 3D 绘制缓冲区，HTML HUD 仍使用浏览器的原生分辨率。
+    const dpr = window.devicePixelRatio;
+    const long = Math.max(w, h), short = Math.max(1, Math.min(w, h));
+    this.renderer.setPixelRatio(this.quality === 'cinematic' ? dpr
+      : this.quality === 'high' ? Math.min(dpr, 1.5) : Math.min(1, 960 / Math.max(1, long), 540 / short));
     this.renderer.setSize(w, h);
     this.post.resize(w, h, this.renderer.getPixelRatio());
   }
@@ -289,7 +301,7 @@ export class SceneView {
     this.scene.environmentIntensity = r.envI;
 
     // 后期参数（LUT 随 rig blend 交叉淡入，管线内部按需重填）
-    this.post.applyRig({
+    if (this.quality !== 'low') this.post.applyRig({
       bloom: r.bloom, vignette: r.vignette, grain: r.grain,
       glowStrength: r.glowStrength, scatter: r.scatter,
       ssrWet: lerp(0.12, 0.32, nightAmt),
@@ -339,7 +351,14 @@ export class SceneView {
 
   render(): void {
     this.renderer.info.reset();
-    if (this.quality === 'low') { this.renderer.render(this.scene, this.camera); return; }
+    if (this.quality === 'low') {
+      if (this.time >= this.nextShadowUpdate) {
+        this.sun.shadow.needsUpdate = true;
+        this.nextShadowUpdate = this.time + 0.2;
+      }
+      this.renderer.render(this.scene, this.camera);
+      return;
+    }
     this.post.render(this.time);
   }
 
