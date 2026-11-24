@@ -194,3 +194,21 @@ input[type="range"]:focus-visible { outline: 0.15rem solid var(--amber); outline
 }
 
 #debug { position: fixed; right: 0.5rem; top: 0.5rem; padding: 0.3rem 0.6rem; font: 12px/1.4 monospace; color: var(--dim); background: rgba(11, 13, 16, 0.72); border: 1px solid var(--line-faint); pointer-events: none; white-space: pre; }
+/* Short dashed direction cue under the reticle. */
+#hud-guide {
+  position: absolute; top: calc(50% + 2.65rem); left: 50%;
+  width: 1.05rem; height: 1.55rem; color: var(--amber);
+  filter: drop-shadow(0 1px 2px #000);
+}
+#hud-guide::before, #hud-guide::after {
+  content: ""; position: absolute; left: 50%;
+}
+#hud-guide::before {
+  top: 0.26rem; height: 1.05rem; border-left: 2px dashed currentColor;
+  transform: translateX(-50%);
+}
+#hud-guide::after {
+  top: 0.08rem; width: 0.56rem; height: 0.56rem;
+  border-top: 2px solid currentColor; border-left: 2px solid currentColor;
+  transform: translateX(-50%) rotate(45deg);
+}

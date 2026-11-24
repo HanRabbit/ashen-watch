@@ -1,8 +1,8 @@
 // HUD（UI-01、UI-02）：生命、冷量、油量、时段、交互提示、物品栏、字幕与提示。
 // 状态区别不只依赖颜色：低量时同时给出文字与斜纹。
 import { HEARTH, LANTERN, PHASE, PLAYER } from '../config';
-import { STAIRS } from '../sim/level'; // map:
-import { node } from '../sim/nav'; // map:
+import { INTERACTS, regionAt, STAIRS } from '../sim/level';
+import { findPath, node, PathPoint } from '../sim/nav';
 import { Target } from '../sim/sim';
 import { World } from '../sim/state';
 import { keyName, Settings } from '../settings';
@@ -28,13 +28,13 @@ const DIRS = ['前方', '右前', '右侧', '右后', '后方', '左后', '左�
 export function goalText(w: World): string {
   const q = w.quest, inv = w.inv;
   if (w.phase === 'tutorial') {
-    if (!inv.hasLantern) return '拾取床边矮凳上的<b>提灯</b>';
-    return '查看门边的<b>任务板</b>';
+    if (!inv.hasLantern) return '拾取床边<b>提灯</b>';
+    return '查看<b>任务板</b>';
   }
   if (w.phase === 'day' || w.phase === 'dusk') {
     const n = Number(w.repairs.lamp) + Number(w.repairs.gate) + Number(w.repairs.bolt);
-    const head = w.phase === 'day' ? '搜集物资，抢修设施' : '回门房补油、做热食，准备入夜';
-    const skip = w.phase === 'day' ? '忙完可回<b>床铺</b>休息到黄昏' : '准备好了可在<b>壁炉</b>旁等到入夜';
+    const head = w.phase === 'day' ? '搜集物资，最多修两处' : '回门房补油，准备入夜';
+    const skip = w.phase === 'day' ? '到<b>床铺</b>可跳到黄昏' : '到<b>壁炉</b>可等到入夜';
     return `${head}（已修 ${n}/2）<br>${skip}`;
   }
   if (q.rung) return '晨钟响了';
@@ -42,10 +42,31 @@ export function goalText(w: World): string {
   if (w.phase === 'night') {
     if (!inv.hasClapper) return '到礼拜堂<b>祭台匣</b>取出钟舌';
     if (!q.returnedBeforeDawn) return '带着钟舌<b>回门房</b>';
-    return '守住炉火，<b>等到晨曦</b>（可在壁炉旁等待）';
+    return '在<b>壁炉</b>旁等到晨曦';
   }
   if (!inv.hasClapper) return '天亮了。到礼拜堂<b>祭台匣</b>取出钟舌';
   return '到门房外的<b>晨钟</b>装上钟舌';
+}
+
+function guideDestination(w: World) {
+  const region = w.player.floor === '1F' ? regionAt(w.player.x, w.player.z) : null;
+  const inGatehouse = region === 'gatehouse';
+  const exit = inGatehouse && !w.doors.gatehouse ? 'ghDoor' : null;
+  switch (w.phase) {
+    case 'tutorial': return w.inv.hasLantern ? 'board' : 'lantern';
+    case 'day':
+      if (!w.taken.shelf) return exit ?? 'shelf';
+      if (!w.taken.crate) return exit ?? 'crate';
+      return null;
+    case 'dusk': return inGatehouse || w.doors.gatehouse ? 'hearth' : 'ghDoor';
+    case 'night':
+    case 'dawn':
+      if (w.quest.rung) return null;
+      if (!w.quest.installed && !w.inv.hasClapper) return exit ?? (region === 'chapel' || w.doors.chapelFront ? 'chest' : 'chapelFront');
+      if (w.phase === 'dawn') return exit ?? 'bell';
+      return inGatehouse || w.doors.gatehouse ? 'hearth' : 'ghDoor';
+    default: return null;
+  }
 }
 
 export class Hud {
@@ -57,6 +78,10 @@ export class Hud {
   private subs = $('hud-subs');
   private inv = $('hud-inv');
   private hint = $('hud-mousehint');
+  private guide = $('hud-guide');
+  private guidePoint: PathPoint | null = null;
+  private guideId: ReturnType<typeof guideDestination> = null;
+  private nextGuideUpdate = 0;
   private fxThreat = $('fx-threat');
   private fxCold = $('fx-cold');
   private fxHurt = $('fx-hurt');
@@ -85,6 +110,34 @@ export class Hud {
     if (b.fill.style.width !== w) b.fill.style.width = w;
     this.set(`bar${i}`, b.val, text);
     b.el.classList.toggle('low', low);
+  }
+
+  updateGuide(w: World, yaw: number, enabled: boolean, time: number): void {
+    const id = enabled ? guideDestination(w) : null;
+    if (id !== this.guideId || time >= this.nextGuideUpdate) {
+      this.guideId = id;
+      this.nextGuideUpdate = time + 0.25;
+      const p = w.player;
+      const destination = INTERACTS.find((item) => item.id === id);
+      this.guidePoint = null;
+      if (destination) {
+        const sameFloor = destination.floor === p.floor;
+        const distance = Math.hypot(destination.x - p.x, destination.z - p.z);
+        if (sameFloor && distance < 2.4) {
+          if (distance >= 1.35) this.guidePoint = destination;
+        } else {
+          const { x, z, floor } = destination;
+          const points = findPath(p, { x, z, floor }, { doors: w.doors, lit: [] });
+          this.guidePoint = points?.find((n) => Math.hypot(n.x - p.x, n.z - p.z) > 0.45) ?? null;
+        }
+      }
+    }
+    const n = this.guidePoint;
+    this.guide.hidden = !id || !n;
+    if (id && n) {
+      const { x, z } = w.player;
+      this.guide.style.transform = `translateX(-50%) rotate(${Math.atan2(n.x - x, n.z - z) - yaw}rad)`;
+    }
   }
 
   update(w: World, target: Target | null, threat: number, sprintLocked: boolean): void {
