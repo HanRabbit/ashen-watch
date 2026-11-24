@@ -31,12 +31,59 @@ const faces = [
 type Span = { alongX: boolean; near: number; far: number; base: number };
 type EndHeights = readonly [start: number, end: number];
 
+/** A longitudinal coping, not a run of individually rounded cubes. Both
+ * ends stay on their original station planes; only the two upper outside
+ * arrises are cut. Keep the authored height gradient and cross-fall. */
+function coping(span: Span, start: number, end: number, a: number, c: number,
+  bottom: EndHeights, top: EndHeights, wear: EndHeights, tile: number, radius: number): THREE.BufferGeometry {
+  const { alongX, base } = span;
+  const section = (u: number, k: 0 | 1) => {
+    // Small deterministic longitudinal variation; long rails need not look lathe-turned.
+    const r = Math.min(radius * (.91 + .09 * Math.cos(u * 1.81)), (c-a)*.16, (top[k]-wear[k]-bottom[k])*.24);
+    const lip = (v: number, drop: number) => top[k] - wear[k]*(v-a)/(c-a) - drop;
+    const q = 1 - Math.SQRT1_2;
+    return [[a,bottom[k]],[c,bottom[k]],[c,lip(c,r)],[c-q*r,lip(c-q*r,q*r)],
+      [c-r,lip(c-r,0)],[a+r,lip(a+r,0)],[a+q*r,lip(a+q*r,q*r)],[a,lip(a,r)]]
+      .map(([v,y]) => new THREE.Vector3(alongX ? u : v, base+y, alongX ? -v : -u));
+  };
+  const rings=[section(start,0),section(end,1)];
+  const pos:number[]=[], uv:number[]=[], nor:number[]=[];
+  const tri=(pts:THREE.Vector3[], normals:THREE.Vector3[], chart:'side'|'top'|'end')=>{
+    for(const i of alongX ? [0,1,2] : [0,2,1]) {
+      const p=pts[i], u=alongX?p.x:-p.z, v=alongX?-p.z:p.x;
+      pos.push(...p.toArray());nor.push(...normals[i].toArray());
+      uv.push((chart==='end'?v:u)/tile, (chart==='top'?v:p.y-base)/tile);
+    }
+  };
+  const quads=rings[0].map((p,i)=>{const j=(i+1)%8;return [p,rings[0][j],rings[1][j],rings[1][i]];});
+  const faceNormals=quads.map(([a,b,c,d])=>b.clone().sub(d).cross(c.clone().sub(a)).normalize().multiplyScalar(alongX?1:-1));
+  // Face normals stay flat right up to the lip; only the middle of each
+  // quarter-round interpolates. No normal bleed from ends or bottom.
+  const mid=(i:number,j:number)=>faceNormals[i].clone().add(faceNormals[j]).normalize();
+  const shoulders=[faceNormals[0],faceNormals[1],faceNormals[1],mid(2,3),faceNormals[4],faceNormals[4],mid(5,6),faceNormals[7]];
+  for(let i=0;i<8;i++) {
+    const [a,b,c,d]=quads[i],j=(i+1)%8, soft=i===2||i===3||i===5||i===6;
+    const n=soft?shoulders[i]:faceNormals[i],m=soft?shoulders[j]:faceNormals[i];
+    const chart=i===1||i===7?'side':'top';
+    tri([a,b,c],[n,m,m],chart);tri([a,c,d],[n,m,n],chart);
+  }
+  for(const [k,ring] of rings.entries()) {
+    const center=ring.reduce((s,v)=>s.add(v),new THREE.Vector3()).multiplyScalar(1/8);
+    const n=alongX?new THREE.Vector3(k?1:-1,0,0):new THREE.Vector3(0,0,k?-1:1);
+    for(let i=0;i<8;i++){const j=(i+1)%8;tri(k?[center,ring[i],ring[j]]:[center,ring[j],ring[i]],[n,n,n],'end');}
+  }
+  const g=new THREE.BufferGeometry();
+  g.setAttribute('position',new THREE.Float32BufferAttribute(pos,3));g.setAttribute('normal',new THREE.Float32BufferAttribute(nor,3));
+  g.setAttribute('uv',new THREE.Float32BufferAttribute(uv,2));return g;
+}
+
 /** A single coursed prism. The coping may be worn down along its far edge.
  * Keep its full footprint inside the original narrow collision strip. */
 function course(b: Batch, material: THREE.Material, span: Span, start: number, end: number,
-  bottom: EndHeights, top: EndHeights, tile: number, inset = 0, wear: EndHeights = [0, 0]): void {
+  bottom: EndHeights, top: EndHeights, tile: number, inset = 0, wear: EndHeights = [0, 0], radius = 0): void {
   const { alongX, near, far, base } = span;
   const a = near + inset, c = far - inset;
+  if (radius) { b.geo(material, coping(span,start,end,a,c,bottom,top,wear,tile,radius),0,0,0); return; }
   const vertices = [
     [start, bottom[0], a], [end, bottom[1], a], [end, bottom[1], c], [start, bottom[0], c],
     [start, top[0], a], [end, top[1], a], [end, top[1] - wear[1], c], [start, top[0] - wear[0], c],
@@ -63,8 +110,8 @@ function repair(b: Batch, materials: Materials, span: Span, a: number, c: number
   course(b, materials.wallTrim, span, mid - .091, mid + .091, [0, 0], [.17, .15], 1.12);
   course(b, materials.woodBeam, span, mid - .058, mid + .048, [.16, .15], [.81, .77], 1.18, .008);
   const [left, right] = height;
-  course(b, materials.woodBeam, span, a, c, [left - .09, right - .09], height, 1.18, .012);
-  course(b, materials.woodBeam, span, a, c, [left - .38, right - .40], [left - .30, right - .32], 1.18, .019);
+  course(b, materials.woodBeam, span, a, c, [left - .09, right - .09], height, 1.18, .012, [0,0], .012);
+  course(b, materials.woodBeam, span, a, c, [left - .38, right - .40], [left - .30, right - .32], 1.18, .019, [0,0], .009);
 }
 
 /** Draw the main court's western and northern guards. Return false for the
@@ -91,12 +138,12 @@ export function addRampartEdge(b: Batch, material: Materials, w: Box): boolean {
     else if (kind === 'pier') {
       const neck: EndHeights = [top[0] - .15, top[1] - .13];
       course(b, material.wallRubble, span, a, c, [0, 0], neck, 2.3, .008);
-      course(b, material.wallTrim, span, a, c, neck, top, 1.42, 0, [.035, .014]);
+      course(b, material.wallTrim, span, a, c, neck, top, 1.42, 0, [.035, .014], .032);
     } else {
       const bed = i % 3 === 0 ? .20 : .14;
       course(b, material.wallRubble, span, a, c, [0, 0], [bed, bed], 2.3);
       course(b, kind === 'break' ? material.wallRough : material.wallRubble, span, a, c,
-        [bed, bed], top, 2.3, kind === 'break' ? .014 : .004, kind === 'break' ? [.08, .12] : [.025, .06]);
+        [bed, bed], top, 2.3, kind === 'break' ? .014 : .004, kind === 'break' ? [.08, .12] : [.025, .06], kind === 'break' ? .046 : .028);
     }
     a = c;
   }

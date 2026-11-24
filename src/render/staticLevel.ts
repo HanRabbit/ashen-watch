@@ -7,6 +7,7 @@ import { isNorthCourtFabric } from '../sim/northCourt';
 import { DOORS, inArea, PROPS, S1_SHAFT, WALLS, WELL } from '../sim/level';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { archHeader, archRib, Batch, gable } from './geom';
+import { edgeStock } from './edgeStock';
 import { mountGatehouseRoof } from './gatehouseRoof';
 import { buildGatehouseLights, windowWallPieces } from './gatehouseWindows';
 import { buildFurniture } from './furniture';
@@ -18,7 +19,7 @@ import { addBaileyApronFabric } from './baileyApron';
 import { mountRodin } from './rodinAssets';
 import { addYardBreaks } from './yardBreaks';
 import { buildYardIvy, YARD_LITTER_POCKETS } from './yardPlanting';
-import { addCurtainDetails, addCurtainPlinth, addWestCourtFabric } from './masonry';
+import { addCurtainDetails, addMasonryTrim, addWestCourtFabric } from './masonry';
 import { addNorthCourtFabric } from './northCourt';
 import { variants } from './materialVariants';
 import { grassTexture, leafTexture, Materials, rugTexture, rustTexture, smokeTexture, tiledBox, trackPending } from './materials';
@@ -46,7 +47,7 @@ export interface StaticLevel {
 }
 
 /** 墙角凸出角石（quoin）：大小交替、微微出墙，从勒脚砌到墙顶。 */
-function quoin(b: Batch, mat: THREE.Material, x: number, z: number, h: number): void {
+function quoin(b: Batch, mat: THREE.Material, x: number, z: number, h: number, gatehouse: boolean): void {
   const r = drng(Math.round(x * 31 + z * 17) + 9);
   let y = 0.3;
   let i = 0;
@@ -55,7 +56,9 @@ function quoin(b: Batch, mat: THREE.Material, x: number, z: number, h: number): 
     const long = i % 2 === 0;
     const sx = long ? 0.72 : 0.5;
     const sz = long ? 0.5 : 0.72;
-    b.box(mat, x - sx / 2, z - sz / 2, x + sx / 2, z + sz / 2, y, Math.min(y + ch, h), 1.4);
+    const bounds = [x - sx / 2, z - sz / 2, x + sx / 2, z + sz / 2, y, Math.min(y + ch, h), 1.4] as const;
+    if (gatehouse) b.edgeBox('stone', mat, ...bounds);
+    else b.box(mat, ...bounds); // Distant repeated quoins keep the box budget.
     y += ch + 0.02;
     i++;
   }
@@ -71,15 +74,13 @@ function archFrame(b: Batch, mat: THREE.Material, cx: number, cz: number, w: num
   // 门侧砌块
   for (const side of [-1, 1]) {
     let y = y0;
-    let i = 0;
     while (y < y0 + s - 0.1) {
       const ch = 0.4 + r() * 0.12;
       const [x, , z] = at(side * (w / 2 + 0.14), 0, 0);
       const bw = 0.3 + r() * 0.08;
-      const geo = tiledBox(bw, ch, 0.62, 1.4);
+      const geo = edgeStock(bw, ch, 0.62, 1.4, 'stone');
       b.geo(mat, geo, x, y + ch / 2, z, rotY);
       y += ch + 0.02;
-      i++;
     }
   }
   // 券石：沿两条二次曲线采样，朝向切线
@@ -96,16 +97,23 @@ function archFrame(b: Batch, mat: THREE.Material, cx: number, cz: number, w: num
       const ang = Math.atan2(dv, du) - HALF_PI;
       const rl = Math.hypot(u, v - s) || 1;
       const [x, , z] = at(u + (u / rl) * 0.16, v + ((v - s) / rl) * 0.16, 0);
-      const geo = tiledBox(0.24, 0.42, 0.6, 1.4);
+      const geo = edgeStock(0.24, 0.42, 0.6, 1.4, 'stone');
       b.geo(mat, geo, x, y0 + v + ((v - s) / rl) * 0.16, z, rotY, 0, ang);
     }
   }
   // 拱顶锁石
   const [kx, , kz] = at(0, p, 0);
-  b.geo(mat, tiledBox(0.3, 0.5, 0.64, 1.4), kx, y0 + p + 0.16, kz, rotY);
+  b.geo(mat, edgeStock(0.3, 0.5, 0.64, 1.4, 'stone'), kx, y0 + p + 0.16, kz, rotY);
 }
 
-/** 斜撑木框货箱：芯板 + 四角立柱 + 上下横档 + 四面斜撑，保持原碰撞盒尺寸。 */
+export function addGatehousePortal(b: Batch, stone: THREE.Material): void {
+  const door = DOORS.gatehouse;
+  const width = door.box.x1 - door.box.x0;
+  // Full-depth header stays square at the bearing faces. Only the applied
+  // jambs and voussoirs lose their sharp edges, never the wall cut itself.
+  b.geo(stone, archHeader(width, 1.9, door.box.h, 4.2, 0.5), 0, 0, door.hinge.z);
+  archFrame(b, stone, 0, door.hinge.z, width, 1.9, door.box.h, 0);
+}
 
 export function buildStaticLevel(m: Materials): StaticLevel {
   const group = new THREE.Group();
@@ -132,8 +140,7 @@ export function buildStaticLevel(m: Materials): StaticLevel {
     for (const a of windowWallPieces({ ...w, y0: 0 })) {
       boxOff(mat, a.x0, a.z0, a.x1, a.z1, a.y0, a.h, 4.5, ou + (a.x0-w.x0)/4.5, ov + a.y0/4.5);
     }
-    if (!addCurtainPlinth(b, v, w)) b.box(v.wallTrim, w.x0 - 0.08, w.z0 - 0.08, w.x1 + 0.08, w.z1 + 0.08, 0, 0.35, 2.2); // 勒脚
-    if (w.h >= 5) b.box(v.wallTrim, w.x0 - 0.05, w.z0 - 0.05, w.x1 + 0.05, w.z1 + 0.05, w.h - 0.12, w.h, 2.2); // 压顶
+    addMasonryTrim(b, v, w);
   }
   addSouthScarp(group, v.rock);
   addBaileyApronFabric(b, v);
@@ -145,7 +152,7 @@ export function buildStaticLevel(m: Materials): StaticLevel {
 
   // 庭院四角与门房角的凸出角石（wallTrim）
   for (const [x, z, h] of [[-10.25, 0.25, 4.2], [10.25, 0.25, 4.2], [-10.25, 28.75, 4.2], [10.25, 28.75, 3.2], [-3.25, -8.25, 3.6], [3.25, -8.25, 3.6]] as [number, number, number][]) {
-    quoin(b, v.wallTrim, x, z, h);
+    quoin(b, v.wallTrim, x, z, h, z === -8.25);
   }
   // 门房内墙：全部石墙（concept/02，圣经 v2.8）——下半 wallRubble + 上半 wallAshlar，不用抹灰
   {
@@ -163,12 +170,8 @@ export function buildStaticLevel(m: Materials): StaticLevel {
     gh(-3.0, -8.0, 3.0, -7.94);   // 北内墙（后墙）
   }
 
-  // The gatehouse is unchanged. Chapel portals are authored with the current
-  // chapel in landmarks.ts, not layered over the abandoned pre-rotation openings.
-  const ghDoor = DOORS.gatehouse;
-  const ghWidth = ghDoor.box.x1 - ghDoor.box.x0;
-  b.geo(v.wallTrim, archHeader(ghWidth, 1.9, ghDoor.box.h, 4.2, 0.5), 0, 0, ghDoor.hinge.z);
-  archFrame(b, v.wallTrim, 0, ghDoor.hinge.z, ghWidth, 1.9, ghDoor.box.h, 0);
+  // Chapel portals are authored with the current chapel in landmarks.ts.
+  addGatehousePortal(b, v.wallTrim);
 
   // Let the valley terrain reach the fortress instead of covering its base with
   // a bright rectangular gravel plane. Bury exterior wall feet into that terrain.
@@ -204,22 +207,22 @@ export function buildStaticLevel(m: Materials): StaticLevel {
     mountGatehouseRoof(group, fallback);
   }
   for (const z of [-6.6, -4.1, -1.6]) {
-    b.box(v.woodBeam, -3.2, z - 0.16, 3.2, z + 0.16, 3.22, 3.6, 1); // 粗壮方料横梁
+    b.edgeBox('timber', v.woodBeam, -3.2, z - 0.16, 3.2, z + 0.16, 3.22, 3.6, 1); // 粗壮方料横梁
     b.geo(v.woodBeam, archRib(6.0, 0.72, 0.22), 0, 2.5, z); // 方料木拱肋（concept/02）
     // 梁端铁箍 + 铁钉（圣经 2 木构铁件）
     for (const sx of [-1, 1]) {
       b.geo(m.iron, new THREE.TorusGeometry(0.15, 0.022, 6, 12), sx * 2.85, 2.5, z, HALF_PI);
       b.geo(m.iron, new THREE.SphereGeometry(0.03, 6, 5), sx * 2.85, 2.62, z + 0.13);
       b.geo(m.iron, new THREE.SphereGeometry(0.03, 6, 5), sx * 2.85, 2.38, z - 0.13);
-      const geo = tiledBox(0.16, 0.9, 0.16, 1);
+      const geo = edgeStock(0.16, 0.9, 0.16, 1, 'timber');
       b.geo(v.woodBeam, geo, sx * 2.75, 2.85, z, 0, 0, sx * 0.7); // 斜撑托架
     }
   }
-  b.box(v.woodBeam, -0.14, -8.4, 0.14, 0.4, 5.35, 5.66, 1); // 脊檩
+  b.edgeBox('timber', v.woodBeam, -0.14, -8.4, 0.14, 0.4, 5.35, 5.66, 1); // 脊檩
   // 门房外檐：挂晨钟的木托架
-  b.box(v.woodBeam, 1.5, 0.5, 1.66, 1.75, 2.95, 3.11, 1);
-  b.box(v.woodBeam, 2.74, 0.5, 2.9, 1.75, 2.95, 3.11, 1);
-  b.box(v.woodBeam, 1.4, 1.02, 3.0, 1.18, 3.11, 3.27, 1);
+  b.edgeBox('timber', v.woodBeam, 1.5, 0.5, 1.66, 1.75, 2.95, 3.11, 1);
+  b.edgeBox('timber', v.woodBeam, 2.74, 0.5, 2.9, 1.75, 2.95, 3.11, 1);
+  b.edgeBox('timber', v.woodBeam, 1.4, 1.02, 3.0, 1.18, 3.11, 3.27, 1);
   b.geo(m.roof, tiledBox(1.9, 0.08, 1.5, 1.2), 2.2, 3.5, 1.2, 0, 0.3, 0);
 
   // —— 地表细节：爬藤（实例化叶片）、苔痕、草丛（实例化）、落叶（实例化）、枯木、瓦砾 ——

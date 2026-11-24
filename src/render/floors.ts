@@ -6,8 +6,9 @@ import { isBaileyApronFabric } from '../sim/baileyApron';
 import { addReliefFooting } from './masonry';
 import { isWestCourtFabric } from '../sim/courtPlan';
 import { isNorthCourtFabric } from '../sim/northCourt';
-import { AREAS, B1_CEILINGS, B1_FOUNDATION_BACKING, B1_Y, CHAPEL_SLABS, COLUMNS, DECK_SLABS, NORTH_GUARD, PLATFORM_SLAB, PROPS, RAISED_Y, STAIR_BODIES, STAIR_RAILS, STEP_RAMP, WALLS } from '../sim/level';
+import { AREAS, B1_CEILINGS, B1_FOUNDATION_BACKING, B1_Y, CHAPEL_SLABS, COLUMNS, DECK_SLABS, NORTH_GUARD, PLATFORM_SLAB, PROPS, RAISED_Y, STAIRS, STAIR_BODIES, STAIR_RAILS, STEP_RAMP, WALLS } from '../sim/level';
 import { Batch } from './geom';
+import { edgeStock } from './edgeStock';
 import { Materials, scaleUV, tiledBox } from './materials';
 import { variants } from './materialVariants';
 import { addYardProp } from './yardProps';
@@ -25,6 +26,84 @@ export interface Floors {
 
 function boxY(b: Batch, mat: THREE.Material, x0: number, z0: number, x1: number, z1: number, y0: number, y1: number, tile = 2): void {
   b.box(mat, x0, z0, x1, z1, y0, y1, tile);
+}
+
+// Local +X points uphill. Only round its downhill top edge: all-round
+// stock would cut into the bed against the next riser and into the shaft
+// wall contacts. This closed extrusion costs 20 triangles, vs 12 for a box.
+function treadNose(w: number, h: number, d: number, radius: number, tile: number): THREE.BufferGeometry {
+  const x = w / 2, y = h / 2, z = d / 2, r = Math.min(radius, w * 0.16, h * 0.16);
+  const k = r * (1 - Math.SQRT1_2);
+  const outline = [[-x, -y], [x, -y], [x, y], [-x + r, y], [-x + k, y - k], [-x, y - r]];
+  const slopes = [[0, -1], [1, 0], [0, 1], [0, 1], [-Math.SQRT1_2, Math.SQRT1_2], [-1, 0]];
+  const position: number[] = [], normal: number[] = [], uv: number[] = [], index: number[] = [];
+  const vertex = (i: number, pz: number, nx: number, ny: number, nz: number, u: number, v: number) => {
+    position.push(...outline[i], pz);
+    normal.push(nx, ny, nz);
+    uv.push(u / tile, v / tile);
+  };
+  for (let i = 0; i < outline.length; i++) {
+    const j = (i + 1) % outline.length, a = position.length / 3;
+    const [nx, ny] = slopes[i];
+    const [mx, my] = i === 3 || i === 4 ? slopes[j] : slopes[i];
+    const put = (at: number, pz: number, ax: number, ay: number) => {
+      const [px, py] = outline[at];
+      const end = i === 1 || i === 5;
+      vertex(at, pz, ax, ay, 0, end ? z - nx * pz : px + x, end ? py + y : z + (i === 0 ? pz : -pz));
+    };
+    put(i, -z, nx, ny); put(j, -z, mx, my); put(j, z, mx, my); put(i, z, nx, ny);
+    index.push(a, a + 1, a + 2, a, a + 2, a + 3);
+  }
+  for (const sign of [-1, 1]) {
+    const a = position.length / 3;
+    outline.forEach(([px, py], i) => vertex(i, sign * z, 0, 0, sign, x + sign * px, py + y));
+    for (let i = 1; i < outline.length - 1; i++) {
+      if (sign > 0) index.push(a, a + i, a + i + 1);
+      else index.push(a, a + i + 1, a + i);
+    }
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(position, 3));
+  g.setAttribute('normal', new THREE.Float32BufferAttribute(normal, 3));
+  g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+  g.setIndex(index);
+  return g;
+}
+
+export function addStairTreads(b: Batch, stone: THREE.Material, timber: THREE.Material): void {
+  for (const [s, stair] of STAIRS.entries()) {
+    const wooden = stair.id === 'S4', tile = 1.2, mat = wooden ? timber : stone;
+    const boxes = STAIR_BODIES[s].boxes;
+    let i = 0;
+    const put = (step: typeof boxes[number], yaw = 0, alongX?: boolean) => {
+      const w = step.x1 - step.x0, h = step.h - step.y0!, d = step.z1 - step.z0;
+      // Landings retain their square beds against the deck and the tread.
+      const g = alongX === undefined ? tiledBox(w, h, d, tile)
+        : treadNose(alongX ? w : d, h, alongX ? d : w, wooden ? 0.012 : 0.028, tile);
+      const uv = g.getAttribute('uv');
+      // Preserve the original per-tread scan phase.
+      const u = (i * 0.381966 + 0.19) % 1, v = (i % 5) * 0.173;
+      for (let j = 0; j < uv.count; j++) uv.setXY(j, uv.getX(j) + u, uv.getY(j) + v);
+      b.geo(mat, g, (step.x0 + step.x1) / 2, (step.y0! + step.h) / 2, (step.z0 + step.z1) / 2, yaw);
+    };
+    for (const run of stair.runs) {
+      const alongX = run.axis === 'x', uphill = run.to > run.from;
+      const yaw = alongX ? (uphill ? 0 : Math.PI) : (uphill ? Math.PI / 2 : -Math.PI / 2);
+      const end = i + Math.ceil(Math.abs(run.to - run.from) / 0.18);
+      for (; i < end; i++) put(boxes[i], yaw, alongX);
+    }
+    for (; i < boxes.length; i++) put(boxes[i]);
+  }
+}
+
+export function addChapelApproach(b: Batch, stone: THREE.Material, flag: THREE.Material): void {
+  const strip = (mat: THREE.Material, x0: number, z0: number, x1: number, z1: number, y0: number, top: number, tile: number) => {
+    const g = treadNose(x1 - x0, top - y0, z1 - z0, 0.028, tile);
+    b.geo(mat, g, (x0 + x1) / 2, (y0 + top) / 2, (z0 + z1) / 2);
+  };
+  const p = PLATFORM_SLAB, r = STEP_RAMP, tread = (r.x1 - r.x0) / 3;
+  strip(flag, p.x0, p.z0, p.x1, p.z1, p.y0!, p.h, 2);
+  for (let i = 0; i < 3; i++) strip(stone, r.x0 + i * tread, r.z0, r.x0 + (i + 1) * tread, r.z1, -0.12, RAISED_Y * (i + 0.5) / 3, 1.4);
 }
 
 export function buildFloors(m: Materials): Floors {
@@ -76,18 +155,7 @@ export function buildFloors(m: Materials): Floors {
     }
   }
 
-  for (const s of STAIR_BODIES) {
-    const mat = s.id === 'S4' ? v.woodFloorOld : v.wallTrim;
-    for (const [i, step] of s.boxes.entries()) {
-      const g = tiledBox(step.x1 - step.x0, step.h - step.y0!, step.z1 - step.z0, 1.2);
-      const uv = g.getAttribute('uv');
-      // Each nosing was cut from a different length of stock. Previously every
-      // riser had the same nick and the same dark joint in a vertical line up S3.
-      const u = (i * 0.381966 + 0.19) % 1, v = (i % 5) * 0.173;
-      for (let j = 0; j < uv.count; j++) uv.setXY(j, uv.getX(j) + u, uv.getY(j) + v);
-      b.geo(mat, g, (step.x0 + step.x1) / 2, (step.y0! + step.h) / 2, (step.z0 + step.z1) / 2);
-    }
-  }
+  addStairTreads(b, v.wallTrim, v.woodFloorOld);
   for (const r of STAIR_RAILS) {
     const dx = r.x1 - r.x0, dy = r.to - r.from;
     const n = Math.ceil(dx / 0.55);
@@ -95,7 +163,7 @@ export function buildFloors(m: Materials): Floors {
       const t = i / n;
       b.geo(m.iron, scaleUV(new THREE.CylinderGeometry(0.029, 0.035, 1.09, 6), 1), r.x0 + dx * t, r.from + dy * t + 0.5, r.z);
     }
-    for (const y of [0.18, 1.02]) b.geo(m.iron, tiledBox(Math.hypot(dx, dy), 0.065, 0.09, 1),
+    for (const y of [0.18, 1.02]) b.geo(m.iron, edgeStock(Math.hypot(dx, dy), 0.065, 0.09, 1, 'iron'),
       (r.x0 + r.x1) / 2, (r.from + r.to) / 2 + y, r.z, 0, 0, Math.atan2(dy, dx));
   }
 
@@ -126,10 +194,7 @@ export function buildFloors(m: Materials): Floors {
   b1.geo(m.iron, scaleUV(new THREE.CylinderGeometry(0.03, 0.04, 0.3, 6), 1), 14.6, B1_Y + 0.15, 21.4);
 
   for (const s of CHAPEL_SLABS) boxY(b, v.floorInterior, s.x0, s.z0, s.x1, s.z1, s.y0!, s.h);
-  const p = PLATFORM_SLAB;
-  boxY(b, v.floorFlagWorn, p.x0, p.z0, p.x1, p.z1, p.y0!, p.h);
-  const r = STEP_RAMP, tread = (r.x1 - r.x0) / 3;
-  for (let i = 0; i < 3; i++) boxY(b, v.wallTrim, r.x0 + i * tread, r.z0, r.x0 + (i + 1) * tread, r.z1, -0.12, RAISED_Y * (i + 0.5) / 3, 1.4);
+  addChapelApproach(b, v.wallTrim, v.floorFlagWorn);
 
   for (const s of DECK_SLABS) {
     const isGal = s.x0 >= 13.4 && s.z0 >= 20.0;

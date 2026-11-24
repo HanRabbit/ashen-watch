@@ -2,6 +2,7 @@
 // 坐标约定与 staticLevel 一致：Batch 接收模拟坐标 (x, y, z)，渲染 z 取负。
 import * as THREE from 'three';
 import { RAISED_Y } from '../sim/level';
+import { edgeStock } from './edgeStock';
 import { archBand, archHeader, archLeaf, Batch } from './geom';
 import { Materials, scaleUV, tiledBox } from './materials';
 import { variants } from './materialVariants';
@@ -109,11 +110,11 @@ export function buildLandmarks(m: Materials, skyIrradiance: THREE.Color): Landma
   // 门前多级石阶（三级）+ 两侧挡墙（斜压顶）
   for (let i = 0; i < 3; i++) {
     const x1 = 13.0 - i * 0.35, x0 = x1 - 0.35;
-    b.box(trim, x0, 19.2, x1, 21.8, 0, R * (3 - i) / 3);
+    b.edgeBox('stone', trim, x0, 19.2, x1, 21.8, 0, R * (3 - i) / 3);
   }
   for (const z of [19.0, 21.8]) {
-    b.box(trim, 11.95, z, 13.0, z + 0.22, 0, 0.62);
-    b.geo(trim, tiledBox(1.15, 0.12, 0.3, 0.6), 12.48, 0.66, z + 0.11, 0, 0, 0.28);
+    b.edgeBox('stone', trim, 11.95, z, 13.0, z + 0.22, 0, 0.62);
+    b.geo(trim, edgeStock(1.15, 0.12, 0.3, 0.6, 'stone'), 12.48, 0.66, z + 0.11, 0, 0, 0.28);
   }
   // 门与玫瑰窗之间的腰线 + 盲拱四叶饰，打破空白墙
   b.box(trim, 12.9, 17.8, 13.12, 23.2, 4.95, 5.15);
@@ -163,8 +164,8 @@ export function buildLandmarks(m: Materials, skyIrradiance: THREE.Color): Landma
     b.geo(trim, new THREE.CylinderGeometry(0.075, 0.09, 2.25, 8), 19 + dx, R + 1.29, 25.93);
     b.geo(trim, new THREE.CylinderGeometry(0.13, 0.1, 0.17, 8), 19 + dx, R + 2.48, 25.93);
   }
-  b.box(trim, 17.1, 25.58, 20.9, 25.95, R - 0.02, R + 0.07);
-  b.box(rough, 17.04, 25.94, 20.96, 26.23, R - 0.03, R + 0.035);
+  b.edgeBox('stone', trim, 17.1, 25.58, 20.9, 25.95, R - 0.02, R + 0.07);
+  b.edgeBox('stone', rough, 17.04, 25.94, 20.96, 26.23, R - 0.03, R + 0.035);
   // 北立面扶壁（出挑 0.45，贴墙）
   for (const x of [13.75, 24.25]) {
     b.box(trim, x - 0.4, 25.5, x + 0.4, 25.95, 0, 7.4);

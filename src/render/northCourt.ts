@@ -71,12 +71,39 @@ function archPrism(b: Batch, mat: THREE.Material, section: readonly { x: number;
   }
 }
 
+/** Dressed voussoirs only lose material on the exposed mouth of the barrel.
+ * Radial joints and the back bed remain square; independently recessed stones
+ * can still bear against the continuous masonry directly behind them. */
+function archMouth(b: Batch, mat: THREE.Material, section: {x:number; h:number}[], lipZ:number, bedZ:number): void {
+  const end = Math.sign(bedZ-lipZ), [a,c,d,e] = section;
+  const cut = (p: typeof a, q: typeof a, t:number, z:number):Point => ({x:p.x+(q.x-p.x)*t, y:p.h+(q.h-p.h)*t,z});
+  const ring = (t:number, z:number) => [cut(a,e,t,z),cut(c,d,t,z)];
+  const outer = (z:number) => [cut(d,d,0,z),cut(e,e,0,z)];
+  const front=ring(.13,lipZ), mid=ring(.038,lipZ+end*.009), shoulder=ring(0,lipZ+end*.028), back=ring(0,bedZ);
+  const [d0,e0]=outer(lipZ),[d1,e1]=outer(bedZ);
+  const inside=centerOf([...front,...back,d0,e0,d1,e1]);
+  for(const quad of [[...front,d0,e0],[...back,d1,e1],[d0,e0,e1,d1]])face(b,mat,quad,inside,1.25);
+  const bands=[front,mid,shoulder,back];
+  for(let i=0;i<3;i++)face(b,mat,[bands[i][0],bands[i][1],bands[i+1][1],bands[i+1][0]],inside,1.25);
+  for(const [i,f,h] of [[0,e0,e1],[1,d0,d1]] as const) {
+    // Fan from the uncut outer corner, not the nearly collinear lip points.
+    face(b,mat,[f,front[i],mid[i],shoulder[i],back[i],h],inside,1.25);
+  }
+}
+
 export function addNorthCourtFabric(b: Batch, stone: Stonework): void {
   for (const p of NORTH_PIERS) {
-    b.box(stone.wallTrim, p.x0, p.z0, p.x1, p.z1, 0, .34, 1.75);
-    b.box(stone.wallAshlar, p.x0, p.z0, p.x1, p.z1, .34, 2.01, 2.4);
-    b.box(stone.wallTrim, p.x0, p.z0, p.x1, p.z1, 2.01, 2.15, 1.75);
-    b.box(stone.wallRubble, p.x0, p.z0, p.x1, p.z1, 2.15, p.h, 2.4);
+    // One octagonal footprint for every course: no horizontal grooves between
+    // stacked units and no punctures around the support beneath the walk.
+    const {x0,x1,z0,z1}=p,r=.049;
+    const outline=[[x0+r,z0],[x1-r,z0],[x1,z0+r],[x1,z1-r],[x1-r,z1],[x0+r,z1],[x0,z1-r],[x0,z0+r]];
+    const ring=(y:number)=>outline.map(([x,z])=>({x,y,z}));
+    for(const [lo,hi,mat,tile] of [[0,.34,stone.wallTrim,1.75],[.34,2.01,stone.wallAshlar,2.4],[2.01,2.15,stone.wallTrim,1.75],[2.15,p.h,stone.wallRubble,2.4]] as const){
+      const bottom=ring(lo),top=ring(hi),inside=centerOf([...bottom,...top]);
+      for(let i=0;i<8;i++){const j=(i+1)%8;face(b,mat,[bottom[i],bottom[j],top[j],top[i]],inside,tile);}
+      if(lo===0)face(b,mat,bottom,inside,tile);
+      if(hi===p.h)face(b,mat,top,inside,tile);
+    }
   }
   for (const { profile, z0, z1 } of NORTH_ARCHES) {
     const outer = profile.map(({ x, h }, i) => {
@@ -91,8 +118,8 @@ export function addNorthCourtFabric(b: Batch, stone: Stonework): void {
       archPrism(b, stone.wallAshlar, [a, c, d, e], z0 + .19, z1 - .19, 2.05);
       const dressed = i % 5 === 2 || i === 9 ? stone.wallAshlar : stone.wallTrim;
       const recess = [.012, .003, .025, .0, .016][i % 5];
-      archPrism(b, dressed, [a, c, d, e], z0 + recess, z0 + .19, 1.25);
-      archPrism(b, dressed, [a, c, d, e], z1 - .19, z1 - recess, 1.25);
+      archMouth(b, dressed, [a, c, d, e], z0 + recess, z0 + .19);
+      archMouth(b, dressed, [a, c, d, e], z1 - recess, z1 - .19);
     }
   }
 
@@ -103,7 +130,13 @@ export function addNorthCourtFabric(b: Batch, stone: Stonework): void {
     const foot = footprint.map((p) => ({ ...p, y: plinth }));
     const bottom = footprint.map((p) => ({ ...p, y: -.08 }));
     const inside = centerOf([...top, ...bottom]);
-    face(b, stone.wallRough, top, inside, 1.6);
+    // A continuous weathered lip along BOTH sides of the surveyed curtain.
+    // Endpoints depend on the survey station, never on the panel index: the
+    // shoulder crosses a bend without splinter cracks or visible module seams.
+    const rim=top.map((p,j)=>{const q=top[3-j], f=.072+.020*Math.sin(1.89*p.x+.57*p.z);
+      return {x:p.x+(q.x-p.x)*f, y:p.y+(q.y-p.y)*f, z:p.z+(q.z-p.z)*f};});
+    const side=top.map(p=>({...p,y:p.y-.074-.024*Math.cos(.84*p.x-1.76*p.z)}));
+    face(b, stone.wallRough, rim, inside, 1.6);
     const body = edge === 3 ? stone.wallRough : stone.wallRubble;
     // Continuous coursed skin on both sides. Expose ends only at the old curtain.
     const faces = [0, 2];
@@ -112,7 +145,8 @@ export function addNorthCourtFabric(b: Batch, stone: Stonework): void {
     for (const j of faces) {
       const k = (j + 1) % 4;
       face(b, stone.wallAshlar, [bottom[j], bottom[k], foot[k], foot[j]], inside, 2.15);
-      face(b, body, [foot[j], foot[k], top[k], top[j]], inside, 3.15);
+      face(b, body, [foot[j], foot[k], side[k], side[j]], inside, 3.15);
+      face(b, stone.wallRough, [side[j],side[k],rim[k],rim[j]], inside, 1.6);
     }
   }
 }
@@ -120,6 +154,8 @@ export function addNorthCourtFabric(b: Batch, stone: Stonework): void {
 export function addNorthWalkGuard(b: Batch, pieces: readonly Box[], sill: THREE.Material, iron: THREE.Material, wood: THREE.Material): void {
   for (const piece of pieces) {
     const { tag, x0, x1, z0, z1, y0, h } = piece;
-    b.box(tag === 'northSill' ? sill : tag === 'northWood' ? wood : iron, x0, z0, x1, z1, y0!, h, 1.5);
+    if (tag === 'northSill' || tag === 'northWood' || x1-x0 > .1) {
+      b.edgeBox(tag==='northSill'?'stone':tag==='northWood'?'timber':'iron', tag==='northSill'?sill:tag==='northWood'?wood:iron,x0,z0,x1,z1,y0!,h,1.5);
+    } else b.box(iron,x0,z0,x1,z1,y0!,h,1.5); // Subpixel edges of the thin repeated pickets.
   }
 }

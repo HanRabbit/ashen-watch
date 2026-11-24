@@ -57,21 +57,50 @@ function dressOpening(b: Batch, stone: THREE.Material, a: Opening, sections: Sec
     uv.push(u0, v0, u0, v1, u1, v1, u0, v0, u1, v1, u1, v0);
   };
   const rings = sections.map(contour);
+  // Roll the raked sill into its short face apron. Keep both jamb arrises
+  // fixed and put every new station before the glazing seat: the cut in the
+  // wall, glazing throat and structural joins are not bevelled as boxes.
+  const lip = (s: Section) => Math.min(0.014, s.sill * 0.72);
+  const sillRow = (near: THREE.Vector3[], far: THREE.Vector3[], t: number, drop: number) => {
+    const r = near.at(-2)!.clone().lerp(far.at(-2)!, t), l = near.at(-1)!.clone().lerp(far.at(-1)!, t);
+    return [0, 0.06, 0.94, 1].map((u, i) => {
+      const p = r.clone().lerp(l, u);
+      if (i === 1 || i === 2) p.y -= drop;
+      return p;
+    });
+  };
+  const sillU = [0, 0.06, 0.94, 1];
   let distance = 0;
   for (let i = 1; i < rings[0].length; i++) {
     const run = rings[0][i-1].distanceTo(rings[0][i]);
     for (let j = 1; j < rings.length; j++) {
       const near = rings[j-1], far = rings[j];
+      if (i === rings[0].length - 1 && (j === 1 || j === rings.length - 1)) {
+        const front = j === 1, mouth = front ? sections[j-1] : sections[j];
+        const radius = lip(mouth), depth = Math.abs(sections[j].z - sections[j-1].z), k = 1 - Math.SQRT1_2;
+        const profile = [[0, radius], [k * radius / depth, k * radius], [radius / depth, 0], [1, 0]];
+        const rows = profile.map(([t, drop]) => sillRow(front ? near : far, front ? far : near, t, drop));
+        if (!front) rows.reverse();
+        for (let k = 1; k < rows.length; k++) for (let col = 1; col < sillU.length; col++) {
+          const lo = rows[k-1], hi = rows[k];
+          quad(lo[col-1], hi[col-1], hi[col], lo[col], (distance + run * sillU[col-1]) / 2.2,
+            (distance + run * sillU[col]) / 2.2, (mid - lo[0].z - a.z0) / 2.2, (mid - hi[0].z - a.z0) / 2.2);
+        }
+        continue;
+      }
       quad(near[i-1], far[i-1], far[i], near[i], distance / 2.2, (distance + run) / 2.2,
         (sections[j-1].z - a.z0) / 2.2, (sections[j].z - a.z0) / 2.2);
     }
     distance += run;
   }
-  for (const s of [sections[0], sections[sections.length-1]]) {
-    const z = mid - s.z, x = s.width / 2, side = s.z === a.z0 ? 1 : -1;
-    quad(new THREE.Vector3(-side*x, 0, z), new THREE.Vector3(side*x, 0, z),
-      new THREE.Vector3(side*x, s.sill, z), new THREE.Vector3(-side*x, s.sill, z),
-      0, s.sill / 2.2, 0, s.width / 2.2);
+  for (const j of [0, sections.length - 1]) {
+    const s = sections[j], rim = sillRow(rings[j], rings[j], 0, lip(s));
+    if (j === 0) rim.reverse();
+    for (let k = 1; k < rim.length; k++) {
+      const p = rim[k-1], q = rim[k];
+      quad(new THREE.Vector3(p.x, 0, p.z), new THREE.Vector3(q.x, 0, q.z), q, p,
+        0, s.sill / 2.2, s.width * sillU[k-1] / 2.2, s.width * sillU[k] / 2.2);
+    }
   }
   const liner = new THREE.BufferGeometry();
   liner.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));

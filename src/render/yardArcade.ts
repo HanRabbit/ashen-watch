@@ -8,7 +8,7 @@ export function addYardArcade(b: Batch, rubble: THREE.Material, dressed: THREE.M
   const piers = WALLS.filter(w => w.tag === 'pier').sort((a, c) => a.z0 - c.z0);
   const spring = 2.48, crown = 3.48;
   for (const p of piers) {
-    b.box(dressed, p.x0 - 0.07, p.z0 - 0.047, p.x1 + 0.065, p.z1 + 0.047, spring - 0.12, spring, 1.6);
+    b.edgeBox('stone', dressed, p.x0 - 0.07, p.z0 - 0.047, p.x1 + 0.065, p.z1 + 0.047, spring - 0.12, spring, 1.6);
   }
   for (let bay = 1; bay < piers.length; bay++) {
     const near = piers[bay-1], far = piers[bay];

@@ -4,6 +4,7 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { BARRELS, PROPS, RAISED_Y, WELL } from '../sim/level';
+import { edgeStock } from './edgeStock';
 import { Batch, put } from './geom';
 import { Materials, scaleUV, tiledBox, trackPending } from './materials';
 import { applyWear, heroFinish, heroOutline, heroSolid, loadProp, mergeByMaterial, sackGeometry, sackTie } from './propAssets';
@@ -20,11 +21,12 @@ function crateBox(b: Batch, v: Variants, x0: number, z0: number, x1: number, z1:
   for (const [cx, cz] of [[x0 + t / 2, z0 + t / 2], [x1 - t / 2, z0 + t / 2], [x0 + t / 2, z1 - t / 2], [x1 - t / 2, z1 - t / 2]]) {
     b.box(v.woodPlank, cx - t / 2, cz - t / 2, cx + t / 2, cz + t / 2, y0, y1, 0.9);
   }
+  // Prioritize the projecting frame; the flush core/posts and thin diagonal straps stay square.
   for (const y of [y0 + t / 2, y1 - t / 2]) {
-    b.box(v.woodPlank, x0 - o, z0 - o, x1 + o, z0 + t, y - t / 2, y + t / 2, 0.9);
-    b.box(v.woodPlank, x0 - o, z1 - t, x1 + o, z1 + o, y - t / 2, y + t / 2, 0.9);
-    b.box(v.woodPlank, x0 - o, z0, x0 + t, z1, y - t / 2, y + t / 2, 0.9);
-    b.box(v.woodPlank, x1 - t, z0, x1 + o, z1, y - t / 2, y + t / 2, 0.9);
+    b.edgeBox('timber', v.woodPlank, x0 - o, z0 - o, x1 + o, z0 + t, y - t / 2, y + t / 2, 0.9);
+    b.edgeBox('timber', v.woodPlank, x0 - o, z1 - t, x1 + o, z1 + o, y - t / 2, y + t / 2, 0.9);
+    b.edgeBox('timber', v.woodPlank, x0 - o, z0, x0 + t, z1, y - t / 2, y + t / 2, 0.9);
+    b.edgeBox('timber', v.woodPlank, x1 - t, z0, x1 + o, z1, y - t / 2, y + t / 2, 0.9);
   }
   // 斜撑：±z 面与 ±x 面各一根
   const diagZ = Math.hypot(w - 2 * t, h - 2 * t), angZ = Math.atan2(h - 2 * t, w - 2 * t);
@@ -420,17 +422,17 @@ export function buildFurniture(m: Materials): THREE.Group {
       case 'hearth': {
         // 石砌开放壁炉（concept/02）：烟囱胸墙从墙里长出 + 敞开炉膛 + 石炉台 + 炉罩烟熏
         const hx = p.x0, hz0 = p.z0, hz1 = p.z1;
-        b.box(v.wallTrim, hx, hz0 - 0.1, hx + 0.85, hz1 + 0.1, 0, 0.16); // 炉前石台
-        b.box(v.wallAshlar, hx, hz0, hx + 0.55, hz0 + 0.45, 0.16, 1.5); // 左垛
-        b.box(v.wallAshlar, hx, hz1 - 0.45, hx + 0.55, hz1, 0.16, 1.5); // 右垛
+        b.edgeBox('stone', v.wallTrim, hx, hz0 - 0.1, hx + 0.85, hz1 + 0.1, 0, 0.16); // 炉前石台
+        b.edgeBox('stone', v.wallAshlar, hx, hz0, hx + 0.55, hz0 + 0.45, 0.16, 1.5); // 左垛
+        b.edgeBox('stone', v.wallAshlar, hx, hz1 - 0.45, hx + 0.55, hz1, 0.16, 1.5); // 右垛
         b.box(v.wallRough, hx, hz0 + 0.45, hx + 0.15, hz1 - 0.45, 0.16, 1.5); // 炉膛背
         b.box(v.wallRough, hx, hz0 + 0.45, hx + 0.55, hz1 - 0.45, 0.16, 0.24); // 炉膛底
         // 尖拱券眉 + 托石 + 炉罩 mantel
         for (const sz of [-1, 1]) {
-          b.geo(v.wallTrim, tiledBox(0.16, 0.16, 0.85, 1), hx + 0.27, 1.32, -4.4 + sz * 0.42, -sz * 0.35, 0, 0);
-          b.box(v.wallTrim, hx + 0.45, -4.4 + sz * 0.78 - 0.09, hx + 0.62, -4.4 + sz * 0.78 + 0.09, 1.34, 1.5);
+          b.geo(v.wallTrim, edgeStock(0.16, 0.16, 0.85, 1, 'stone'), hx + 0.27, 1.32, -4.4 + sz * 0.42, -sz * 0.35, 0, 0);
+          b.edgeBox('stone', v.wallTrim, hx + 0.45, -4.4 + sz * 0.78 - 0.09, hx + 0.62, -4.4 + sz * 0.78 + 0.09, 1.34, 1.5);
         }
-        b.box(v.wallTrim, hx, hz0 - 0.06, hx + 0.68, hz1 + 0.06, 1.5, 1.64); // mantel
+        b.edgeBox('stone', v.wallTrim, hx, hz0 - 0.06, hx + 0.68, hz1 + 0.06, 1.5, 1.64); // mantel
         // 收分炉罩（四棱台）+ 烟道
         const hood = scaleUV(new THREE.CylinderGeometry(0.72, 1.7, 1.1, 4, 1), 1.5);
         hood.rotateY(Math.PI / 4);
@@ -472,7 +474,7 @@ export function buildFurniture(m: Materials): THREE.Group {
       }
       case 'pot': {
         // 炉旁石墩：备餐台（热食碗/食材），锅已挂在炉膛上方
-        b.box(v.wallTrim, p.x0, p.z0, p.x1, p.z1, 0, 0.3);
+        b.edgeBox('stone', v.wallTrim, p.x0, p.z0, p.x1, p.z1, 0, 0.3);
         break;
       }
       case 'woodpile': {
@@ -539,15 +541,15 @@ export function buildFurniture(m: Materials): THREE.Group {
         crateBox(b, v, p.x0, p.z0, p.x1, p.z1, y0, y0 + p.h);
         break;
       case 'flaskTable':
-        b.box(v.woodPlank, p.x0, p.z0, p.x1, p.z1, y0 + 0.78, y0 + 0.86, 1);
+        b.edgeBox('timber', v.woodPlank, p.x0, p.z0, p.x1, p.z1, y0 + 0.78, y0 + 0.86, 1);
         for (const [dx, dz] of [[0.05, 0.05], [0.05, 0.65], [0.65, 0.05], [0.65, 0.65]]) {
-          b.box(v.woodBeam, p.x0 + dx, p.z0 + dz, p.x0 + dx + 0.1, p.z0 + dz + 0.1, y0, y0 + 0.78, 1);
+          b.edgeBox('timber', v.woodBeam, p.x0 + dx, p.z0 + dz, p.x0 + dx + 0.1, p.z0 + dz + 0.1, y0, y0 + 0.78, 1);
         }
         break;
       case 'altar':
-        b.box(v.wallTrim, p.x0, p.z0, p.x1, p.z1, y0, y0 + 0.2);
-        b.box(v.wallAshlar, p.x0 + 0.15, p.z0 + 0.12, p.x1 - 0.15, p.z1 - 0.12, y0 + 0.2, y0 + 0.95);
-        b.box(v.wallTrim, p.x0, p.z0, p.x1, p.z1, y0 + 0.95, y0 + 1.1);
+        b.edgeBox('stone', v.wallTrim, p.x0, p.z0, p.x1, p.z1, y0, y0 + 0.2);
+        b.edgeBox('stone', v.wallAshlar, p.x0 + 0.15, p.z0 + 0.12, p.x1 - 0.15, p.z1 - 0.12, y0 + 0.2, y0 + 0.95);
+        b.edgeBox('stone', v.wallTrim, p.x0, p.z0, p.x1, p.z1, y0 + 0.95, y0 + 1.1);
         break;
       case 'brazier': break; // 由 props.ts 画（随状态变化）
       case 'pew': {
@@ -583,7 +585,7 @@ export function buildFurniture(m: Materials): THREE.Group {
   b.geo(v.clothLinen, sackTie(0.3, 0.44), -2.5, 0, -2.0, 0, 0.5, 0.1);
   b.geo(v.clothLinen, sackGeometry(11, 0.26, 0.36, 0.4), -2.0, 0, -1.6, 0.05, 0.7, 0);
   b.geo(v.clothLinen, sackTie(0.26, 0.36), -2.0, 0, -1.6, 0.05, 0.7, 0);
-  b.box(v.woodBeam, 18.2, 10.7, 19.8, 11.0, R, R + 0.14, 1);
+  b.edgeBox('timber', v.woodBeam, 18.2, 10.7, 19.8, 11.0, R, R + 0.14, 1);
 
   // —— 木桶（鼓腹+铁箍 GLB）：ref 机位前景一组 ——
   const barrelFallbacks: THREE.Group[] = [];
@@ -628,7 +630,7 @@ export function buildFurniture(m: Materials): THREE.Group {
   // 断柱与倒落的柱头
   b.geo(v.wallTrim, scaleUV(new THREE.CylinderGeometry(0.34, 0.38, 0.75, 12), 1), 7, 0.375, 24);
   b.geo(v.wallTrim, new THREE.CylinderGeometry(0.34, 0.34, 0.5, 12), 7.9, 0.34, 24.6, 0, 0, HALF_PI);
-  b.box(v.wallRough, 6.4, 23.4, 7.0, 24.0, 0, 0.3);
+  b.edgeBox('stone', v.wallRough, 6.4, 23.4, 7.0, 24.0, 0, 0.3);
   // 东墙装饰灯座（未点）
   for (const z of [10, 20]) {
     b.box(m.iron, 9.8, z - 0.06, 9.95, z + 0.06, 2.0, 2.5);

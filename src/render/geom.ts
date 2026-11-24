@@ -2,6 +2,7 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { scaleUV, tiledBox } from './materials';
+import { edgeStock, type EdgeStockProfile } from './edgeStock';
 
 export function put<T extends THREE.Object3D>(o: T, x: number, y: number, z: number): T {
   o.position.set(x, y, -z);
@@ -88,6 +89,11 @@ export class Batch {
   box(mat: THREE.Material, x0: number, z0: number, x1: number, z1: number, y0: number, y1: number, tile = 2): void {
     const geo = tiledBox(x1 - x0, y1 - y0, z1 - z0, tile);
     this.add(geo, mat, new THREE.Matrix4().makeTranslation((x0 + x1) / 2, (y0 + y1) / 2, -(z0 + z1) / 2));
+  }
+
+  /** Solid, exposed stock only. Keep continuous structural shells (and thin sheets) on box(). */
+  edgeBox(profile: EdgeStockProfile, mat: THREE.Material, x0: number, z0: number, x1: number, z1: number, y0: number, y1: number, tile = 2): void {
+    this.geo(mat, edgeStock(x1 - x0, y1 - y0, z1 - z0, tile, profile), (x0 + x1) / 2, (y0 + y1) / 2, (z0 + z1) / 2);
   }
 
   /** 任意几何：位置为模拟坐标，rotY 为绕竖轴的 three.js 旋转。 */

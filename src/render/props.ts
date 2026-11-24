@@ -5,6 +5,7 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { BRAZIER, BrazierId, HEARTH, WALL_LAMP } from '../config';
 import { B1_Y, BAILEY_SHELF, BELL_POS, BRAZIER_POS, DOORS, INTERACTS, LAMP_POS, PROPS, RAISED_Y } from '../sim/level';
 import { World } from '../sim/state';
+import { edgeStock, type EdgeStockProfile } from './edgeStock';
 import { archLeaf, archPath, boxMesh, cyl, lerp, mesh, put } from './geom';
 import { glowTexture, grimeTexture, Materials, smokeTexture } from './materials';
 import { installLocalLightTransport, LocalLightDoors } from './localLightTransport';
@@ -15,6 +16,10 @@ import type { Quality } from './view';
 
 const R = RAISED_Y;
 const HALF_PI = Math.PI / 2;
+
+function stockMesh(profile: EdgeStockProfile, mat: THREE.Material, w: number, h: number, d: number, tile: number): THREE.Mesh {
+  return mesh(edgeStock(w, h, d, tile, profile), mat);
+}
 
 function glowSprite(tex: THREE.Texture, color: number, size: number): THREE.Sprite {
   const s = new THREE.Sprite(new THREE.SpriteMaterial({
@@ -159,7 +164,7 @@ function scrollArm(m: Materials): THREE.Group {
   const g = new THREE.Group();
   const polished = m.iron.clone();
   polished.roughness = 0.4;
-  const mount = boxMesh(m.iron, 0.05, 0.36, 0.14, 1); mount.position.set(0.03, 0, 0);
+  const mount = stockMesh('iron', m.iron, 0.05, 0.36, 0.14, 1); mount.position.set(0.03, 0, 0);
   g.add(mount);
   for (const [ry, rz] of [[-0.14, 0.05], [0.14, 0.05], [-0.14, -0.05], [0.14, -0.05]]) {
     const rivet = mesh(new THREE.SphereGeometry(0.016, 5, 4), m.iron); rivet.position.set(0.06, ry, rz); g.add(rivet);
@@ -314,7 +319,25 @@ function boardTexture(): THREE.CanvasTexture {
   return t;
 }
 
-function gateGeometry(): THREE.BufferGeometry {
+// The original bars used a full UV chart on each side (not metre tiling).
+function gateStock(w: number, h: number, d: number): THREE.BufferGeometry {
+  const g = edgeStock(w, h, d, 1, 'iron');
+  const uv = g.getAttribute('uv');
+  const seen = new Set<number>();
+  const chartSize = [[d, h], [d, h], [w, d], [w, d], [w, h], [w, h]];
+  for (const { start, count, materialIndex = 0 } of g.groups) {
+    const [u, v] = chartSize[materialIndex];
+    for (let i = start; i < start + count; i++) {
+      const vertex = g.index!.getX(i);
+      if (seen.has(vertex)) continue;
+      seen.add(vertex);
+      uv.setXY(vertex, uv.getX(vertex) / u, uv.getY(vertex) / v);
+    }
+  }
+  return g;
+}
+
+function gateGeometry(closeUp = false): THREE.BufferGeometry {
   const parts: THREE.BufferGeometry[] = [];
   const tips: THREE.BufferGeometry[] = [];
   const rnd = (i: number): number => { const x = Math.sin(i * 127.1) * 43758.5453; return x - Math.floor(x); };
@@ -327,7 +350,7 @@ function gateGeometry(): THREE.BufferGeometry {
     const x = 0.06 + (i * 1.68) / 8;
     const h = archH(x);
     const w = 0.024 + rnd(i) * 0.012; // 方铁杆，粗细不一
-    const bar = new THREE.BoxGeometry(w, h, w * 0.9);
+    const bar = closeUp ? gateStock(w, h, w * 0.9) : new THREE.BoxGeometry(w, h, w * 0.9);
     bar.translate(x, h / 2, 0);
     parts.push(bar);
     // 矛尖：叶形锥 + 箍环（常摸/雨淋磨亮，单独材质）
@@ -341,7 +364,7 @@ function gateGeometry(): THREE.BufferGeometry {
   }
   // 横档 + 铆钉
   for (const y of [0.28, 1.18]) {
-    const rail = new THREE.BoxGeometry(1.76, 0.06, 0.034);
+    const rail = closeUp ? gateStock(1.76, 0.06, 0.034) : new THREE.BoxGeometry(1.76, 0.06, 0.034);
     rail.translate(0.9, y, 0);
     parts.push(rail);
     for (let i = 0; i <= 8; i++) {
@@ -351,7 +374,7 @@ function gateGeometry(): THREE.BufferGeometry {
       parts.push(rivet);
     }
   }
-  // 顶部随拱横档（分段折线贴合尖拱）
+  // 顶部随拱横档：薄分段保留方头，避免把相接处削成可见缝隙。
   for (let i = 0; i < 8; i++) {
     const xa = 0.06 + (i * 1.68) / 8, xb = 0.06 + ((i + 1) * 1.68) / 8;
     const ya = archH(xa) - 0.12, yb = archH(xb) - 0.12;
@@ -374,7 +397,7 @@ function gateGeometry(): THREE.BufferGeometry {
     parts.push(curl2);
   }
   gateTipParts = tips;
-  return mergeGeometries(parts.map((p) => (p.index ? p.toNonIndexed() : p)), false)!;
+  return mergeGeometries(parts, false)!;
 }
 let gateTipParts: THREE.BufferGeometry[] = [];
 function gateTipsGeometry(): THREE.BufferGeometry {
@@ -592,17 +615,17 @@ export class Props {
     const leaf = mesh(archLeaf(gatehouse.box.x1 - gatehouse.box.x0, 1.9, gatehouse.box.h - ghBase, 0.09, true), m.wood);
     this.ghDoor.add(leaf);
     for (const y of [0.45, 1.75]) {
-      const strap = boxMesh(m.iron, 1.1, 0.07, 0.11, 1); strap.position.set(0.58, y, 0);
+      const strap = stockMesh('iron', m.iron, 1.1, 0.07, 0.11, 1); strap.position.set(0.58, y, 0);
       this.ghDoor.add(strap);
     }
     const ringOut = mesh(new THREE.TorusGeometry(0.07, 0.012, 5, 10), m.iron); ringOut.position.set(1.35, 1.1, -0.06);
     this.ghDoor.add(ringOut);
-    const bracketFixed = boxMesh(m.iron, 0.09, 0.16, 0.06, 1); bracketFixed.position.set(0.85, 1.25, 0.075);
-    this.boltBracket = boxMesh(m.iron, 0.09, 0.16, 0.06, 1); this.boltBracket.position.set(1.4, 1.25, 0.075);
+    const bracketFixed = stockMesh('iron', m.iron, 0.09, 0.16, 0.06, 1); bracketFixed.position.set(0.85, 1.25, 0.075);
+    this.boltBracket = stockMesh('iron', m.iron, 0.09, 0.16, 0.06, 1); this.boltBracket.position.set(1.4, 1.25, 0.075);
     this.boltBar = cyl(m.iron, 0.028, 0.028, 0.72, 7); this.boltBar.rotation.z = HALF_PI; this.boltBar.position.set(1.05, 1.25, 0.085);
     this.boltKnob = mesh(new THREE.SphereGeometry(0.045, 7, 6), m.iron); this.boltKnob.position.set(0.7, 1.25, 0.12);
     this.ghDoor.add(bracketFixed, this.boltBracket, this.boltBar, this.boltKnob);
-    const keeper = put(boxMesh(m.iron, 0.12, 0.16, 0.07, 1), gatehouse.box.x1 + 0.08, ghBase + 1.25, gatehouse.box.z0 - 0.05);
+    const keeper = put(stockMesh('iron', m.iron, 0.12, 0.16, 0.07, 1), gatehouse.box.x1 + 0.08, ghBase + 1.25, gatehouse.box.z0 - 0.05);
     g.add(this.ghDoor, keeper);
 
     // 尖拱铁栅门（PRP-03）：位置/朝向读 DOORS.gate，布局调整时自动跟随
@@ -614,11 +637,11 @@ export class Props {
     this.gate.name = 'S4-stair-gate';
     const gateWidth = DOORS.gate.axis === 'z' ? gateBox.z1 - gateBox.z0 : gateBox.x1 - gateBox.x0;
     this.gate.scale.set(gateWidth / 1.8, (gateBox.h - gateBase) / 2.95, 1);
-    this.gate.add(mesh(gateGeometry(), m.iron));
+    this.gate.add(mesh(gateGeometry(true), m.iron));
     const tipIron = m.iron.clone();
     tipIron.roughness = 0.4;
     this.gate.add(mesh(gateTipsGeometry(), tipIron));
-    const wedge = boxMesh(variants(m).woodBeam, 0.12, 1.9, 0.1, 1); wedge.position.set(0.95, 0.85, 0.16); wedge.rotation.z = 0.5;
+    const wedge = stockMesh('timber', variants(m).woodBeam, 0.12, 1.9, 0.1, 1); wedge.position.set(0.95, 0.85, 0.16); wedge.rotation.z = 0.5;
     const chain = mesh(new THREE.TorusGeometry(0.11, 0.02, 5, 10), m.iron); chain.position.set(1.72, 1.1, 0.02);
     this.gateJam.add(wedge, chain);
     this.gate.add(this.gateJam);
@@ -629,16 +652,16 @@ export class Props {
     const gateFrame = put(new THREE.Group(), gh.x, gateBase, gh.z);
     gateFrame.rotation.y = this.gateClosedRot;
     for (const y of [0.24, 0.93]) {
-      const socket = boxMesh(m.iron, 0.10, 0.09, 0.10, 1);
+      const socket = stockMesh('iron', m.iron, 0.10, 0.09, 0.10, 1);
       socket.position.set(-0.055, y, 0);
       const pin = cyl(m.iron, 0.033, 0.033, 0.15, 8);
       pin.position.y = y;
-      const strap = boxMesh(tipIron, 0.21, 0.051, 0.046, 1);
+      const strap = stockMesh('iron', tipIron, 0.21, 0.051, 0.046, 1);
       strap.position.set(0.083, y / this.gate.scale.y, 0);
       gateFrame.add(socket, pin);
       this.gate.add(strap);
     }
-    const strike = boxMesh(m.iron, 0.055, 0.19, 0.16, 1);
+    const strike = stockMesh('iron', m.iron, 0.055, 0.19, 0.16, 1);
     strike.position.set(gateWidth, 1.05, 0);
     gateFrame.add(strike);
     g.add(gateFrame);
@@ -660,7 +683,7 @@ export class Props {
     const rim = new THREE.ExtrudeGeometry(rimShape, { depth: 0.13, bevelEnabled: true, bevelSize: 0.018, bevelThickness: 0.018, bevelSegments: 1 });
     rim.translate(0, 0, -0.14);
     blockedArch.add(mesh(rim, v.wallTrim));
-    const sill = boxMesh(v.wallTrim, 2.98, 0.14, 0.25, 1.4);
+    const sill = stockMesh('stone', v.wallTrim, 2.98, 0.14, 0.25, 1.4);
     sill.position.set(0, 0.015, -0.09);
     blockedArch.add(sill);
     const grille = new THREE.Group();
@@ -704,7 +727,7 @@ export class Props {
     const lamp = put(new THREE.Group(), LAMP_POS.x + ln[0] * 0.32, LAMP_POS.y, LAMP_POS.z + ln[1] * 0.32);
     lamp.rotation.y = lampRot;
     lamp.scale.setScalar(1.15);
-    this.lampStub = boxMesh(m.iron, 0.2, 0.05, 0.05, 1); this.lampStub.position.set(0.1, -0.12, 0); this.lampStub.rotation.z = -0.7;
+    this.lampStub = stockMesh('iron', m.iron, 0.2, 0.05, 0.05, 1); this.lampStub.position.set(0.1, -0.12, 0); this.lampStub.rotation.z = -0.7;
     this.lampGlass = new THREE.MeshStandardMaterial({
       color: 0x3a2a16, emissive: 0xffa640, emissiveIntensity: 0, roughness: 0.2,
       transparent: true, opacity: 0.55, side: THREE.DoubleSide, roughnessMap: grimeTexture(),
@@ -804,7 +827,7 @@ export class Props {
     const supply = PROPS.find((p) => p.tag === 'crate')!;
     const sx = (supply.x0 + supply.x1) / 2, sz = (supply.z0 + supply.z1) / 2;
     put(this.crateItems, sx, R + supply.h, sz);
-    this.crateLid = put(boxMesh(m.wood, 0.94, 0.05, 0.76, 0.8), supply.x1 - 0.08, R + 0.55, sz);
+    this.crateLid = put(stockMesh('timber', m.wood, 0.94, 0.05, 0.76, 0.8), supply.x1 - 0.08, R + 0.55, sz);
     this.crateLid.rotation.z = -1.2;
     g.add(this.crateItems, this.crateLid);
     const flaskAt = INTERACTS.find((it) => it.id === 'flask')!;
@@ -831,7 +854,7 @@ export class Props {
       },
     });
     chest.add(chestGlb);
-    this.chestLock = boxMesh(m.iron, 0.1, 0.12, 0.04, 1); this.chestLock.position.set(0, 0.24, -0.21);
+    this.chestLock = stockMesh('iron', m.iron, 0.1, 0.12, 0.04, 1); this.chestLock.position.set(0, 0.24, -0.21);
     this.chestGlow = glowSprite(tex, 0x9fb4c8, 0.9); this.chestGlow.position.set(0, 0.32, -0.05);
     this.chestClapper = makeClapper(m); this.chestClapper.rotation.z = HALF_PI; this.chestClapper.position.set(0.05, 0.34, 0);
     chest.add(this.chestLock, this.chestGlow, this.chestClapper);
@@ -859,29 +882,29 @@ export class Props {
     // A fixed yoke on two braced arms carries the bell; only the bell and rope swing.
     const mount = put(new THREE.Group(), BELL_POS.x, bellPivotY, BELL_POS.z);
     const wallZ = BELL_POS.z - 0.5; // local +Z is toward the courtyard's south wall
-    const crossbar = boxMesh(v.woodBeam, 0.82, 0.14, 0.14, 1.2);
+    const crossbar = stockMesh('timber', v.woodBeam, 0.82, 0.14, 0.14, 1.2);
     crossbar.position.y = 0.08;
     const pin = cyl(m.iron, 0.034, 0.034, 0.18, 8);
     pin.position.y = 0.025;
     mount.add(crossbar, pin);
     for (const side of [-1, 1]) {
       const x = side * 0.32;
-      const tail = boxMesh(v.woodBeam, 0.11, 0.17, wallZ + 0.17, 1);
+      const tail = stockMesh('timber', v.woodBeam, 0.11, 0.17, wallZ + 0.17, 1);
       tail.position.set(x, 0.08, (wallZ - 0.07) / 2);
-      const strut = boxMesh(v.woodBeam, 0.09, 0.09, Math.hypot(wallZ, 0.35), 1);
+      const strut = stockMesh('timber', v.woodBeam, 0.09, 0.09, Math.hypot(wallZ, 0.35), 1);
       strut.position.set(x, -0.175, wallZ / 2);
       strut.rotation.x = Math.atan2(0.35, wallZ);
-      const plate = boxMesh(m.iron, 0.15, 0.54, 0.045, 1);
+      const plate = stockMesh('iron', m.iron, 0.15, 0.54, 0.045, 1);
       plate.position.set(x, -0.11, wallZ - 0.012);
       mount.add(tail, strut, plate);
     }
     g.add(this.bell, mount);
 
     // 任务板与补油台（PRP-08）
-    const board = put(boxMesh(m.wood, 0.06, 1.0, 1.2, 1), 2.96, 1.5, -1.6);
+    const board = put(stockMesh('timber', m.wood, 0.06, 1.0, 1.2, 1), 2.96, 1.5, -1.6);
     const sheet = put(new THREE.Mesh(new THREE.PlaneGeometry(0.62, 0.78), new THREE.MeshStandardMaterial({ map: boardTexture(), roughness: 1 })), 2.92, 1.5, -1.6);
     sheet.rotation.y = -HALF_PI;
-    const can = put(boxMesh(m.iron, 0.2, 0.3, 0.16, 1), 2.6, 1.1, -4.3);
+    const can = put(stockMesh('iron', m.iron, 0.2, 0.3, 0.16, 1), 2.6, 1.1, -4.3);
     const spout = put(cyl(m.iron, 0.012, 0.02, 0.22, 5), 2.5, 1.22, -4.3); spout.rotation.z = 0.9;
     const funnel = put(mesh(new THREE.ConeGeometry(0.08, 0.12, 8, 1, true), m.iron), 2.5, 1.01, -4.75); funnel.rotation.x = Math.PI;
     const rag = put(boxMesh(m.cloth, 0.3, 0.02, 0.24, 1), 2.45, 0.96, -5.2);

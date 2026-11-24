@@ -99,6 +99,8 @@ class Yard {
     this.place(mat, hewn(length, w, d, seed, taper, worn), mid, new THREE.Matrix4().makeBasis(across, axis, normal));
   }
 
+  // The dressed blocks on the cart and scaffold also go through hewn():
+  // their long edges and ends already have geometry, just like the timber.
   board(mat: THREE.Material, [x, y, z]: Point, [w, h, d]: Point, grain: 'x' | 'y' | 'z', seed: number, worn = false): void {
     if (grain === 'x') this.timber(mat, [x - w / 2, y, z], [x + w / 2, y, z], d, h, [0, 1, 0], seed, 1, worn);
     else if (grain === 'z') this.timber(mat, [x, y, z - d / 2], [x, y, z + d / 2], w, h, [0, 1, 0], seed, 1, worn);

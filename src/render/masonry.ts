@@ -219,6 +219,20 @@ export function addCurtainPlinth(b: Batch, m: Fabric, w: Box): boolean {
   return true;
 }
 
+/** Soften the projecting trim of the chapel and gatehouse, not the structural
+ * wall boxes or their window/door cut pieces. Adjacent bands still overlap
+ * at the corners and seat into the fully square wall behind them. */
+export function addMasonryTrim(b: Batch, m: Fabric, w: Box): void {
+  const exposed = w.tag === 'gh' || w.h >= 7 || w.tag === 'balustrade';
+  const band = (out: number, y0: number, y1: number) => {
+    const rect = [w.x0 - out, w.z0 - out, w.x1 + out, w.z1 + out, y0, y1, 2.2] as const;
+    if (exposed) b.edgeBox('stone', m.wallTrim, ...rect);
+    else b.box(m.wallTrim, ...rect);
+  };
+  if (!addCurtainPlinth(b, m, w)) band(0.08, 0, 0.35);
+  if (w.h >= 5) band(0.05, w.h - 0.12, w.h);
+}
+
 /** Draw stepped repair seams, not rectangular patches or isolated stuck-on stones. */
 function repair(b: Batch, m: Fabric, f: Face, seed: number, rows: [number, number, number, number][]): void {
   const r = rng(seed);
