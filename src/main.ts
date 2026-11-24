@@ -280,6 +280,7 @@ function tick(dt: number): void {
   updatePose(w, running ? Math.min(1, acc / FIXED_DT) : 1);
   view.update(w, pose, input.yaw, input.pitch, dt, time);
   if (mode === 'playing') hud.update(w, running ? pickTarget(w) : null, threat * 0.85, input.sprintLocked);
+  hud.updateGuide(w, input.yaw, running, time);
   view.render();
 }
 

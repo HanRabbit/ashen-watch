@@ -1,6 +1,6 @@
 // 页面与浮层（UI-03）：标题、亮度校准、暂停设置、任务资源、修复确认、失败重试、通关结算、纯鼠标工具栏。
 // 界面按栈管理：只有栈顶接受输入。所有按钮都可点击，纯鼠标可以从标题走到结算。
-import { BRAZIER, BRAZIER_NAME, BrazierId, GHOST, HEARTH, LANTERN, PHASE, REPAIR_COST, REPAIR_NAME, RepairId, WALL_LAMP } from '../config';
+import { REPAIR_COST, REPAIR_NAME, RepairId, WALL_LAMP } from '../config';
 import { BIND_LABEL, BindAction, DEFAULT_BINDS, keyName, Settings } from '../settings';
 import { canRepairNow, repairGap } from '../sim/sim';
 import { World } from '../sim/state';
@@ -183,35 +183,17 @@ export class Screens {
   }
 
   private tasksBody(w: World): string {
-    const q = w.quest, inv = w.inv;
-    const steps: [string, boolean][] = [
-      ['拾取提灯', inv.hasLantern],
-      ['阅读任务板', q.boardRead],
-      ['搜集与整备（三处修复可选，最多两处）', w.phase !== 'tutorial' && w.phase !== 'day' && w.phase !== 'dusk'],
-      ['入夜或晨曦后，到礼拜堂祭台匣取钟舌', inv.hasClapper || q.installed],
-      ['带钟舌回门房，等到晨曦', (q.returnedBeforeDawn && w.phase !== 'night') || q.installed || (w.phase === 'dawn' && inv.hasClapper)],
-      ['在门房外的晨钟装上钟舌', q.installed],
-      ['敲响晨钟', q.rung],
-    ];
-    const now = steps.findIndex(([, done]) => !done);
-    const list = steps.map(([t, done], i) => `<li class="${done ? 'done' : i === now ? 'now' : ''}">${t}</li>`).join('');
-    const rep = (['lamp', 'gate', 'bolt'] as RepairId[]).map((id) => {
-      const c = REPAIR_COST[id];
-      return `<tr><th>${REPAIR_NAME[id]}</th><td>${w.repairs[id] ? '已修好' : `未修（${c.wood} 木、${c.iron} 铁）`}</td></tr>`;
+    const { inv, quest } = w;
+    const repairs = (['lamp', 'gate', 'bolt'] as RepairId[]).map((id) => {
+      const { wood, iron } = REPAIR_COST[id];
+      return `<tr><th>${REPAIR_NAME[id]}</th><td>${w.repairs[id] ? '已修' : `${wood} 木 · ${iron} 铁`}</td></tr>`;
     }).join('');
     return `
-      <p class="ok">${goalText(w).replace('<br>', '；')}</p>
-      <h3>任务</h3><ol class="steps">${list}</ol>
-      <h3>资源</h3>
+      <p class="ok">${goalText(w)}</p>
       <table class="kv">
-        <tr><th>木料 / 铁件</th><td>${inv.wood} / ${inv.iron}</td></tr>
-        <tr><th>灯油</th><td>${inv.oil} 份（提灯内 ${fmtTime(w.lantern.oil)}，上限 ${fmtTime(LANTERN.maxOil)}）</td></tr>
-        <tr><th>热食</th><td>${inv.meal} 份</td></tr>
-        <tr><th>钟舌</th><td>${q.installed ? '已装回晨钟' : inv.hasClapper ? '持有' : '未取得'}</td></tr>
-        ${rep}
-        <tr><th>炉火</th><td>${w.phase === 'night' ? (w.hearth.lit ? `可维持 ${fmtTime(w.hearth.burn)}` : '已熄灭') : `白天长燃；入夜起可维持 ${fmtTime(HEARTH.nightBurn)}，每添 1 木 +${fmtTime(HEARTH.woodBonus)}`}</td></tr>
-        <tr><th>庭院壁灯</th><td>${!w.repairs.lamp ? '缺件' : w.lampBurn > 0 ? `点亮，余 ${fmtTime(w.lampBurn)}` : '已修，未点'}</td></tr>
-        ${(Object.keys(BRAZIER_NAME) as BrazierId[]).map((b) => `<tr><th>${BRAZIER_NAME[b]}</th><td>${w.braziers[b] > 0 ? `点亮，余 ${fmtTime(w.braziers[b])}` : '未点（投 1 份油）'}</td></tr>`).join('')}
+        <tr><th>物资</th><td>木 ${inv.wood} · 铁 ${inv.iron} · 油 ${inv.oil} · 热食 ${inv.meal}</td></tr>
+        <tr><th>钟舌</th><td>${quest.installed ? '已装' : inv.hasClapper ? '持有' : '待取'}</td></tr>
+        ${repairs}
       </table>`;
   }
 
@@ -268,16 +250,12 @@ export class Screens {
           <div class="btns"><button class="primary" data-act="${this.stack.length > 1 ? 'back' : 'resume'}">${this.stack.length > 1 ? '返回' : '继续游戏'}</button></div></div>`;
       case 'board':
         return `<div class="panel wide"><h2>任务板</h2>
-          <p>钟座的线稿旁，前任守夜人留了几行字：</p>
-          <p class="ok">「晨钟的<b>钟舌</b>收在礼拜堂祭台的匣子里，<b>入夜才开</b>。取回它，守到天亮，把它装回门外的钟上，敲响。」</p>
-          <table class="kv">
-            <tr><th>白天</th><td>庭院货架和礼拜堂外廊的货箱里各有 2 木、2 铁、1 油。三处损坏<b>最多修两处</b>：庭院壁灯、侧廊栅门、门房门闩。<b>入夜后不能再修。</b></td></tr>
-            <tr><th>不用干等</th><td>白天 ${PHASE.dayLength / 60} 分钟，黄昏 ${fmtTime(PHASE.duskLength)}，夜晚 ${PHASE.nightLength / 60} 分钟。白天忙完了，回<b>床铺</b>休息到黄昏；黄昏准备好了，在<b>壁炉</b>旁等到入夜。</td></tr>
-            <tr><th>门房</th><td>补油台给提灯加油（每份 +${fmtTime(LANTERN.oilPerUnit)}，上限 ${fmtTime(LANTERN.maxOil)}）。炉火旁可把储备食材做成热食。夜里只有炉火点着的门房能回暖。</td></tr>
-            <tr><th>夜里</th><td>有两个东西在游荡。<b>灰影</b>高而直立，察觉你时会短促吸气；<b>黑影</b>贴地爬行，扑击前会扬起披布、发出干涩的拖擦。隔着关上的门和墙，它们看不见你。别冲刺，除非必须。</td></tr>
-            <tr><th>它们怕光</th><td><b>按住右键举灯</b>：只要举着，近前的鬼就一直后退、不敢扑；照它约 ${GHOST.giveUpAfter} 秒，它会放弃退走一阵子。举灯耗油是平时的 ${LANTERN.raiseMultiplier} 倍。<b>火盆</b>在祭台旁和侧廊中段各有一个，投 1 份油能亮 ${BRAZIER.burnTime / 60} 分钟，亮光里两只鬼都不进来；修好的庭院壁灯也一样。</td></tr>
-            <tr><th>寒冷</th><td>夜里在门房外待约 ${fmtTime(HEARTH.coldThreshold)} 后开始冻伤。回到炉火旁立刻停止。</td></tr>
-          </table>
+          <ol class="steps">
+            <li><b>白天</b> · 搜集木、铁和油，最多修两处。回床铺可等到黄昏。</li>
+            <li><b>入夜</b> · 到礼拜堂祭台匣取钟舌。长按右键举灯驱鬼。</li>
+            <li><b>晨曦</b> · 回门房，装好钟舌后敲响晨钟。</li>
+          </ol>
+          <p>门房可补油，点着的壁炉能回暖，也可等到入夜。</p>
           <div class="btns"><button class="primary" data-act="boardClose">收起任务板${w.phase === 'tutorial' ? '，开始白天' : ''}</button></div></div>`;
       case 'repair': {
         const rid = arg as RepairId;
