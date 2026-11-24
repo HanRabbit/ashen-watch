@@ -13,7 +13,7 @@ interface Stonework {
 type Point = NorthPoint & { y: number };
 
 /** World-space UVs follow each stone face, including the exposed thickness. */
-function face(b: Batch, mat: THREE.Material, polygon: readonly Point[], inside: THREE.Vector3, tile: number): void {
+function face(b: Batch, mat: THREE.Material, polygon: readonly Point[], inside: THREE.Vector3, tile: number, chart?: (p: THREE.Vector3) => [number, number]): void {
   const vertices = polygon.map(({ x, y, z }) => new THREE.Vector3(x, y, -z));
   const positions: number[] = [], uv: number[] = [];
   for (let i = 1; i < vertices.length - 1; i++) {
@@ -26,7 +26,8 @@ function face(b: Batch, mat: THREE.Material, polygon: readonly Point[], inside: 
     const tangent = new THREE.Vector2(normal.z, -normal.x).normalize();
     for (const p of [a, c, d]) {
       positions.push(p.x, p.y, p.z);
-      uv.push((flat ? p.x : p.x * tangent.x + p.z * tangent.y) / tile, (flat ? p.z : p.y) / tile);
+      const [u,v] = chart ? chart(p) : [flat ? p.x : p.x * tangent.x + p.z * tangent.y, flat ? p.z : p.y];
+      uv.push(u / tile, v / tile);
     }
   }
   if (positions.length === 0) return;
@@ -100,9 +101,16 @@ export function addNorthCourtFabric(b: Batch, stone: Stonework): void {
     const ring=(y:number)=>outline.map(([x,z])=>({x,y,z}));
     for(const [lo,hi,mat,tile] of [[0,.34,stone.wallTrim,1.75],[.34,2.01,stone.wallAshlar,2.4],[2.01,2.15,stone.wallTrim,1.75],[2.15,p.h,stone.wallRubble,2.4]] as const){
       const bottom=ring(lo),top=ring(hi),inside=centerOf([...bottom,...top]);
-      for(let i=0;i<8;i++){const j=(i+1)%8;face(b,mat,[bottom[i],bottom[j],top[j],top[i]],inside,tile);}
-      if(lo===0)face(b,mat,bottom,inside,tile);
-      if(hi===p.h)face(b,mat,top,inside,tile);
+      // Retain the four original tiledBox face charts on the untouched stone.
+      // The narrow diagonal returns continue the preceding face's texture.
+      const u=[(v:THREE.Vector3)=>v.x-x0,(v:THREE.Vector3)=>-v.z-z0,
+        (v:THREE.Vector3)=>x1-v.x,(v:THREE.Vector3)=>z1+v.z];
+      for(let i=0;i<8;i++){
+        const j=(i+1)%8,axis=u[Math.floor(i/2)];
+        face(b,mat,[bottom[i],bottom[j],top[j],top[i]],inside,tile,v=>[axis(v),v.y-lo]);
+      }
+      if(lo===0)face(b,mat,bottom,inside,tile,v=>[v.x-x0,z1+v.z]);
+      if(hi===p.h)face(b,mat,top,inside,tile,v=>[v.x-x0,-v.z-z0]);
     }
   }
   for (const { profile, z0, z1 } of NORTH_ARCHES) {

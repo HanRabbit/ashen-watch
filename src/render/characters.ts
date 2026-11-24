@@ -917,7 +917,7 @@ export class PlayerModel {
     this.procedural = new ProceduralPlayer(m, tex, this.lanternLight, this.lantern, this.clapper);
     this.grip.name = 'watchman-lantern-grip';
     this.group.add(this.procedural.group, this.lanternLight, this.grip);
-    void Promise.all([loadCharacterAssets(), loadCharTextures()]).then(([a, t]) => {
+    void Promise.all([loadCharacterAssets('hunter'), loadCharTextures()]).then(([a, t]) => {
       if (a.hunter) this.attachAsset(a.hunter, t);
     });
   }
@@ -987,7 +987,9 @@ export class PlayerModel {
       a.chestAnchor.quaternion.premultiply(this.anchorCorrection(a.chestAnchor, this.chestFacing));
       a.headAnchor.quaternion.premultiply(this.anchorCorrection(a.headAnchor, this.chestFacing));
     }
-    if (b.handR) {
+    if (a.gripLocal) {
+      this.gripLocal.copy(a.gripLocal);
+    } else if (b.handR) {
       const middle = b.handR.children.find(child => /Middle1_|Middle01/.test(child.name));
       if (middle) this.gripLocal.copy(middle.position).multiplyScalar(0.68);
     }
@@ -1249,7 +1251,7 @@ export class GhostModels {
     this.procedural = new ProceduralGrey();
     this.wraith = new RagWraith();
     this.group.add(this.procedural.group, this.wraith.root, this.greyTrail.points, this.wraithTrail.points, this.wraithDebris.points);
-    void loadCharacterAssets().then((a) => { if (a.reaper) this.attachReaper(a.reaper); });
+    void loadCharacterAssets('reaper').then((a) => { if (a.reaper) this.attachReaper(a.reaper); });
   }
 
   private attachReaper(a: ReaperAsset): void {
@@ -1395,7 +1397,7 @@ export class GhostModels {
     u.uOpacity.value = alpha;
     u.uDissolve.value = 1 - alpha;
     a.root.position.y += lift + Math.sin(time * 1.7) * 0.03;
-    a.animate?.(dt);
+    if (a.root.visible) a.animate?.(dt);
     // 兜帽暗腔与冷光点跟随主体前倾剪切（头部高度 hh≈0.87；剪切在网格局部空间，世界方向取反）
     const leanOff = -u.uLean.value * 0.886;
     if (this.greyVoid) {

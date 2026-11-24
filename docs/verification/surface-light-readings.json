@@ -1,0 +1,678 @@
+{
+  "baseline": "346c45c",
+  "hardware": "ANGLE (Apple, ANGLE Metal Renderer: Apple M3 Max, Unspecified Version)",
+  "quality": "cinematic",
+  "viewport": [
+    1280,
+    720
+  ],
+  "finalBundle": "/assets/index-Df-M76W5.js",
+  "surfaceAudit": {
+    "method": "Independent pointer-locked walks; beauty/zero mineral normalScale/repeat beauty in one update per stop. Values = 97th percentile sRGB weighted-code deviations inside ROI of each stock beauty compared to its own normal-scale-zero frame. Not a per-pixel diff across builds.",
+    "before": [
+      {
+        "id": "threshold",
+        "roi": [
+          0.4,
+          0.52,
+          0.85,
+          0.82
+        ],
+        "phase": "day",
+        "lantern": false,
+        "pose": [
+          -1.6689330642857847,
+          0,
+          5.700625279517763
+        ],
+        "camera": [
+          0.26239262836635874,
+          3.0120706993817126,
+          -3.495608516891728
+        ],
+        "rotation": [
+          -0.22124451879189325,
+          0.21744739001999636,
+          0.0506776307689772,
+          0.9493151601115819
+        ],
+        "exposure": 1,
+        "key": 0.72,
+        "ao": 0.82,
+        "materials": 22,
+        "darkTail": 2.28,
+        "brightTail": 2,
+        "repeatError": 0,
+        "calls": 621
+      },
+      {
+        "id": "cart-run",
+        "roi": [
+          0.4,
+          0.52,
+          0.85,
+          0.82
+        ],
+        "phase": "day",
+        "lantern": false,
+        "pose": [
+          -0.8335578951485175,
+          0,
+          12.096295182558265
+        ],
+        "camera": [
+          -0.13886185230675954,
+          3.185718934057769,
+          -14.852525153804187
+        ],
+        "rotation": [
+          -0.06668219431505407,
+          0.9333153981574549,
+          0.24837572829091292,
+          0.2505700503242144
+        ],
+        "exposure": 1,
+        "key": 0.72,
+        "ao": 0.82,
+        "materials": 22,
+        "darkTail": 2,
+        "brightTail": 1,
+        "repeatError": 0,
+        "calls": 694
+      },
+      {
+        "id": "raking-stone",
+        "roi": [
+          0.4,
+          0.52,
+          0.85,
+          0.82
+        ],
+        "phase": "day",
+        "lantern": false,
+        "pose": [
+          -5.822582230444186,
+          0,
+          15.743483918716777
+        ],
+        "camera": [
+          -7.1548106895446475,
+          2.6660246869780155,
+          -12.975475303023774
+        ],
+        "rotation": [
+          -0.1580713396092868,
+          -0.3406135428341604,
+          -0.05820733085236184,
+          0.9249906878813056
+        ],
+        "exposure": 1,
+        "key": 0.72,
+        "ao": 0.82,
+        "materials": 22,
+        "darkTail": 1.21,
+        "brightTail": 1,
+        "repeatError": 0,
+        "calls": 776
+      },
+      {
+        "id": "chapel-pier",
+        "roi": [
+          0.48,
+          0.2,
+          0.79,
+          0.53
+        ],
+        "phase": "day",
+        "lantern": false,
+        "pose": [
+          19.884482351884802,
+          0.45,
+          12.506691555430145
+        ],
+        "camera": [
+          19.159805200337154,
+          1.934128453033816,
+          -11.132084213328303
+        ],
+        "rotation": [
+          0.04407775294142749,
+          -0.48331765775537844,
+          0.0243749210775365,
+          0.8739948836348834
+        ],
+        "exposure": 1,
+        "key": 0.72,
+        "ao": 0.82,
+        "materials": 22,
+        "darkTail": 3,
+        "brightTail": 0.21,
+        "repeatError": 0,
+        "calls": 565
+      },
+      {
+        "id": "chapel-floor",
+        "roi": [
+          0.4,
+          0.52,
+          0.85,
+          0.82
+        ],
+        "phase": "day",
+        "lantern": false,
+        "pose": [
+          23.903962595119847,
+          0.45,
+          16.484478490515933
+        ],
+        "camera": [
+          21.041711743828074,
+          3.182640451400288,
+          -15.435590901851334
+        ],
+        "rotation": [
+          -0.1327643400005453,
+          -0.6627924623302495,
+          -0.12105052737994143,
+          0.7269295369727815
+        ],
+        "exposure": 1,
+        "key": 0.72,
+        "ao": 0.82,
+        "materials": 22,
+        "darkTail": 0,
+        "brightTail": 0,
+        "repeatError": 0,
+        "calls": 512
+      },
+      {
+        "id": "lantern-paving",
+        "roi": [
+          0.4,
+          0.52,
+          0.85,
+          0.82
+        ],
+        "phase": "night",
+        "lantern": true,
+        "pose": [
+          -0.8336474648429412,
+          0,
+          12.100712777851005
+        ],
+        "camera": [
+          -0.13892390993882894,
+          3.1857189339831478,
+          -14.856935726065824
+        ],
+        "rotation": [
+          -0.06668286251668513,
+          0.9333147236609216,
+          0.2483754609510204,
+          0.2505726498277226
+        ],
+        "exposure": 1.15,
+        "key": 1.2,
+        "ao": 0.82,
+        "materials": 22,
+        "darkTail": 3.92,
+        "brightTail": 3.49,
+        "repeatError": 0,
+        "calls": 698
+      }
+    ],
+    "after": [
+      {
+        "id": "threshold",
+        "roi": [
+          0.4,
+          0.52,
+          0.85,
+          0.82
+        ],
+        "phase": "day",
+        "lantern": false,
+        "pose": [
+          -1.650995614548307,
+          0,
+          5.643369293831414
+        ],
+        "camera": [
+          0.2791997541708361,
+          3.0187875077130752,
+          -3.4415061834099308
+        ],
+        "rotation": [
+          -0.22234929570735423,
+          0.21742125136383456,
+          0.050938846767035965,
+          0.9490490103487135
+        ],
+        "exposure": 1,
+        "key": 0.72,
+        "ao": 0.82,
+        "materials": 22,
+        "darkTail": 2.28,
+        "brightTail": 2,
+        "repeatError": 0,
+        "soilLampGain": null,
+        "lampPower": null,
+        "calls": 621
+      },
+      {
+        "id": "cart-run",
+        "roi": [
+          0.4,
+          0.52,
+          0.85,
+          0.82
+        ],
+        "phase": "day",
+        "lantern": false,
+        "pose": [
+          -0.8399148657994211,
+          0,
+          12.04216725434869
+        ],
+        "camera": [
+          -0.15033758567226085,
+          3.1857187379584633,
+          -14.799677514457503
+        ],
+        "rotation": [
+          -0.06642621471891663,
+          0.9335730988172564,
+          0.2484403844217052,
+          0.24961210417617416
+        ],
+        "exposure": 1,
+        "key": 0.72,
+        "ao": 0.82,
+        "materials": 22,
+        "darkTail": 2,
+        "brightTail": 1,
+        "repeatError": 0,
+        "soilLampGain": null,
+        "lampPower": null,
+        "calls": 694
+      },
+      {
+        "id": "raking-stone",
+        "roi": [
+          0.4,
+          0.52,
+          0.85,
+          0.82
+        ],
+        "phase": "day",
+        "lantern": false,
+        "pose": [
+          -5.801435429249614,
+          0,
+          15.726685891980011
+        ],
+        "camera": [
+          -7.1384788155879155,
+          2.672855742202837,
+          -12.963593004037678
+        ],
+        "rotation": [
+          -0.15906733856873814,
+          -0.3416116297590429,
+          -0.058782292437881356,
+          0.9244153386383074
+        ],
+        "exposure": 1,
+        "key": 0.72,
+        "ao": 0.82,
+        "materials": 22,
+        "darkTail": 1.21,
+        "brightTail": 1,
+        "repeatError": 0,
+        "soilLampGain": null,
+        "lampPower": null,
+        "calls": 779
+      },
+      {
+        "id": "chapel-pier",
+        "roi": [
+          0.48,
+          0.2,
+          0.79,
+          0.53
+        ],
+        "phase": "day",
+        "lantern": false,
+        "pose": [
+          19.884482351884802,
+          0.45,
+          12.506691555430145
+        ],
+        "camera": [
+          19.159849813854507,
+          1.937255150849432,
+          -11.132114299271198
+        ],
+        "rotation": [
+          0.043072757943461666,
+          -0.483345610372359,
+          0.023819176331598444,
+          0.8740448531372976
+        ],
+        "exposure": 1,
+        "key": 0.72,
+        "ao": 0.82,
+        "materials": 22,
+        "darkTail": 2.79,
+        "brightTail": 0.21,
+        "repeatError": 0,
+        "soilLampGain": null,
+        "lampPower": null,
+        "calls": 565
+      },
+      {
+        "id": "chapel-floor",
+        "roi": [
+          0.4,
+          0.52,
+          0.85,
+          0.82
+        ],
+        "phase": "day",
+        "lantern": false,
+        "pose": [
+          23.903962595119847,
+          0.45,
+          16.484478490515933
+        ],
+        "camera": [
+          21.039177868407588,
+          3.1758795852503847,
+          -15.435357668680123
+        ],
+        "rotation": [
+          -0.13192933219076175,
+          -0.6629311792085127,
+          -0.1202892335992608,
+          0.7270814281915148
+        ],
+        "exposure": 1,
+        "key": 0.72,
+        "ao": 0.82,
+        "materials": 22,
+        "darkTail": 0,
+        "brightTail": 0,
+        "repeatError": 0,
+        "soilLampGain": null,
+        "lampPower": null,
+        "calls": 512
+      },
+      {
+        "id": "lantern-paving",
+        "roi": [
+          0.4,
+          0.52,
+          0.85,
+          0.82
+        ],
+        "phase": "night",
+        "lantern": true,
+        "pose": [
+          -0.8336474648429412,
+          0,
+          12.100712777851005
+        ],
+        "camera": [
+          -0.13892586423828604,
+          3.185718934485071,
+          -14.856936224571378
+        ],
+        "rotation": [
+          -0.06668281514548104,
+          0.9333147714755188,
+          0.24837547919049957,
+          0.2505724662582934
+        ],
+        "exposure": 1.15,
+        "key": 1.2,
+        "ao": 0.82,
+        "materials": 22,
+        "darkTail": 5.92,
+        "brightTail": 5.85,
+        "repeatError": 0,
+        "soilLampGain": 0.026537675045761253,
+        "lampPower": 10.391315543797974,
+        "calls": 698
+      }
+    ],
+    "baselineLampControl": {
+      "id": "lantern-paving",
+      "roi": [
+        0.4,
+        0.52,
+        0.85,
+        0.82
+      ],
+      "phase": "night",
+      "lantern": true,
+      "pose": [
+        -0.8335791099635999,
+        0,
+        12.100703364649032
+      ],
+      "camera": [
+        -0.13885355509990854,
+        3.185718933982686,
+        -14.856925802188618
+      ],
+      "rotation": [
+        -0.06668291108856579,
+        0.9333146746295432,
+        0.24837544115571017,
+        0.25057283915183387
+      ],
+      "exposure": 1.15,
+      "key": 1.2,
+      "ao": 0.82,
+      "materials": 22,
+      "darkTail": 4.07,
+      "brightTail": 3.64,
+      "repeatError": 0,
+      "soilLampGain": 0.0004811187819103116,
+      "calls": 698
+    }
+  },
+  "shadowFixture": {
+    "method": "Orthographic matte card, live production directional key, 64 scanlines in linear display Y, 10%–90% of measured shadow-to-lit range. Not a gameplay camera.",
+    "before": {
+      "gpu": "ANGLE (Apple, ANGLE Metal Renderer: Apple M3 Max, Unspecified Version)",
+      "width": 960,
+      "height": 540,
+      "span": 1.6,
+      "rows": 64,
+      "direction": [
+        -0.587328597166902,
+        0.6885921484025748,
+        -0.4253069151898256
+      ],
+      "profiles": [
+        {
+          "height": 0.2,
+          "rayGap": 0.29044769166184725,
+          "shadeY": 0.006808819187745621,
+          "litY": 0.05891731963423206,
+          "widthCm": 19.319399928870638,
+          "x10": 333.31489511539536,
+          "x90": 449.2312946886192
+        },
+        {
+          "height": 4,
+          "rayGap": 5.808953833236945,
+          "shadeY": 0.006808819187745621,
+          "litY": 0.05891731963423206,
+          "widthCm": 21.552996638893138,
+          "x10": 427.5465777506336,
+          "x90": 556.8645575839925
+        }
+      ]
+    },
+    "after": {
+      "gpu": "ANGLE (Apple, ANGLE Metal Renderer: Apple M3 Max, Unspecified Version)",
+      "width": 960,
+      "height": 540,
+      "span": 1.6,
+      "rows": 64,
+      "direction": [
+        -0.587328597166902,
+        0.6885921484025748,
+        -0.4253069151898256
+      ],
+      "profiles": [
+        {
+          "height": 0.2,
+          "diskActive": true,
+          "rayGap": 0.29044769166184725,
+          "shadeY": 0.006808819187745621,
+          "litY": 0.05891731963423206,
+          "widthCm": 3.9064838039868164,
+          "x10": 457.4816619244058,
+          "x90": 480.9205647483267
+        },
+        {
+          "height": 4,
+          "diskActive": true,
+          "rayGap": 5.808953833236945,
+          "shadeY": 0.006808819187745621,
+          "litY": 0.05891731963423206,
+          "widthCm": 37.83956053772475,
+          "x10": 360.5546365976031,
+          "x90": 587.5919998239516
+        }
+      ]
+    }
+  },
+  "chapelControls": {
+    "cinematic": {
+      "ok": true,
+      "bundle": "index-Df-M76W5.js",
+      "summary": [
+        {
+          "id": "vestibule",
+          "gainPixels": 36388,
+          "offY": 0.007650029389325301,
+          "timing": {
+            "samples": 32,
+            "medianMs": 16.699999999999818,
+            "p95Ms": 16.699999999999818,
+            "calls": 520
+          }
+        },
+        {
+          "id": "pews",
+          "gainPixels": 280276,
+          "offY": 0.012960133367075619,
+          "timing": {
+            "samples": 32,
+            "medianMs": 16.69999999999891,
+            "p95Ms": 16.700000000000728,
+            "calls": 550
+          }
+        },
+        {
+          "id": "altar-approach",
+          "gainPixels": 101478,
+          "offY": 0.007124560088703135,
+          "timing": {
+            "samples": 32,
+            "medianMs": 16.69999999999709,
+            "p95Ms": 16.700000000000728,
+            "calls": 490
+          }
+        },
+        {
+          "id": "nave",
+          "gainPixels": 197472,
+          "offY": 0.019024034764852444,
+          "timing": {
+            "samples": 32,
+            "medianMs": 16.700000000000728,
+            "p95Ms": 16.700000000000728,
+            "calls": 1069
+          }
+        },
+        {
+          "id": "altar-return",
+          "gainPixels": 167052,
+          "offY": 0.018026188916498254,
+          "timing": {
+            "samples": 32,
+            "medianMs": 16.69999999999709,
+            "p95Ms": 16.700000000000728,
+            "calls": 869
+          }
+        },
+        {
+          "id": "day-air-no-sources",
+          "gainPixels": 0,
+          "offY": 0.01799392295148936
+        },
+        {
+          "id": "night-altar",
+          "gainPixels": 0,
+          "offY": 0.0008443276729856467
+        },
+        {
+          "id": "sealed-b1",
+          "gainPixels": 0,
+          "offY": 4.089408099278099e-06
+        }
+      ]
+    },
+    "high": {
+      "ok": true,
+      "bundle": "index-Df-M76W5.js",
+      "summary": [
+        {
+          "id": "vestibule",
+          "gainPixels": 34129,
+          "offY": 0.007661027114883918
+        },
+        {
+          "id": "pews",
+          "gainPixels": 294578,
+          "offY": 0.01297080229257727
+        },
+        {
+          "id": "altar-approach",
+          "gainPixels": 101144,
+          "offY": 0.007125147785690487
+        },
+        {
+          "id": "nave",
+          "gainPixels": 195550,
+          "offY": 0.019002271003735013
+        },
+        {
+          "id": "altar-return",
+          "gainPixels": 170257,
+          "offY": 0.01801474266698152
+        },
+        {
+          "id": "day-air-no-sources",
+          "gainPixels": 0,
+          "offY": 0.01797413767272348
+        },
+        {
+          "id": "night-altar",
+          "gainPixels": 0,
+          "offY": 0.0008202525867216507
+        },
+        {
+          "id": "sealed-b1",
+          "gainPixels": 0,
+          "offY": 3.897304997763199e-06
+        }
+      ]
+    }
+  }
+}

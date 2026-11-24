@@ -1,6 +1,6 @@
 # Character models & textures (art pass 3)
 
-Models CC-BY 4.0, downloaded from Objaverse (Sketchfab mirrors). Normalized in code
+The two default models are CC-BY 4.0, downloaded from Objaverse (Sketchfab mirrors). Normalized in code
 (`src/render/characterAssets.ts`): uniform scale, feet on ground, facing local -Z.
 All model materials are re-normalized to the art bible §4.5/§5 palette in code.
 
@@ -43,3 +43,5 @@ proportions, carried lantern and actual ground instead of inheriting the mannequ
 
 - tripo-watchkeeper.glb：守夜人，由用户提供的 Tripo GLB 优化而来，保留蒙皮和动作片段。
 - tripo-ash-wraith.fbx 和对应 .fbm 贴图：灰影，来自用户提供的 Tripo ZIP。
+
+以上两项为 PR #3 / #7 随附的可选模型与贴图，不适用本页其他资产的 CC0 / CC-BY 标注。

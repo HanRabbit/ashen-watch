@@ -13,6 +13,7 @@ import { FogController, installHeightFog } from './post/fog';
 import { DAMP_FALLOFF, WEATHER_BASE, WEATHER_REACH } from './post/airVolume';
 import { PostPipeline } from './post/pipeline';
 import { applySkyKey, configureSkyKeyShadowMap, makeSkyKey } from './skyKey';
+import { displayPixelRatio, SettledKeyBudget } from './lowTierBudget';
 import { installSkyKeyDiskShadow } from './skyKeyDiskShadow';
 import { installSpecularCap } from './post/specular';
 import { buildLandmarks, hideLegacy } from './landmarks';
@@ -96,6 +97,7 @@ export class SceneView {
   readonly player: PlayerModel;
   readonly ghosts: GhostModels;
   quality: Quality = 'cinematic';
+  private readonly lowKeyBudget = new SettledKeyBudget();
   private level: StaticLevel;
   private hemi = new THREE.HemisphereLight(0xffffff, 0x444444, 1);
   private sun = makeSkyKey();
@@ -124,7 +126,6 @@ export class SceneView {
 
   constructor(canvas: HTMLCanvasElement) {
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
-    this.renderer.setPixelRatio(window.devicePixelRatio); // 默认 cinematic：满像素比
     this.renderer.shadowMap.enabled = true;
     configureSkyKeyShadowMap(this.renderer.shadowMap, this.sun, this.quality);
     applySkyKey(this.sun, this.renderer.shadowMap.type, this.rig);
@@ -215,8 +216,9 @@ export class SceneView {
     this.quality = q;
     const heavy = q !== 'low';
     setMaterialsQuality(heavy ? 'high' : 'low');
-    // cinematic 用满设备像素比；high 保留 1.5 上限；low 直出 1x。
-    this.renderer.setPixelRatio(q === 'cinematic' ? window.devicePixelRatio : q === 'high' ? Math.min(window.devicePixelRatio, 1.5) : 1);
+    this.sun.shadow.autoUpdate = heavy;
+    this.sun.shadow.needsUpdate = true;
+    this.lowKeyBudget.reset();
     configureSkyKeyShadowMap(this.renderer.shadowMap, this.sun, q);
     applySkyKey(this.sun, this.renderer.shadowMap.type, this.rig);
     this.dust.visible = heavy;
@@ -231,6 +233,7 @@ export class SceneView {
     const w = window.innerWidth, h = window.innerHeight;
     this.camera.aspect = w / Math.max(1, h);
     this.camera.updateProjectionMatrix();
+    this.renderer.setPixelRatio(displayPixelRatio(this.quality, w, h, window.devicePixelRatio));
     this.renderer.setSize(w, h);
     this.post.resize(w, h, this.renderer.getPixelRatio());
   }
@@ -286,7 +289,7 @@ export class SceneView {
     this.scene.environmentIntensity = r.envI;
 
     // 后期参数（LUT 随 rig blend 交叉淡入，管线内部按需重填）
-    this.post.applyRig({
+    if (this.quality !== 'low') this.post.applyRig({
       bloom: r.bloom, vignette: r.vignette, grain: r.grain,
       glowStrength: r.glowStrength, scatter: r.scatter,
       ssrWet: lerp(0.12, 0.32, nightAmt),
@@ -314,6 +317,13 @@ export class SceneView {
     const camD = this.camRig.update(w, pose, yaw, pitch, dt);
     this.sky.position.copy(this.camera.position);
     this.player.setBodyVisible(camD > 0.85);
+    if (this.quality === 'low') {
+      const state = +w.doors.gate | (+w.doors.gatehouse << 1) | (+w.doors.chapelFront << 2) |
+        (+w.lantern.on << 3) | (+w.repairs.gate << 4) | (+(camD > .85) << 5) | (+w.lantern.raised << 6) | (+w.bolted << 7);
+      const s = this.sun.position;
+      this.sun.shadow.needsUpdate ||= this.lowKeyBudget.due(performance.now(), w.player.moving || w.ghosts.length > 0,
+        state, yaw, pose.x, pose.y ?? w.player.y, pose.z, s.x, s.y, s.z);
+    }
     // 远景轻虚化只服务固定机位/标题构图；游戏镜头与近中景锐利
     if (this.fixedCam && this.cinematicDof && this.quality !== 'low') {
       const f = this.fixedCam;

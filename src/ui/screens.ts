@@ -1,6 +1,6 @@
 // 页面与浮层（UI-03）：标题、亮度校准、暂停设置、任务资源、修复确认、失败重试、通关结算、纯鼠标工具栏。
 // 界面按栈管理：只有栈顶接受输入。所有按钮都可点击，纯鼠标可以从标题走到结算。
-import { REPAIR_COST, REPAIR_NAME, RepairId, WALL_LAMP } from '../config';
+import { BRAZIER, HEARTH, LANTERN, REPAIR_COST, REPAIR_NAME, RepairId, WALL_LAMP } from '../config';
 import { BIND_LABEL, BindAction, DEFAULT_BINDS, keyName, Settings } from '../settings';
 import { canRepairNow, repairGap } from '../sim/sim';
 import { World } from '../sim/state';
@@ -151,6 +151,9 @@ export class Screens {
     const cur = this.stack[this.stack.length - 1];
     this.el.hidden = !cur;
     if (!cur) { this.el.innerHTML = ''; return; }
+    // The pause hotkey can return before the next HUD tick. Hide the arrow now.
+    const guide = document.getElementById('hud-guide');
+    if (guide) guide.hidden = true;
     this.el.className = cur.id === 'title' || cur.id === 'calibrate' || cur.id === 'confirmNew' ? 'title' : cur.id === 'toolbar' ? 'light' : '';
     this.el.innerHTML = this.html(cur.id, cur.arg);
     (this.el.querySelector('button.primary:not(:disabled)') as HTMLElement | null)?.focus({ preventScroll: true });
@@ -172,7 +175,7 @@ export class Screens {
       <div class="btns">
         <button class="${s.quality === 'cinematic' ? 'on' : ''}" data-act="quality" data-arg="cinematic">电影画质<small>屏幕空间反射、环境光遮蔽、带阴影的体积雾、LUT 调色与 MSAA。推荐独立显卡</small></button>
         <button class="${s.quality === 'high' ? 'on' : ''}" data-act="quality" data-arg="high">高画质<small>环境光遮蔽、低分辨率体积雾、泛光与调色，关闭屏幕空间反射</small></button>
-        <button class="${s.quality === 'low' ? 'on' : ''}" data-act="quality" data-arg="low">低画质<small>关闭后期与粒子，降低阴影分辨率。集成显卡保帧率</small></button>
+        <button class="${s.quality === 'low' ? 'on' : ''}" data-act="quality" data-arg="low">流畅画质<small>只降低 3D 分辨率，关闭重后期；静止时减少阴影刷新，移动时实时更新。适合集成显卡</small></button>
       </div>
       ${slider('sensitivity', '鼠标灵敏度', 0.2, 3, s.sensitivity)}
       ${slider('brightness', '亮度', 0.5, 2, s.brightness)}
@@ -186,13 +189,14 @@ export class Screens {
     const { inv, quest } = w;
     const repairs = (['lamp', 'gate', 'bolt'] as RepairId[]).map((id) => {
       const { wood, iron } = REPAIR_COST[id];
-      return `<tr><th>${REPAIR_NAME[id]}</th><td>${w.repairs[id] ? '已修' : `${wood} 木 · ${iron} 铁`}</td></tr>`;
+      return `<tr><th>${REPAIR_NAME[id]}</th><td>${w.repairs[id] ? '已修' : `未修（${wood} 木 · ${iron} 铁）`}</td></tr>`;
     }).join('');
     return `
       <p class="ok">${goalText(w)}</p>
       <table class="kv">
         <tr><th>物资</th><td>木 ${inv.wood} · 铁 ${inv.iron} · 油 ${inv.oil} · 热食 ${inv.meal}</td></tr>
-        <tr><th>钟舌</th><td>${quest.installed ? '已装' : inv.hasClapper ? '持有' : '待取'}</td></tr>
+        <tr><th>提灯</th><td>${inv.hasLantern ? `剩余 ${fmtTime(w.lantern.oil)} / ${fmtTime(LANTERN.maxOil)}` : '未拾取'}</td></tr>
+        <tr><th>钟舌</th><td>${quest.rung ? '已敲钟' : quest.installed ? '已装' : inv.hasClapper ? '持有' : '待取'}</td></tr>
         ${repairs}
       </table>`;
   }
@@ -251,11 +255,13 @@ export class Screens {
       case 'board':
         return `<div class="panel wide"><h2>任务板</h2>
           <ol class="steps">
-            <li><b>白天</b> · 搜集木、铁和油，最多修两处。回床铺可等到黄昏。</li>
-            <li><b>入夜</b> · 到礼拜堂祭台匣取钟舌。长按右键举灯驱鬼。</li>
-            <li><b>晨曦</b> · 回门房，装好钟舌后敲响晨钟。</li>
+            <li><b>白天／黄昏</b> · 西侧货架和礼拜堂外的货箱各有 2 木、2 铁、1 油。修复可选，最多两处，入夜后不能再修。</li>
+            <li><b>入夜</b> · 到礼拜堂祭台匣取钟舌，带回门房。长按右键举灯驱鬼，耗油是平时的 ${LANTERN.raiseMultiplier} 倍。</li>
+            <li><b>晨曦</b> · 还没拿到钟舌仍可去取。在门房外的晨钟装上钟舌，再交互一次敲响它。</li>
           </ol>
-          <p>门房可补油，点着的壁炉能回暖，也可等到入夜。</p>
+          <p>门房可做热食、补油（每份 +${fmtTime(LANTERN.oilPerUnit)}）。白天可在床铺休息到黄昏，黄昏可在壁炉旁等到入夜。</p>
+          <p>夜里在外久留会冻伤，炉火亮着的门房能回暖。祭台旁和侧廊的火盆各花 ${BRAZIER.oilCost} 份油；它们和修好的壁灯亮着时，鬼不敢进光区。</p>
+          <p>夜里也可自然等到晨曦；带回钟舌后，若炉火能撑到天亮并已在炉边安全停留 ${HEARTH.fastForwardSafeSecs} 秒，可在壁炉旁快进。柴堆可添木料。</p>
           <div class="btns"><button class="primary" data-act="boardClose">收起任务板${w.phase === 'tutorial' ? '，开始白天' : ''}</button></div></div>`;
       case 'repair': {
         const rid = arg as RepairId;

@@ -4,7 +4,6 @@
 // 模型与贴图来源、许可见 public/models/characters/CREDITS.md。
 import * as THREE from 'three';
 import { GLTFLoader, GLTF } from 'three/addons/loaders/GLTFLoader.js';
-import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
 import { WATCHMAN_SOLE_FORWARD } from './locomotion';
 import { LimbSolver } from './locomotionRig';
 
@@ -14,6 +13,8 @@ export interface HunterAsset {
   mixer: THREE.AnimationMixer;
   idle: THREE.AnimationClip;
   feet: { orientation: THREE.Quaternion; soleLocal: THREE.Vector3; soleOffset: THREE.Vector3 }[];
+  /** Palm anchor for the Tripo rig, which has a wrist bone but no finger bones. */
+  gripLocal?: THREE.Vector3;
   /** World-space position of the light emitter, shared by body and outfit materials. */
   lampSource: { value: THREE.Vector3 };
   bones: Record<string, THREE.Bone>;
@@ -258,6 +259,24 @@ const TRIPO_BONES: Record<string, RegExp> = {
   handL: /^L_Hand$/, handR: /^R_Hand$/,
 };
 
+function palmAnchor(mesh: THREE.SkinnedMesh, hand: THREE.Bone): THREE.Vector3 {
+  const joint = mesh.skeleton.bones.indexOf(hand);
+  const { position, skinIndex, skinWeight } = mesh.geometry.attributes;
+  const center = new THREE.Vector3(), v = new THREE.Vector3();
+  let sum = 0;
+  for (let i = 0; i < position.count; i++) {
+    let weight = 0;
+    for (let j = 0; j < 4; j++) {
+      if (skinIndex.getComponent(i, j) === joint) weight += skinWeight.getComponent(i, j);
+    }
+    if (weight <= 0.65) continue;
+    center.addScaledVector(mesh.getVertexPosition(i, v), weight);
+    sum += weight;
+  }
+  if (!sum) throw new Error('Tripo watchkeeper has no weighted right palm');
+  return hand.worldToLocal(mesh.localToWorld(center.divideScalar(sum)));
+}
+
 export function prepHunter(gltf: GLTF, tripo = false): HunterAsset {
   const scene = gltf.scene;
   const { wrap } = normalize(scene, 1.75, tripo ? TRIPO_FACE_FIX : Math.PI);
@@ -330,6 +349,7 @@ export function prepHunter(gltf: GLTF, tripo = false): HunterAsset {
   // In the normalized asset front is -Z; ankle→toe provides each boot's
   // real forward axis (the baked stance has feet turned in different directions).
   wrap.updateMatrixWorld(true);
+  const gripLocal = tripo && mesh ? palmAnchor(mesh, bones.handR) : undefined;
   const feet = ['L', 'R'].map((side) => {
     const ankle = bones[`foot${side}`], toe = bones[`toe${side}`];
     const orientation = new THREE.Quaternion();
@@ -373,14 +393,14 @@ export function prepHunter(gltf: GLTF, tripo = false): HunterAsset {
   const mixer = new THREE.AnimationMixer(scene);
   const source = gltf.animations.find((clip) => (tripo ? /^standing_relax$/i : /^idle$/i).test(clip.name));
   const idle = source?.clone() ?? new THREE.AnimationClip('idle', 1, []);
-  // The only embedded clip is Idle. Keep the small vertical breathing motion,
+  // Keep the idle's vertical breathing motion,
   // remove horizontal pelvis drift and preserve the model's root transform.
   idle.tracks = idle.tracks.filter((track) => !/^(Root|RootNode|Armature|Object_\d+)\.position$/.test(track.name));
   for (const track of idle.tracks) if (/(?:Hips.*|Hip)\.position$/.test(track.name) && bones.hips) {
     const { x, z } = bones.hips.position;
     for (let i = 0; i < track.values.length; i += 3) { track.values[i] = x; track.values[i + 2] = z; }
   }
-  return { root: wrap, mixer, idle, feet, lampSource, bones, headAnchor, chestAnchor };
+  return { root: wrap, mixer, idle, feet, gripLocal, lampSource, bones, headAnchor, chestAnchor };
 }
 
 // ---------------------------------------------------------------------------
@@ -576,67 +596,104 @@ function prepReaper(gltf: GLTF): ReaperAsset {
 }
 
 async function loadTripoReaper(): Promise<ReaperAsset> {
-  const folder = 'models/characters/';
-  const scene = await new FBXLoader().loadAsync(folder + 'tripo-ash-wraith.fbx');
-  const rest = scene.animations.find((clip) => /idle|standing_relax/i.test(clip.name)) ?? scene.animations[0];
-  if (!rest) throw new Error('Tripo ash wraith has no idle animation');
-  const idle = rest.clone();
-  idle.tracks = idle.tracks.filter((track) => !/^(Root|Armature|RootNode)\.position$/i.test(track.name));
-  const mixer = new THREE.AnimationMixer(scene);
-  mixer.clipAction(idle).play();
-  mixer.update(0);
+  const { FBXLoader } = await import('three/addons/loaders/FBXLoader.js');
+  const manager = new THREE.LoadingManager();
+  // FBXLoader resolves its scene before the two referenced JPEGs finish. Let
+  // the same manager wait for those requests (or fall back); don't fetch them again.
+  const complete = new Promise<void>((resolve, reject) => {
+    manager.onLoad = resolve;
+    manager.onError = (url) => reject(new Error(`Tripo ash wraith resource failed: ${url}`));
+  });
+  const [scene] = await Promise.all([
+    new FBXLoader(manager).loadAsync('models/characters/tripo-ash-wraith.fbx'), complete,
+  ]);
+  return prepTripoReaper(scene);
+}
+
+function prepTripoReaper(scene: THREE.Group): ReaperAsset {
   const height = 2.15;
   const { wrap } = normalize(scene, height, TRIPO_FACE_FIX);
   const body = scene.getObjectByProperty('isSkinnedMesh', true) as THREE.SkinnedMesh | undefined;
-  if (!body) throw new Error('Tripo ash wraith has no skinned mesh');
-  const textures = new THREE.TextureLoader();
-  const textureBase = folder + 'tripo_convert_1515c7bd-6f8a-41e1-809e-486f35be9167.fbm/tripo_node_98de760c-ac9c-453c-b2be-b4509b500492';
-  const [map, normalMap] = await Promise.all([
-    textures.loadAsync(textureBase + '_BaseColor.jpg'),
-    textures.loadAsync(textureBase + '_Normal_Bake.jpg'),
-  ]);
-  map.colorSpace = THREE.SRGBColorSpace;
+  const exported = body?.material as THREE.MeshPhongMaterial | undefined;
+  if (!body || !exported?.map || !exported.normalMap) throw new Error('Tripo ash wraith has no textured skinned mesh');
   body.geometry.computeBoundingBox();
   const bounds = body.geometry.boundingBox!;
   const localHeight = bounds.max.y - bounds.min.y;
-  const material = new THREE.MeshStandardMaterial({ map, normalMap, color: 0x8d8b86, roughness: 0.97, metalness: 0 });
+  const material = new THREE.MeshStandardMaterial({
+    map: exported.map, normalMap: exported.normalMap, color: 0x8d8b86, roughness: 0.97, metalness: 0,
+  });
   wrap.updateMatrixWorld(true);
   const cloth = ghostCloth(material, height, body.matrixWorld.clone());
   body.material = material;
   body.castShadow = true;
   body.frustumCulled = false;
-  const arms = (['L', 'R'] as const).map((side) => ({
-    sign: side === 'L' ? -1 : 1,
-    upper: scene.getObjectByName(`${side}_Upperarm`),
-    lower: scene.getObjectByName(`${side}_Forearm`),
-    hand: scene.getObjectByName(`${side}_Hand`),
-  }));
-  const limb = new LimbSolver(), target = new THREE.Vector3(), pole = new THREE.Vector3(), yaw = new THREE.Quaternion();
+  const bone = (name: string) => {
+    const joint = body.skeleton.getBoneByName(name);
+    if (!joint) throw new Error(`Tripo ash wraith is missing ${name}`);
+    return joint;
+  };
+  // This FBX ships only aggressive clips. Its bind pose already has lowered
+  // arms: animate a small upper-body breath, without ever keying Root or Hip.
+  const chest = bone('Spine02'), rest = chest.quaternion.clone();
+  const pitchAxis = new THREE.Vector3(1, 0, 0).applyQuaternion(chest.getWorldQuaternion(new THREE.Quaternion()).invert());
+  const limb = new LimbSolver(), target = new THREE.Vector3(), pole = new THREE.Vector3();
+  const yaw = new THREE.Quaternion(), breath = new THREE.Quaternion();
+  const arms = (['L', 'R'] as const).map((side) => {
+    const sign = side === 'L' ? -1 : 1;
+    const upper = bone(`${side}_Upperarm`), lower = bone(`${side}_Forearm`), hand = bone(`${side}_Hand`);
+    limb.calibrate(upper, lower, hand);
+    const down = wrap.worldToLocal(hand.getWorldPosition(new THREE.Vector3()));
+    const shoulder = wrap.worldToLocal(upper.getWorldPosition(new THREE.Vector3()));
+    const axis = down.clone().sub(shoulder).normalize();
+    const bend = wrap.worldToLocal(lower.getWorldPosition(new THREE.Vector3())).sub(shoulder);
+    bend.addScaledVector(axis, -bend.dot(axis)).normalize();
+    return {
+      upper, lower, hand, down, bend,
+      raised: new THREE.Vector3(sign * 0.22, 1.52, -0.6),
+      raisedBend: new THREE.Vector3(sign * 0.45, -0.75, 0.55).normalize(),
+    };
+  });
+  let phase = 0;
   const animate = (dt: number): void => {
-    mixer.update(dt);
+    phase = (phase + 1.6 * dt) % (2 * Math.PI);
+    chest.quaternion.copy(rest).multiply(breath.setFromAxisAngle(pitchAxis, 0.025 * Math.sin(phase)));
     const reach = THREE.MathUtils.smoothstep(cloth.uArmRaise.value, 0.15, 1.15);
     wrap.getWorldQuaternion(yaw);
-    for (const { sign, upper, lower, hand } of arms) {
-      if (!upper || !lower || !hand) continue;
-      target.set(sign * THREE.MathUtils.lerp(0.31, 0.22, reach), 1.04 + 0.48 * reach, 0.02 - 0.62 * reach);
-      pole.set(sign * 0.45, -0.75, 0.55).applyQuaternion(yaw);
+    for (const { upper, lower, hand, down, bend, raised, raisedBend } of arms) {
+      target.copy(down).lerp(raised, reach);
+      target.y += 0.008 * Math.sin(phase) * (1 - reach);
+      pole.copy(bend).lerp(raisedBend, reach).applyQuaternion(yaw);
       limb.solve(upper, lower, hand, wrap.localToWorld(target), pole);
     }
   };
   return { root: wrap, body, localHeight, cloth, animate };
 }
 
-/** 并行加载两个模型；各自失败只影响自己（调用方回退程序化模型）。单例：多处调用共享同一次加载。 */
-let pending: Promise<CharacterAssets> | null = null;
-export function loadCharacterAssets(): Promise<CharacterAssets> {
-  if (!pending) {
-    pending = (async () => {
-      const [h, r] = await Promise.all([
-        loadGLB('models/characters/tripo-watchkeeper.glb').then((gltf) => prepHunter(gltf, true)).catch(() => loadGLB(URLS.hunter).then((gltf) => prepHunter(gltf))).catch((e) => { console.warn('[characters] hunter load failed, procedural fallback', e); return null; }),
-        loadTripoReaper().catch((error) => { console.warn('[characters] Tripo ash wraith unavailable', error); return loadGLB(URLS.reaper).then(prepReaper); }).catch((e) => { console.warn('[characters] reaper load failed, procedural fallback', e); return null; }),
-      ]);
-      return { hunter: h, reaper: r };
-    })();
+function useTripoCast(): boolean {
+  return new URLSearchParams(globalThis.location?.search).get('cast') === 'tripo';
+}
+
+async function loadCastRole<T>(role: keyof CharacterAssets, legacy: () => Promise<T>, tripo: () => Promise<T>): Promise<T | null> {
+  if (useTripoCast()) {
+    try { return await tripo(); }
+    catch (error) { console.warn(`[characters] Tripo ${role} unavailable, using default model`, error); }
   }
-  return pending;
+  try { return await legacy(); }
+  catch (error) { console.warn(`[characters] ${role} load failed, procedural fallback`, error); return null; }
+}
+
+/** Each consumer starts only its own role; no asset or texture blocks the other role. */
+let hunterPending: Promise<Pick<CharacterAssets, 'hunter'>> | undefined;
+let reaperPending: Promise<Pick<CharacterAssets, 'reaper'>> | undefined;
+export function loadCharacterAssets(role: 'hunter'): Promise<Pick<CharacterAssets, 'hunter'>>;
+export function loadCharacterAssets(role: 'reaper'): Promise<Pick<CharacterAssets, 'reaper'>>;
+export function loadCharacterAssets(role: keyof CharacterAssets): Promise<Partial<CharacterAssets>> {
+  if (role === 'hunter') {
+    return hunterPending ??= loadCastRole(role,
+      () => loadGLB(URLS.hunter).then((gltf) => prepHunter(gltf)),
+      () => loadGLB('models/characters/tripo-watchkeeper.glb').then((gltf) => prepHunter(gltf, true)),
+    ).then((hunter) => ({ hunter }));
+  }
+  return reaperPending ??= loadCastRole(role, () => loadGLB(URLS.reaper).then(prepReaper), loadTripoReaper)
+    .then((reaper) => ({ reaper }));
 }

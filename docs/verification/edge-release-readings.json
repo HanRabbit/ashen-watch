@@ -1,0 +1,494 @@
+{
+  "hardware": "ANGLE (Apple, ANGLE Metal Renderer: Apple M3 Max, Unspecified Version)",
+  "quality": "cinematic",
+  "viewport": [
+    1280,
+    720
+  ],
+  "method": "Walked gameplay with pointer lock and collision. Named detail cameras use identical coordinates across builds. Renderer counters include all passes at the walked view, not the inspection camera. Independent walks do not produce identical timing/culling.",
+  "frames": [
+    {
+      "station": "parapet",
+      "beforePose": [
+        -9.171020352598244,
+        4,
+        11.479877166969452
+      ],
+      "afterPose": [
+        -9.171227350955704,
+        4,
+        11.449877881116619
+      ],
+      "detailCamera": [
+        -9.04,
+        5.3,
+        11
+      ],
+      "detailLook": [
+        -8.51,
+        4.56,
+        11.98
+      ],
+      "beforeCalls": 859,
+      "afterCalls": 863,
+      "beforeTriangles": 3239298,
+      "afterTriangles": 3305862
+    },
+    {
+      "station": "parapet-return",
+      "beforePose": [
+        -9.16998535351077,
+        4,
+        13.879875976719928
+      ],
+      "afterPose": [
+        -9.169985352050734,
+        4,
+        13.8498764528172
+      ],
+      "detailCamera": [
+        -9.12,
+        5.18,
+        13.5
+      ],
+      "detailLook": [
+        -8.47,
+        4.6,
+        12.4
+      ],
+      "beforeCalls": 831,
+      "afterCalls": 825,
+      "beforeTriangles": 3238901,
+      "afterTriangles": 3305689
+    },
+    {
+      "station": "church-steps",
+      "beforePose": [
+        10.120072703104373,
+        0,
+        16.543111555662
+      ],
+      "afterPose": [
+        10.120072703104373,
+        0,
+        16.543111555662
+      ],
+      "detailCamera": [
+        9.92,
+        0.64,
+        15.62
+      ],
+      "detailLook": [
+        11.16,
+        0.26,
+        16.66
+      ],
+      "beforeCalls": 708,
+      "afterCalls": 708,
+      "beforeTriangles": 2875577,
+      "afterTriangles": 2941069
+    },
+    {
+      "station": "altar",
+      "beforePose": [
+        27.057527355187975,
+        0.45,
+        16.404146705254256
+      ],
+      "afterPose": [
+        27.057534507786972,
+        0.45,
+        16.404284519738006
+      ],
+      "detailCamera": [
+        27.76,
+        1.85,
+        14.98
+      ],
+      "detailLook": [
+        28.85,
+        1.47,
+        15.71
+      ],
+      "beforeCalls": 447,
+      "afterCalls": 447,
+      "beforeTriangles": 1504125,
+      "afterTriangles": 1553243
+    },
+    {
+      "station": "north-arch",
+      "beforePose": [
+        0.11572945168990977,
+        0,
+        26.616980148944556
+      ],
+      "afterPose": [
+        0.11559163646536343,
+        0,
+        26.616987287255846
+      ],
+      "detailCamera": [
+        1,
+        1.85,
+        26.16
+      ],
+      "detailLook": [
+        1.68,
+        2.62,
+        27.5
+      ],
+      "beforeCalls": 494,
+      "afterCalls": 494,
+      "beforeTriangles": 2475847,
+      "afterTriangles": 2534139
+    }
+  ],
+  "errors": [],
+  "lowTierSmoke": {
+    "original": {
+      "gpu": "ANGLE (Apple, ANGLE Metal Renderer: Apple M3 Max, Unspecified Version)",
+      "buffer": [
+        960,
+        540
+      ],
+      "viewport": [
+        1280,
+        720
+      ],
+      "hip": "mixamorigHips_01",
+      "ghostSkinned": false,
+      "idle": {
+        "frames": 49,
+        "shadows": 4
+      },
+      "moving": {
+        "frames": 37,
+        "shadows": 37
+      },
+      "requests": [
+        "/models/characters/hunter.glb",
+        "/models/characters/reaper.glb",
+        "/models/characters/fabric_color.jpg",
+        "/models/characters/leather_color.jpg",
+        "/models/characters/leather_normal.jpg",
+        "/models/characters/leather_rough.jpg"
+      ],
+      "errors": []
+    },
+    "tripo": {
+      "gpu": "ANGLE (Apple, ANGLE Metal Renderer: Apple M3 Max, Unspecified Version)",
+      "buffer": [
+        960,
+        540
+      ],
+      "viewport": [
+        1280,
+        720
+      ],
+      "hip": "Hip",
+      "ghostSkinned": true,
+      "idle": {
+        "frames": 49,
+        "shadows": 4
+      },
+      "moving": {
+        "frames": 37,
+        "shadows": 37
+      },
+      "requests": [
+        "/models/characters/tripo-watchkeeper.glb",
+        "/models/characters/fabric_color.jpg",
+        "/models/characters/leather_color.jpg",
+        "/models/characters/leather_normal.jpg",
+        "/models/characters/leather_rough.jpg",
+        "/models/characters/tripo-ash-wraith.fbx",
+        "/models/characters/tripo_convert_1515c7bd-6f8a-41e1-809e-486f35be9167.fbm/tripo_node_98de760c-ac9c-453c-b2be-b4509b500492_BaseColor.jpg",
+        "/models/characters/tripo_convert_1515c7bd-6f8a-41e1-809e-486f35be9167.fbm/tripo_node_98de760c-ac9c-453c-b2be-b4509b500492_Normal_Bake.jpg"
+      ],
+      "errors": []
+    }
+  },
+  "threeFloorTraversal": {
+    "quality": "high",
+    "viewport": {
+      "width": 1280,
+      "height": 720
+    },
+    "checks": [
+      {
+        "label": "01-cellar-entrance — 1F",
+        "ok": true,
+        "detail": "(3.90, 0.00, 9.70)"
+      },
+      {
+        "label": "02-cellar-landing — B1",
+        "ok": true,
+        "detail": "(9.93, -2.96, 9.89)"
+      },
+      {
+        "label": "从真实洞口进入 B1 并取得油瓶",
+        "ok": true,
+        "detail": ""
+      },
+      {
+        "label": "03-store-stair — B1",
+        "ok": true,
+        "detail": "(15.17, -3.00, 17.11)"
+      },
+      {
+        "label": "04-chapel-from-cellar — 1F",
+        "ok": true,
+        "detail": "(16.67, 0.45, 21.13)"
+      },
+      {
+        "label": "礼拜堂西门从门厅可开",
+        "ok": true,
+        "detail": ""
+      },
+      {
+        "label": "05-chapel-west-door — 1F",
+        "ok": true,
+        "detail": "(12.75, 0.45, 16.50)"
+      },
+      {
+        "label": "06-wall-stair-base — 1F",
+        "ok": true,
+        "detail": "(3.23, 0.00, 1.47)"
+      },
+      {
+        "label": "07-east-walk — 2F",
+        "ok": true,
+        "detail": "(9.20, 4.00, 11.83)"
+      },
+      {
+        "label": "08-chapel-gallery — 2F",
+        "ok": true,
+        "detail": "(15.91, 4.00, 21.11)"
+      },
+      {
+        "label": "09-nave-from-gallery — 1F",
+        "ok": true,
+        "detail": "(28.81, 0.82, 21.15)"
+      },
+      {
+        "label": "10-return-to-gatehouse — 1F",
+        "ok": true,
+        "detail": "(1.45, 0.00, 1.81)"
+      },
+      {
+        "label": "走过四条楼梯并回到门房门前",
+        "ok": true,
+        "detail": ""
+      },
+      {
+        "label": "全程控制台无报错",
+        "ok": true,
+        "detail": ""
+      }
+    ],
+    "consoleErrors": [],
+    "wallSecs": 118,
+    "stops": [
+      {
+        "label": "01-cellar-entrance",
+        "x": 3.89988812485506,
+        "y": 0,
+        "z": 9.702648658372661,
+        "floor": "1F",
+        "yaw": 1.5709,
+        "locked": true,
+        "camera": {
+          "fixed": false,
+          "fov": 56.05993945815185,
+          "position": [
+            1.2009189031120355,
+            2.7956205898728,
+            -8.42523244778722
+          ]
+        },
+        "calls": 570,
+        "triangles": 2078079
+      },
+      {
+        "label": "02-cellar-landing",
+        "x": 9.931358602349986,
+        "y": -2.961865890194437,
+        "z": 9.89358464657717,
+        "floor": "B1",
+        "yaw": -1.5686,
+        "locked": true,
+        "camera": {
+          "fixed": false,
+          "fov": 56.061225601592504,
+          "position": [
+            9.861364595424469,
+            -1.631890623438642,
+            -8.274725188562234
+          ]
+        },
+        "calls": 562,
+        "triangles": 2126242
+      },
+      {
+        "label": "03-store-stair",
+        "x": 15.172561151778678,
+        "y": -3,
+        "z": 17.10733759905279,
+        "floor": "B1",
+        "yaw": 2.498001805406602e-16,
+        "locked": true,
+        "camera": {
+          "fixed": false,
+          "fov": 56.06219454273905,
+          "position": [
+            15.99526080142492,
+            -1.955886467613804,
+            -14.02325934114521
+          ]
+        },
+        "calls": 480,
+        "triangles": 1948072
+      },
+      {
+        "label": "04-chapel-from-cellar",
+        "x": 16.66627276933444,
+        "y": 0.45,
+        "z": 21.127076714131636,
+        "floor": "1F",
+        "yaw": 3.1418000000000004,
+        "locked": true,
+        "camera": {
+          "fixed": false,
+          "fov": 55.9829309784131,
+          "position": [
+            15.795428647632786,
+            2.288789569429734,
+            -21.76362560301676
+          ]
+        },
+        "calls": 549,
+        "triangles": 2170659
+      },
+      {
+        "label": "05-chapel-west-door",
+        "x": 12.751860755509897,
+        "y": 0.45,
+        "z": 16.502702567712046,
+        "floor": "1F",
+        "yaw": 1.5709,
+        "locked": true,
+        "camera": {
+          "fixed": false,
+          "fov": 56.060725097119715,
+          "position": [
+            12.32615889050098,
+            2.0747021294818557,
+            -17.634044557212743
+          ]
+        },
+        "calls": 574,
+        "triangles": 2193539
+      },
+      {
+        "label": "06-wall-stair-base",
+        "x": 3.2288696313210217,
+        "y": 0,
+        "z": 1.4746069834467974,
+        "floor": "1F",
+        "yaw": -4.7104,
+        "locked": true,
+        "camera": {
+          "fixed": false,
+          "fov": 56.06848701750215,
+          "position": [
+            0.698396393507027,
+            1.0331337662593705,
+            -0.9193484674288528
+          ]
+        },
+        "calls": 539,
+        "triangles": 2083223
+      },
+      {
+        "label": "07-east-walk",
+        "x": 9.202662725868585,
+        "y": 4,
+        "z": 11.832384167594224,
+        "floor": "2F",
+        "yaw": -7.3301,
+        "locked": true,
+        "camera": {
+          "fixed": false,
+          "fov": 56.07090230484375,
+          "position": [
+            9.806261400542972,
+            5.63608668387972,
+            -12.153495387870104
+          ]
+        },
+        "calls": 426,
+        "triangles": 2036154
+      },
+      {
+        "label": "08-chapel-gallery",
+        "x": 15.914833883503075,
+        "y": 4,
+        "z": 21.113449227567678,
+        "floor": "2F",
+        "yaw": -4.7127,
+        "locked": true,
+        "camera": {
+          "fixed": false,
+          "fov": 56.07219498345749,
+          "position": [
+            12.878989411037644,
+            5.985009476927556,
+            -20.270895306545142
+          ]
+        },
+        "calls": 479,
+        "triangles": 1941270
+      },
+      {
+        "label": "09-nave-from-gallery",
+        "x": 28.813075407515147,
+        "y": 0.8177834687917516,
+        "z": 21.150044042558555,
+        "floor": "1F",
+        "yaw": -3.1418,
+        "locked": true,
+        "camera": {
+          "fixed": false,
+          "fov": 56.07364976785885,
+          "position": [
+            27.736807608786663,
+            2.4869046985110232,
+            -21.66941817279594
+          ]
+        },
+        "calls": 339,
+        "triangles": 1081615
+      },
+      {
+        "label": "10-return-to-gatehouse",
+        "x": 1.4470622025502902,
+        "y": 0,
+        "z": 1.8078502343400897,
+        "floor": "1F",
+        "yaw": -3.1578999999999997,
+        "locked": true,
+        "camera": {
+          "fixed": false,
+          "fov": 56.24760930988958,
+          "position": [
+            0.6154554523318967,
+            1.9324500019578805,
+            -4.929917344572261
+          ]
+        },
+        "calls": 495,
+        "triangles": 1977915
+      }
+    ]
+  }
+}
