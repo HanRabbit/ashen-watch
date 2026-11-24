@@ -119,12 +119,18 @@ export class Hud {
       this.nextGuideUpdate = time + 0.25;
       const p = w.player;
       const destination = INTERACTS.find((item) => item.id === id);
-      const close = destination && destination.floor === p.floor
-        && Math.hypot(destination.x - p.x, destination.z - p.z) < 1.35;
-      const points = destination && !close
-        ? findPath(p, { x: destination.x, z: destination.z, floor: destination.floor }, { doors: w.doors, lit: [] })
-        : null;
-      this.guidePoint = points?.find((n) => Math.hypot(n.x - p.x, n.z - p.z) > 0.45) ?? null;
+      this.guidePoint = null;
+      if (destination) {
+        const sameFloor = destination.floor === p.floor;
+        const distance = Math.hypot(destination.x - p.x, destination.z - p.z);
+        if (sameFloor && distance < 2.4) {
+          if (distance >= 1.35) this.guidePoint = destination;
+        } else {
+          const { x, z, floor } = destination;
+          const points = findPath(p, { x, z, floor }, { doors: w.doors, lit: [] });
+          this.guidePoint = points?.find((n) => Math.hypot(n.x - p.x, n.z - p.z) > 0.45) ?? null;
+        }
+      }
     }
     const n = this.guidePoint;
     this.guide.hidden = !id || !n;
