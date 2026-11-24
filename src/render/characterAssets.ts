@@ -5,6 +5,9 @@
 import * as THREE from 'three';
 import { GLTFLoader, GLTF } from 'three/addons/loaders/GLTFLoader.js';
 
+import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
+import { LimbSolver } from './locomotionRig';
+
 export interface HunterAsset {
   /** 归一化根节点：脚底 y=0，面朝本地 -Z，身高约 1.75m。 */
   root: THREE.Group;
@@ -26,11 +29,14 @@ export interface ReaperAsset {
   /** 网格局部空间的身高（着色器用）。 */
   localHeight: number;
   cloth: ClothUniforms;
+  animate?: (dt: number) => void;
 }
 
 export interface CharacterAssets { hunter: HunterAsset | null; reaper: ReaperAsset | null }
 
 const URLS = { hunter: 'models/characters/hunter.glb', reaper: 'models/characters/reaper.glb' };
+// The Tripo exports face +X before alignment. Characters in the game face -Z.
+const TRIPO_FACE_FIX = Math.PI / 2;
 
 function loadGLB(url: string): Promise<GLTF> {
   return new Promise((res, rej) => new GLTFLoader().load(url, res, undefined, rej));
@@ -172,16 +178,25 @@ function hunterNormalize(mat: THREE.MeshStandardMaterial, source: HunterAsset['l
   mat.customProgramCacheKey = () => 'hunterNormalize';
 }
 
-export function prepHunter(gltf: GLTF): HunterAsset {
+const TRIPO_BONES: Record<string, RegExp> = {
+  hips: /^Hip$/, spine: /^Waist$/, spine1: /^Spine01$/, spine2: /^Spine02$/, head: /^Head$/,
+  toeL: /^L_ToeBase$/, toeR: /^R_ToeBase$/, upLegL: /^L_Thigh$/, upLegR: /^R_Thigh$/,
+  legL: /^L_Calf$/, legR: /^R_Calf$/, footL: /^L_Foot$/, footR: /^R_Foot$/,
+  armL: /^L_Upperarm$/, armR: /^R_Upperarm$/, foreArmL: /^L_Forearm$/, foreArmR: /^R_Forearm$/,
+  handL: /^L_Hand$/, handR: /^R_Hand$/,
+};
+
+export function prepHunter(gltf: GLTF, tripo = false): HunterAsset {
   const scene = gltf.scene;
-  const { wrap } = normalize(scene, 1.75, Math.PI);
+  const { wrap } = normalize(scene, 1.75, tripo ? TRIPO_FACE_FIX : Math.PI);
   const lampSource = { value: new THREE.Vector3(1000, 1000, 1000) };
   const bones: Record<string, THREE.Bone> = {};
-  for (const [k, rx] of Object.entries(HUNTER_BONES)) {
+  for (const [k, rx] of Object.entries(tripo ? TRIPO_BONES : HUNTER_BONES)) {
     const b = findBone(scene, rx);
     if (b) bones[k] = b;
   }
   const mesh = scene.getObjectByProperty('type', 'SkinnedMesh') as THREE.SkinnedMesh | undefined;
+  if (tripo && (!mesh || Object.keys(bones).length !== Object.keys(TRIPO_BONES).length)) throw new Error('Incomplete Tripo watchkeeper rig');
   if (mesh && bones.head && bones.headTop) {
     // 头部圆柱区域（礼帽帽冠/帽檐 + 立领）整体塌缩到头骨中心，由兜帽与披肩遮盖，
     // 避免后脑残留薄片（白天室内近景曾出现"黑球加翘片"）。
@@ -255,12 +270,12 @@ export function prepHunter(gltf: GLTF): HunterAsset {
   });
 
   const mixer = new THREE.AnimationMixer(scene);
-  const source = gltf.animations.find((clip) => /^idle$/i.test(clip.name));
+  const source = gltf.animations.find((clip) => (tripo ? /^standing_relax$/i : /^idle$/i).test(clip.name));
   const idle = source?.clone() ?? new THREE.AnimationClip('idle', 1, []);
   // The only embedded clip is Idle. Keep the small vertical breathing motion,
   // remove horizontal pelvis drift and preserve the model's root transform.
-  idle.tracks = idle.tracks.filter((track) => !/^(RootNode|Armature|Object_\d+)\.position$/.test(track.name));
-  for (const track of idle.tracks) if (/Hips.*\.position$/.test(track.name) && bones.hips) {
+  idle.tracks = idle.tracks.filter((track) => !/^(Root|RootNode|Armature|Object_\d+)\.position$/.test(track.name));
+  for (const track of idle.tracks) if (/(?:Hips.*|Hip)\.position$/.test(track.name) && bones.hips) {
     const { x, z } = bones.hips.position;
     for (let i = 0; i < track.values.length; i += 3) { track.values[i] = x; track.values[i + 2] = z; }
   }
@@ -297,7 +312,7 @@ float gLum = dot(diffuseColor.rgb, vec3(0.3333));
 diffuseColor.rgb = mix(vec3(gLum), diffuseColor.rgb, 0.3);`;
 
 /** 灰影长袍：顶点布料飘动 + 前倾剪切 + 举臂预备动作；片元噪声溶解与冷灰菲涅尔。 */
-export function ghostCloth(mat: THREE.MeshStandardMaterial, localHeight: number): ClothUniforms {
+export function ghostCloth(mat: THREE.MeshStandardMaterial, localHeight: number, assetToCharacter?: THREE.Matrix4): ClothUniforms {
   const u: ClothUniforms = {
     uTime: { value: 0 }, uLean: { value: 0.3 }, uArmRaise: { value: 0 }, uDissolve: { value: 0 },
     uFlutter: { value: 0.022 }, uRim: { value: 0.22 }, uRimColor: { value: new THREE.Color(0x9fb4c8) },
@@ -307,9 +322,21 @@ export function ghostCloth(mat: THREE.MeshStandardMaterial, localHeight: number)
   mat.side = THREE.DoubleSide;
   mat.onBeforeCompile = (sh) => {
     Object.assign(sh.uniforms, u);
+    if (assetToCharacter) {
+      sh.uniforms.uAssetToCharacter = { value: assetToCharacter };
+      sh.uniforms.uCharacterToAsset = { value: assetToCharacter.clone().invert() };
+    }
+    const alignedCloth = /* glsl */`
+        vLocal = (uAssetToCharacter * vec4(position, 1.0)).xyz;
+        float hh = clamp(vLocal.y / uHeight, 0.0, 1.0);
+        vec3 sway = vec3(
+          sin(uTime * 2.3 + vLocal.y * 4.0 + vLocal.z * 2.0) * uFlutter * (1.0 - hh) * uHeight,
+          0.0,
+          -uLean * hh * hh * uHeight * 0.38);
+        transformed += mat3(uCharacterToAsset) * sway;`;
     sh.vertexShader = sh.vertexShader
-      .replace('#include <common>', `#include <common>\nuniform float uTime, uLean, uArmRaise, uFlutter, uHeight;\nvarying vec3 vLocal;\n${NOISE_GLSL}`)
-      .replace('#include <begin_vertex>', /* glsl */`#include <begin_vertex>
+      .replace('#include <common>', `#include <common>\nuniform float uTime, uLean, uArmRaise, uFlutter, uHeight;\nvarying vec3 vLocal;\n${assetToCharacter ? 'uniform mat4 uAssetToCharacter, uCharacterToAsset;' : ''}\n${NOISE_GLSL}`)
+      .replace('#include <begin_vertex>', `#include <begin_vertex>${assetToCharacter ? alignedCloth : /* glsl */`
         vLocal = position;
         float hh = clamp(transformed.y / uHeight, 0.0, 1.5);
         transformed.z += uLean * hh * hh * uHeight * 0.55;
@@ -322,28 +349,38 @@ export function ghostCloth(mat: THREE.MeshStandardMaterial, localHeight: number)
         transformed.zy = mix(transformed.zy, rot + vec2(0.1 * uHeight, 0.78 * uHeight), armW);
         float fl = (1.0 - hh) * (1.0 - hh);
         transformed.x += sin(uTime * 2.3 + transformed.y * 4.0 + transformed.z * 2.0) * uFlutter * fl * uHeight;
-        transformed.z += cos(uTime * 1.7 + transformed.x * 3.0) * uFlutter * fl * uHeight * 0.7;`);
+        transformed.z += cos(uTime * 1.7 + transformed.x * 3.0) * uFlutter * fl * uHeight * 0.7;`}`);
     sh.fragmentShader = sh.fragmentShader
       .replace('#include <common>', `#include <common>\nuniform float uTime, uDissolve, uRim, uOpacity, uHeight;\nuniform vec3 uRimColor;\nvarying vec3 vLocal;\n${NOISE_GLSL}`)
       .replace('#include <map_fragment>', `#include <map_fragment>\n${DESAT_GLSL}`)
       .replace('#include <emissivemap_fragment>', /* glsl */`#include <emissivemap_fragment>
         float rimF = pow(1.0 - saturate(dot(normalize(vViewPosition), normal)), 2.6);
-        totalEmissiveRadiance += uRimColor * rimF * uRim;
+        ${assetToCharacter ? '' : 'totalEmissiveRadiance += uRimColor * rimF * uRim;'}
         float dn = awNoise(vLocal * 2.6 + vec3(0.0, uTime * 0.25, 0.0));
         float field = clamp(vLocal.y / uHeight * 0.72 + dn * 0.38, 0.0, 1.0);
         float th = uDissolve * 1.15 + 0.07;
         if (field < th - 0.12) discard;
-        totalEmissiveRadiance += uRimColor * 1.2 * smoothstep(th, th - 0.12, field) * step(0.001, uDissolve);
+        ${assetToCharacter
+          ? 'float dissolveEdge = (1.0 - smoothstep(th - 0.12, th, field)) * step(0.001, uDissolve);'
+          : 'totalEmissiveRadiance += uRimColor * 1.2 * smoothstep(th, th - 0.12, field) * step(0.001, uDissolve);'}
         // 常态边缘侵蚀 + 下摆破洞：破布而非实心雕像
         float en = awNoise(vLocal * 7.0 - vec3(uTime * 0.2, 0.0, 0.0));
         diffuseColor.a *= 1.0 - 0.3 * rimF * (1.0 - en);
-        float hemH = 1.0 - smoothstep(0.0, 0.3 * uHeight, vLocal.y);
-        if (hemH > 0.4 && en < (hemH - 0.4) * 0.7) discard;
+        ${assetToCharacter ? '' : `
+          float hemH = 1.0 - smoothstep(0.0, 0.3 * uHeight, vLocal.y);
+          if (hemH > 0.4 && en < (hemH - 0.4) * 0.7) discard;`}
         diffuseColor.a *= uOpacity;`)
       .replace('#include <lights_physical_fragment>', /* glsl */`#include <lights_physical_fragment>
+        ${assetToCharacter ? `
+          material.diffuseColor = mix(material.diffuseColor, uRimColor, (rimF * uRim + dissolveEdge * 0.18) * 0.4);
+          // The supplied mesh has a face baked into the hood. Keep the opening in shadow.
+          float hoodOpening = (1.0 - smoothstep(0.054, 0.088, abs(vLocal.x - 0.022)))
+            * smoothstep(1.775, 1.810, vLocal.y) * (1.0 - smoothstep(1.961, 1.994, vLocal.y))
+            * smoothstep(-0.13, -0.097, vLocal.z);
+          material.diffuseColor *= mix(1.0, 0.006, hoodOpening);` : ''}
         material.specularColor = vec3(0.0);`);
   };
-  mat.customProgramCacheKey = () => 'ghostCloth';
+  mat.customProgramCacheKey = () => assetToCharacter ? 'tripoGhostCloth' : 'ghostCloth';
   return u;
 }
 
@@ -437,14 +474,65 @@ function prepReaper(gltf: GLTF): ReaperAsset {
   return { root: wrap, body: b, localHeight, cloth };
 }
 
+async function loadTripoReaper(): Promise<ReaperAsset> {
+  const folder = 'models/characters/';
+  const scene = await new FBXLoader().loadAsync(folder + 'tripo-ash-wraith.fbx');
+  const rest = scene.animations.find((clip) => /idle|standing_relax/i.test(clip.name)) ?? scene.animations[0];
+  if (!rest) throw new Error('Tripo ash wraith has no idle animation');
+  const idle = rest.clone();
+  idle.tracks = idle.tracks.filter((track) => !/^(Root|Armature|RootNode)\.position$/i.test(track.name));
+  const mixer = new THREE.AnimationMixer(scene);
+  mixer.clipAction(idle).play();
+  mixer.update(0);
+  const height = 2.15;
+  const { wrap } = normalize(scene, height, TRIPO_FACE_FIX);
+  const body = scene.getObjectByProperty('isSkinnedMesh', true) as THREE.SkinnedMesh | undefined;
+  if (!body) throw new Error('Tripo ash wraith has no skinned mesh');
+  const textures = new THREE.TextureLoader();
+  const textureBase = folder + 'tripo_convert_1515c7bd-6f8a-41e1-809e-486f35be9167.fbm/tripo_node_98de760c-ac9c-453c-b2be-b4509b500492';
+  const [map, normalMap] = await Promise.all([
+    textures.loadAsync(textureBase + '_BaseColor.jpg'),
+    textures.loadAsync(textureBase + '_Normal_Bake.jpg'),
+  ]);
+  map.colorSpace = THREE.SRGBColorSpace;
+  body.geometry.computeBoundingBox();
+  const bounds = body.geometry.boundingBox!;
+  const localHeight = bounds.max.y - bounds.min.y;
+  const material = new THREE.MeshStandardMaterial({ map, normalMap, color: 0x8d8b86, roughness: 0.97, metalness: 0 });
+  wrap.updateMatrixWorld(true);
+  const cloth = ghostCloth(material, height, body.matrixWorld.clone());
+  body.material = material;
+  body.castShadow = true;
+  body.frustumCulled = false;
+  const arms = (['L', 'R'] as const).map((side) => ({
+    sign: side === 'L' ? -1 : 1,
+    upper: scene.getObjectByName(`${side}_Upperarm`),
+    lower: scene.getObjectByName(`${side}_Forearm`),
+    hand: scene.getObjectByName(`${side}_Hand`),
+  }));
+  const limb = new LimbSolver(), target = new THREE.Vector3(), pole = new THREE.Vector3(), yaw = new THREE.Quaternion();
+  const animate = (dt: number): void => {
+    mixer.update(dt);
+    const reach = THREE.MathUtils.smoothstep(cloth.uArmRaise.value, 0.15, 1.15);
+    wrap.getWorldQuaternion(yaw);
+    for (const { sign, upper, lower, hand } of arms) {
+      if (!upper || !lower || !hand) continue;
+      target.set(sign * THREE.MathUtils.lerp(0.31, 0.22, reach), 1.04 + 0.48 * reach, 0.02 - 0.62 * reach);
+      pole.set(sign * 0.45, -0.75, 0.55).applyQuaternion(yaw);
+      limb.solve(upper, lower, hand, wrap.localToWorld(target), pole);
+    }
+  };
+  return { root: wrap, body, localHeight, cloth, animate };
+}
+
 /** 并行加载两个模型；各自失败只影响自己（调用方回退程序化模型）。单例：多处调用共享同一次加载。 */
 let pending: Promise<CharacterAssets> | null = null;
 export function loadCharacterAssets(): Promise<CharacterAssets> {
   if (!pending) {
     pending = (async () => {
       const [h, r] = await Promise.all([
-        loadGLB(URLS.hunter).then(prepHunter).catch((e) => { console.warn('[characters] hunter load failed, procedural fallback', e); return null; }),
-        loadGLB(URLS.reaper).then(prepReaper).catch((e) => { console.warn('[characters] reaper load failed, procedural fallback', e); return null; }),
+        loadGLB('models/characters/tripo-watchkeeper.glb').then((gltf) => prepHunter(gltf, true)).catch(() => loadGLB(URLS.hunter).then((gltf) => prepHunter(gltf))).catch((e) => { console.warn('[characters] hunter load failed, procedural fallback', e); return null; }),
+        loadTripoReaper().catch((error) => { console.warn('[characters] Tripo ash wraith unavailable', error); return loadGLB(URLS.reaper).then(prepReaper); }).catch((e) => { console.warn('[characters] reaper load failed, procedural fallback', e); return null; }),
       ]);
       return { hunter: h, reaper: r };
     })();

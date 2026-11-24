@@ -1025,6 +1025,16 @@ export class GhostModels {
     this.reaper = a;
     this.group.add(a.root);
     a.root.visible = false;
+    // 袍摆烟雾：下摆溶进烟里
+    const hemTex = smokeTexture();
+    for (let i = 0; i < 5; i++) {
+      const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: hemTex, color: 0x8b939c, transparent: true, opacity: 0.22, depthWrite: false }));
+      sp.scale.set(0.7, 0.4, 1);
+      sp.position.set(Math.cos(i * 1.9) * 0.32, 0.12 + (i % 2) * 0.1, Math.sin(i * 1.9) * 0.32);
+      a.root.add(sp);
+      this.hemMist.push(sp);
+    }
+    if (a.animate) return;
     // 附加破布层：肩部披布 + 腰间布带（遮住原模型杂物）+ 下摆碎条，与主体共享动画
     const ragMat = new THREE.MeshStandardMaterial({ color: 0x8d8b86, roughness: 0.97, metalness: 0 });
     ghostRags(ragMat, 2.15, a.cloth);
@@ -1092,15 +1102,6 @@ export class GhostModels {
     const apronMesh = mesh(mergeRags(apron), ragMat, false);
     apronMesh.renderOrder = 11;
     a.root.add(apronMesh);
-    // 袍摆烟雾：下摆溶进烟里
-    const hemTex = smokeTexture();
-    for (let i = 0; i < 5; i++) {
-      const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: hemTex, color: 0x8b939c, transparent: true, opacity: 0.22, depthWrite: false }));
-      sp.scale.set(0.7, 0.4, 1);
-      sp.position.set(Math.cos(i * 1.9) * 0.32, 0.12 + (i % 2) * 0.1, Math.sin(i * 1.9) * 0.32);
-      a.root.add(sp);
-      this.hemMist.push(sp);
-    }
     const eyeTex = glowTexture();
     for (const x of [-0.04, 0.04]) {
       const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: eyeTex, color: 0x9fb4c8, transparent: true, opacity: 0.22, depthWrite: false, blending: THREE.AdditiveBlending }));
@@ -1162,6 +1163,7 @@ export class GhostModels {
     u.uOpacity.value = alpha;
     u.uDissolve.value = 1 - alpha;
     a.root.position.y += lift + Math.sin(time * 1.7) * 0.03;
+    a.animate?.(dt);
     // 兜帽暗腔与冷光点跟随主体前倾剪切（头部高度 hh≈0.87；剪切在网格局部空间，世界方向取反）
     const leanOff = -u.uLean.value * 0.886;
     if (this.greyVoid) {

@@ -25,3 +25,7 @@ its antlered bipedal dancer silhouette violated the bible; no external model is 
   Pebbled leather base for belt / straps / cuffs, tinted to bible leather `#4a3a2c`.
 
 Every external texture has a procedural canvas fallback in code so the game runs offline.
+## 用户提供的 Tripo 模型
+
+- tripo-watchkeeper.glb：守夜人，来源为用户提供的 Tripo GLB，含骨架与动作片段。
+- tripo-ash-wraith.fbx 与对应 .fbm 贴图：灰影，来源为用户提供的 Tripo ZIP。
